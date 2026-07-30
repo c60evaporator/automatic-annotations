@@ -50,7 +50,7 @@ RUN pip install \
 ############################
 # Install GroundingDINO
 ############################
-# Set environment variables for GroundingDINO
+# Set environment variables for GroundingDINO (TORCH_CUDA_ARCH_LIST and CUDA_HOME)
 ARG TORCH_CUDA_ARCH_LIST
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 ENV CUDA_HOME=/usr/local/cuda
