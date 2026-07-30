@@ -50,14 +50,19 @@ RUN pip install \
 ############################
 # Install GroundingDINO
 ############################
-# Clone GroundingDINO repository and install the required dependencies
+# Set environment variables for GroundingDINO
+ARG TORCH_CUDA_ARCH_LIST
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 ENV CUDA_HOME=/usr/local/cuda
+# Clone GroundingDINO repository and install the required dependencies
 WORKDIR /workspace
 RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
 WORKDIR /workspace/GroundingDINO
 # GroundingDINO imports torch from setup.py while resolving build requirements.
 # Reuse the environment where torch was installed instead of an isolated build.
 RUN python -m pip install --no-build-isolation -e .
+# GroundingDINO expects transformers 4.x, so downgrade it
+RUN python -m pip install "transformers<5"
 WORKDIR /workspace
 
 # Install additional Python packages
