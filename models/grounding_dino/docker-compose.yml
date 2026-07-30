@@ -1,0 +1,46 @@
+services:
+  grounding-dino:
+    image: "${IMAGE_NAME:-grounding-dino}:${IMAGE_TAG:-cu124}"
+    # docker build options
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # --build-arg option
+      args:
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+
+    # Container name (--name option)
+    container_name: grounding_dino_dev
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]  # --gpus
+    ipc: host  # --ipc
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+    
+    # Volume mounts
+    volumes:
+      # Weights for GroundingDINO
+      - ./weights:/workspace/GroundingDINO/weights
+      # Source code
+      - ./src:/workspace/src
+      - ../../adapters:/workspace/src/adapters
+      - ./notebook:/workspace/notebook
