@@ -47,4 +47,4 @@ services:
       - ../../adapters:/workspace/src/adapters
       - ./notebook:/workspace/notebook
       # Nuscenes dataset for video prediction
-      - ./nuscenes:/workspace/nuscenes
+      - /data/nuscenes:/workspace/data/nuscenes
