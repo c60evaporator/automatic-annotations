@@ -3,6 +3,7 @@ __pycache__
 *.pyo
 *.pyd
 *.pth
+*.pt
 .env
 .venv
 

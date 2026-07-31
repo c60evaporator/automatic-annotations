@@ -1,6 +1,6 @@
 services:
-  grounding-dino:
-    image: "${IMAGE_NAME:-grounding-dino}:${IMAGE_TAG:-cu124}"
+  sam2:
+    image: "${IMAGE_NAME:-sam2}:${IMAGE_TAG:-cu124}"
     # docker build options
     build:
       context: .
@@ -20,7 +20,7 @@ services:
         http_proxy: "${HTTP_PROXY:-}"
 
     # Container name (--name option)
-    container_name: grounding_dino_dev
+    container_name: sam2_dev
     # Set resource sharing to host
     deploy:
       resources:
@@ -40,9 +40,11 @@ services:
     
     # Volume mounts
     volumes:
-      # Weights for GroundingDINO
-      - ./weights:/workspace/GroundingDINO/weights
+      # Weights for SAM2
+      - ./checkpoints:/workspace/sam2/checkpoints
       # Source code
       - ./src:/workspace/src
       - ../../adapters:/workspace/src/adapters
       - ./notebook:/workspace/notebook
+      # Nuscenes dataset for video prediction
+      - ./nuscenes:/workspace/nuscenes
