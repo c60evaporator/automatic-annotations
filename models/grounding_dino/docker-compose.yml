@@ -1,10 +1,10 @@
 services:
   grounding-dino:
-    image: "${IMAGE_NAME:-grounding-dino}:${IMAGE_TAG:-cu124}"
+    image: "${IMAGE_NAME:-grounding-dino}:${IMAGE_TAG:-cu124-runtime}"
     # docker build options
     build:
       context: .
-      dockerfile: Dockerfile_raw
+      dockerfile: Dockerfile_runtime
       # --build-arg option
       args:
         # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)

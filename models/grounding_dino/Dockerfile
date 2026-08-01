@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+
+# Set environment variables for GroundingDINO (TORCH_CUDA_ARCH_LIST and CUDA_HOME)
+ARG TORCH_CUDA_ARCH_LIST
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+ENV CUDA_HOME=/usr/local/cuda
+# GroundingDINO Python API needs http proxy to download 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+# Clone GroundingDINO repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
+WORKDIR /workspace/GroundingDINO
+# GroundingDINO imports torch from setup.py while resolving build requirements.
+# Reuse the environment where torch was installed instead of an isolated build.
+RUN pip install \
+    --no-build-isolation \
+    -e .
+# GroundingDINO expects transformers 4.x, so downgrade it
+RUN pip install "transformers<5"
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && chown -R ${UID}:${GID} /workspace
+USER ${USERNAME}

@@ -1,0 +1,56 @@
+# docker/base/Dockerfile
+# Python version
+ARG PYTHON_VERSION=3.11.11
+# CUDA and Ubuntu Versions
+ARG CUDA_VERSION=12.4.1
+ARG UBUNTU_VERSION=22.04
+# PyTorch versions
+ARG TORCH_CUDA=cu124
+ARG TORCH_VERSION=2.5.1
+ARG TORCHVISION_VERSION=0.20.1
+
+############################
+# Set the base image with Python, CUDA and cuDNN
+############################
+# Python base image
+FROM python:${PYTHON_VERSION}-slim AS python
+
+# CUDA and Ubuntu base image
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION}
+
+# Copy Python installation from the Python base image to the CUDA base image
+COPY --from=python /usr/local /usr/local
+
+############################
+# Install base packages
+############################
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libgl1 \
+    libgomp1 \
+    libstdc++6 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+############################
+# Install PyTorch and Python libraries
+############################
+# Set environment variables to improve visibility and lessen image size
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+# pip upgrade
+RUN pip install --upgrade pip
+# Install PyTorch and torchvision
+ARG TORCH_CUDA
+ARG TORCH_VERSION
+ARG TORCHVISION_VERSION
+RUN pip install \
+    torch==${TORCH_VERSION}+${TORCH_CUDA} \
+    torchvision==${TORCHVISION_VERSION}+${TORCH_CUDA} \
+    --index-url https://download.pytorch.org/whl/${TORCH_CUDA}
+# Install Python libraries for runtime-devel common
+COPY constraints_${TORCH_CUDA}_runtime.txt /tmp/constraints_runtime.txt
+RUN pip install \
+    -r /tmp/constraints_runtime.txt \
+    && rm /tmp/constraints_runtime.txt
