@@ -44,7 +44,7 @@ services:
       - ./checkpoints:/workspace/sam2/checkpoints
       # Source code
       - ./src:/workspace/src
-      - ../../adapters:/workspace/src/adapters
+      - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset for video prediction
       - /data/nuscenes:/workspace/data/nuscenes

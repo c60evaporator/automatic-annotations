@@ -44,7 +44,7 @@ services:
       - ./weights:/workspace/GroundingDINO/weights
       # Source code
       - ./src:/workspace/src
-      - ../../adapters:/workspace/src/adapters
+      - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset
       - /data/nuscenes:/workspace/data/nuscenes
