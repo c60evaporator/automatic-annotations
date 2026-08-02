@@ -1,30 +1,28 @@
 # syntax=docker/dockerfile:1
 ############################
-# Build stage for GroundingDINO environment
+# Build stage for SAM2 environment
 ############################
-# Base image for building the GroundingDINO environment
+# Base image for building the SAM2 environment
 FROM jidohub/base-cu124-devel-ubuntu22.04:latest AS builder
 
-# Freeze the installed packages before installing GroundingDINO dependencies
+# Freeze the installed packages before installing SAM2 dependencies
 RUN python -m pip freeze --exclude-editable \
     | LC_ALL=C sort \
     > /tmp/packages-before.txt
 
-# Set environment variables for GroundingDINO build (TORCH_CUDA_ARCH_LIST)
+# Set environment variables for SAM2 build (TORCH_CUDA_ARCH_LIST)
 ARG TORCH_CUDA_ARCH_LIST
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
-# Clone GroundingDINO repository and install the required dependencies
+# Clone SAM2 repository and install the required dependencies
 WORKDIR /workspace
-RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
-WORKDIR /workspace/GroundingDINO
-# GroundingDINO imports torch from setup.py while resolving build requirements.
+RUN git clone https://github.com/facebookresearch/sam2.git
+WORKDIR /workspace/sam2
+# SAM2 uses CUDAExtension build that needs the same torch environment.
 # Reuse the environment where torch was installed instead of an isolated build.
 RUN pip install \
     --no-build-isolation \
     -e .
-# GroundingDINO expects transformers 4.x, so downgrade it
-RUN pip install "transformers<5"
 
 # Save the diff of installed packages to a requirements file for runtime environment
 RUN mkdir -p /artifacts \
@@ -37,26 +35,18 @@ RUN mkdir -p /artifacts \
         > /artifacts/requirements-runtime.txt \
     && echo "Runtime dependencies:" \
     && cat /artifacts/requirements-runtime.txt
-# Create an artifact directory and copy the GroundingDINO into it, excluding unnecessary files
-RUN cp -a /workspace/GroundingDINO /artifacts/GroundingDINO && \
-    rm -rf /workspace/GroundingDINO/build && \
-    rm -rf /workspace/GroundingDINO/.git && \
-    find /workspace/GroundingDINO \
+# Create an artifact directory and copy the SAM2 into it, excluding unnecessary files
+RUN cp -a /workspace/sam2 /artifacts/sam2 && \
+    rm -rf /workspace/sam2/build && \
+    rm -rf /workspace/sam2/.git && \
+    find /workspace/sam2 \
         -name "__pycache__" -type d -exec rm -rf {} +
 
 ############################
-# Runtime stage for GroundingDINO environment
+# Runtime stage for SAM2 environment
 ############################
-# Base image for GroundingDINO runtime environment
+# Base image for SAM2 runtime environment
 FROM jidohub/base-cu124-runtime-ubuntu22.04:latest
-
-# Set environment variables for GroundingDINO runtime (CUDA_HOME)
-ENV CUDA_HOME=/usr/local/cuda
-# GroundingDINO Python API needs http proxy to download config files
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY}
-ENV HTTPS_PROXY=${HTTPS_PROXY}
 
 WORKDIR /workspace
 
@@ -68,11 +58,11 @@ RUN python -m pip install \
         --no-cache-dir \
         -r /tmp/requirements-runtime.txt \
     && rm -f /tmp/requirements-runtime.txt
-# Copy the GroundingDINO environment from the builder stage
+# Copy the SAM2 environment from the builder stage
 COPY --from=builder \
-    /artifacts/GroundingDINO \
-    /workspace/GroundingDINO
-ENV PYTHONPATH=/workspace/GroundingDINO:${PYTHONPATH}
+    /artifacts/sam2 \
+    /workspace/sam2
+ENV PYTHONPATH=/workspace/sam2:${PYTHONPATH}
 
 ############################
 # Create non-root user

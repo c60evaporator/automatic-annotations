@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+
+# Set environment variables for SAM2 (TORCH_CUDA_ARCH_LIST)
+ARG TORCH_CUDA_ARCH_LIST
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+# GroundingDINO Python API needs http proxy to download 
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+# Clone SAM2 repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/facebookresearch/sam2.git
+WORKDIR /workspace/sam2
+# SAM2 uses CUDAExtension build that needs the same torch environment.
+# Reuse the environment where torch was installed instead of an isolated build.
+RUN pip install \
+    --no-build-isolation \
+    -e .
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && chown -R ${UID}:${GID} /workspace
+USER ${USERNAME}

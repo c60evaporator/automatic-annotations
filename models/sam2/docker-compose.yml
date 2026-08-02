@@ -1,10 +1,10 @@
 services:
   sam2:
-    image: "${IMAGE_NAME:-sam2}:${IMAGE_TAG:-cu124}"
+    image: "${IMAGE_NAME:-sam2}:${IMAGE_TAG:-cu124-${IMAGE_RUNTIME:-devel}}"
     # docker build options
     build:
       context: .
-      dockerfile: Dockerfile_raw
+      dockerfile: Dockerfile_${IMAGE_RUNTIME:-devel}
       # --build-arg option
       args:
         # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
@@ -20,7 +20,7 @@ services:
         http_proxy: "${HTTP_PROXY:-}"
 
     # Container name (--name option)
-    container_name: sam2_dev
+    container_name: sam2_${IMAGE_RUNTIME:-devel}
     # Set resource sharing to host
     deploy:
       resources:
