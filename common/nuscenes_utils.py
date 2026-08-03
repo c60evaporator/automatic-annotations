@@ -145,6 +145,7 @@ def make_box_corners_ego(box: Box3D) -> np.ndarray:
 
     return rotation_box_to_ego @ corners_local + center_ego
 
+
 def transform_ego_to_camera(
     points_ego: np.ndarray,
     camera_translation: np.ndarray | list[float],
@@ -174,6 +175,7 @@ def transform_ego_to_camera(
 
     # transform_points の標準shape (N, C) に転置して適用し、元のshapeへ戻す。
     return transform_points(points_ego.T, ego_to_camera).T
+
 
 def project_camera_points(
     points_camera: np.ndarray,
@@ -214,6 +216,11 @@ def project_camera_points(
         raise ValueError(
             f"camera_intrinsic must have shape (3, 3), got {intrinsic.shape}"
         )
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError(
+            "image_width and image_height must be positive, "
+            f"got ({image_width}, {image_height})"
+        )
 
     depths = points_camera[2]
     valid = depths > near_plane
@@ -225,9 +232,19 @@ def project_camera_points(
 
     homogeneous_image_points = intrinsic @ visible_points
 
-    points_uv = (
+    visible_points_uv = (
         homogeneous_image_points[:2]
         / homogeneous_image_points[2:3]
     )
 
-    return points_uv, valid
+    u, v = visible_points_uv
+    within_image = (
+        (u >= 0.0)
+        & (u < image_width)
+        & (v >= 0.0)
+        & (v < image_height)
+    )
+
+    # valid は入力N点に対応するmaskのため、前方点の位置だけ画像内判定で更新する。
+    valid[valid] = within_image
+    return visible_points_uv[:, within_image], valid
