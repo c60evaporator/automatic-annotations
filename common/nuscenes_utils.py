@@ -183,6 +183,7 @@ def project_camera_points(
     image_width: int,
     image_height: int,
     near_plane: float = 0.1,
+    filter_outside_image: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     カメラ座標の点を画像座標へ投影する。
@@ -198,12 +199,17 @@ def project_camera_points(
             画像の高さ [px]
         near_plane:
             カメラ前方の点とみなす z 座標の閾値。デフォルトは 0.1[m]。
+        filter_outside_image:
+            ``True`` の場合は画像範囲外の点を ``valid=False`` として除外する。
+            ``False`` の場合はnear planeより前にあれば画像範囲外でも返す。
 
     Returns:
         points_uv:
             shape=(2, M) の画像座標
         valid:
-            入力N点のうちカメラ前方かつ画像内にある点を示すbool配列
+            入力N点のうち投影結果に含まれる点を示すbool配列。
+            ``filter_outside_image=True`` ではカメラ前方かつ画像内、``False``
+            ではカメラ前方にある点を示す。
     """
     points_camera = np.asarray(points_camera, dtype=np.float64)
     if points_camera.ndim != 2 or points_camera.shape[0] != 3:
@@ -237,14 +243,17 @@ def project_camera_points(
         / homogeneous_image_points[2:3]
     )
 
-    u, v = visible_points_uv
-    within_image = (
-        (u >= 0.0)
-        & (u < image_width)
-        & (v >= 0.0)
-        & (v < image_height)
-    )
+    if filter_outside_image:
+        u, v = visible_points_uv
+        within_image = (
+            (u >= 0.0)
+            & (u < image_width)
+            & (v >= 0.0)
+            & (v < image_height)
+        )
 
-    # valid は入力N点に対応するmaskのため、前方点の位置だけ画像内判定で更新する。
-    valid[valid] = within_image
-    return visible_points_uv[:, within_image], valid
+        # validは入力N点に対応するため、前方点の位置だけ画像内判定で更新する。
+        valid[valid] = within_image
+        visible_points_uv = visible_points_uv[:, within_image]
+
+    return visible_points_uv, valid

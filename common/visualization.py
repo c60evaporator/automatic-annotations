@@ -69,6 +69,7 @@ def plot_bboxes_on_image(
             image_width,
             image_height,
             near_plane,
+            filter_outside_image=False,
         )
 
         # project_camera_pointsはvalidな点のみ返すため、元の頂点indexへ戻す。
@@ -87,5 +88,9 @@ def plot_bboxes_on_image(
                 color=color,
                 linewidth=line_width,
             )
+
+    # 画面外の投影点によるautoscaleを抑え、線を画像境界でclipさせる。
+    ax.set_xlim(0, image_width)
+    ax.set_ylim(image_height, 0)
 
     return ax
