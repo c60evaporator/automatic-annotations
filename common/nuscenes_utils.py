@@ -28,7 +28,7 @@ CATEGORY_MAPPING_TO_UNIAD = {
     'human.pedestrian.child': {'category_name': 'pedestrian', 'id': 8, 'category_group': 'pedestrian'},
     'human.pedestrian.construction_worker': {'category_name': 'pedestrian', 'id': 8, 'category_group': 'pedestrian'},
     'human.pedestrian.police_officer': {'category_name': 'pedestrian', 'id': 8, 'category_group': 'pedestrian'},
-    'movable_object.trafficcone': {'category_name': 'trafficcone', 'id': 9, 'category_group': 'road_object'},
+    'movable_object.trafficcone': {'category_name': 'traffic_cone', 'id': 9, 'category_group': 'road_object'},
 }
 
 BOX_EDGES = (
