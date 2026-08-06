@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 import torch
-from torchvision.ops import box_convert
+from torchvision.ops import box_convert, batched_nms
 from PIL import Image
 
 import groundingdino.datasets.transforms as T
@@ -104,11 +104,43 @@ def preprocess_image(image: Image.Image) -> torch.Tensor:
     return image_transformed
 
 
+def _make_nms_group_indices(
+    label_indices: torch.Tensor,
+    raw_labels: tuple[str, ...],
+    label_to_group: dict[str, str],
+) -> torch.Tensor:
+    """相互排他的なラベルを同じNMSグループへ割り当てる。"""
+    group_to_index: dict[str, int] = {}
+    result: list[int] = []
+
+    for label_index in label_indices.tolist():
+        label = raw_labels[label_index]
+
+        # グループ未指定ラベルは、他ラベルと干渉しない独自グループにする
+        group_name = label_to_group.get(
+            label,
+            f"__label__:{label}",
+        )
+
+        if group_name not in group_to_index:
+            group_to_index[group_name] = len(group_to_index)
+
+        result.append(group_to_index[group_name])
+
+    return torch.tensor(
+        result,
+        dtype=torch.int64,
+        device=label_indices.device,
+    )
+
+
 def predict_multi_labels(
     model: GroundingDINO,
     image: Image.Image,
     labels: list[str],
     box_threshold: float = 0.3,
+    same_class_nms_iou: float = 0.60,
+    cross_class_nms_iou: float = 0.85,
     device: str = "cuda",
     ) -> list[Box2D]:
     """Run Grounding DINO prediction for a list of labels
@@ -118,6 +150,8 @@ def predict_multi_labels(
         image: Input image as a PIL Image.
         labels: List of labels to detect in the image.
         box_threshold: Box threshold for filtering predictions.
+        same_class_nms_iou: IoU threshold for non-maximum suppression (NMS) within the same class.
+        cross_class_nms_iou: IoU threshold for NMS across different classes. Recommended to be higher than same_class_nms_iou to avoid removing boxes of different classes that overlap.
         device: Device to run the model on (e.g., "cuda" or "cpu").
 
     Returns:
@@ -159,13 +193,47 @@ def predict_multi_labels(
     best_scores, best_label_indices = class_scores.max(dim=1)
 
     # Filter boxes based on the box threshold
-    keep = best_scores > box_threshold
-    kept_boxes = boxes_cxcywh[keep]
-    kept_scores = best_scores[keep]
-    kept_label_indices = best_label_indices[keep]
+    keep_by_score  = best_scores > box_threshold
+    kept_boxes = boxes_cxcywh[keep_by_score]
+    kept_scores = best_scores[keep_by_score]
+    kept_label_indices = best_label_indices[keep_by_score]
+
+    # Convert the boxes to xyxy and filter out invalid boxes (where x_min >= x_max or y_min >= y_max)
+    boxes_xyxy = box_convert(boxes=kept_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+    boxes_xyxy = boxes_xyxy.clamp(0.0, 1.0)  # Limit the box coordinates to be within [0, 1]
+    valid_geometry = (
+        (boxes_xyxy[:, 2] > boxes_xyxy[:, 0])
+        & (boxes_xyxy[:, 3] > boxes_xyxy[:, 1])
+    )
+    boxes_xyxy = boxes_xyxy[valid_geometry]
+    kept_scores = kept_scores[valid_geometry]
+    kept_label_indices = kept_label_indices[valid_geometry]
+
+    # Apply non-maximum suppression (NMS) within the same class
+    keep_by_nms = batched_nms(
+        boxes=boxes_xyxy,
+        scores=kept_scores,
+        idxs=kept_label_indices,
+        iou_threshold=same_class_nms_iou,
+    )
+    boxes_xyxy = boxes_xyxy[keep_by_nms]
+    kept_scores = kept_scores[keep_by_nms]
+    kept_label_indices = kept_label_indices[keep_by_nms]
+
+    # Apply non-maximum suppression (NMS) across different classes
+    group_indices = torch.zeros(len(kept_scores), dtype=torch.int64,  # Use a single group for cross-class NMS
+                                device=kept_scores.device)
+    keep_cross_label = batched_nms(
+        boxes=boxes_xyxy,
+        scores=kept_scores,
+        idxs=group_indices,
+        iou_threshold=cross_class_nms_iou,
+    )
+    boxes_xyxy = boxes_xyxy[keep_cross_label]
+    kept_scores = kept_scores[keep_cross_label]
+    kept_label_indices = kept_label_indices[keep_cross_label]
 
     # Store predicted boxes as Box2D objects
-    boxes_xyxy = box_convert(boxes=kept_boxes, in_fmt="cxcywh", out_fmt="xyxy")
     predicted_boxes = [
         Box2D(
             xyxy=box.detach().numpy(),

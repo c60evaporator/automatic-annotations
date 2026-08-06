@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+
+# Common environment variables (TORCH_CUDA_ARCH_LIST)
+ARG TORCH_CUDA_ARCH_LIST
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+
+############################
+# SAM2 Installation
+############################
+# Clone SAM2 repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/facebookresearch/sam2.git
+WORKDIR /workspace/sam2
+# SAM2 uses CUDAExtension build that needs the same torch environment.
+# Reuse the environment where torch was installed instead of an isolated build.
+RUN pip install \
+    --no-build-isolation \
+    -e .
+
+############################
+# Grounding DINO Installation
+############################
+# Environment variable for GroundingDINO (CUDA_HOME)
+ENV CUDA_HOME=/usr/local/cuda
+# GroundingDINO Python API needs http proxy to download config files
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+# Clone GroundingDINO repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
+WORKDIR /workspace/GroundingDINO
+# GroundingDINO imports torch from setup.py while resolving build requirements.
+# Reuse the environment where torch was installed instead of an isolated build.
+RUN pip install \
+    --no-build-isolation \
+    -e .
+# GroundingDINO expects transformers 4.x, so downgrade it
+RUN pip install "transformers<5"
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && chown -R ${UID}:${GID} /workspace
+USER ${USERNAME}
