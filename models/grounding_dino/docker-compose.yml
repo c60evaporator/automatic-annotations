@@ -43,7 +43,7 @@ services:
       # Weights for GroundingDINO
       - ./weights:/workspace/GroundingDINO/weights
       # Source code
-      - ./src:/workspace/src
+      - ./src:/workspace/src/grounding_dino
       - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset
