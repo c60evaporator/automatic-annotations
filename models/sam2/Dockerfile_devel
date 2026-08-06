@@ -5,11 +5,6 @@ FROM jidohub/base-cu124-devel-ubuntu22.04:latest
 # Set environment variables for SAM2 (TORCH_CUDA_ARCH_LIST)
 ARG TORCH_CUDA_ARCH_LIST
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
-# GroundingDINO Python API needs http proxy to download 
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY}
-ENV HTTPS_PROXY=${HTTPS_PROXY}
 # Clone SAM2 repository and install the required dependencies
 WORKDIR /workspace
 RUN git clone https://github.com/facebookresearch/sam2.git
