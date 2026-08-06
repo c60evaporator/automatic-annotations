@@ -43,7 +43,7 @@ services:
       # Weights for SAM2
       - ./checkpoints:/workspace/sam2/checkpoints
       # Source code
-      - ./src:/workspace/src
+      - ./src:/workspace/src/sam2
       - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset for video prediction
