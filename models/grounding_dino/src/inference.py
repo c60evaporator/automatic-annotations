@@ -8,7 +8,7 @@ import groundingdino.datasets.transforms as T
 from groundingdino.util.vl_utils import create_positive_map_from_span
 from groundingdino.models.GroundingDINO.groundingdino import GroundingDINO
 
-from .common.schemas import Box2D
+from ..common.schemas import Box2D
 
 
 @dataclass(frozen=True)
