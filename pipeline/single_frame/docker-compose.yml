@@ -48,6 +48,8 @@ services:
       - ../../common:/workspace/src/common
       # GroundingDINO Source code
       - ../../models/grounding_dino/src:/workspace/src/grounding_dino
+      # SAM2 Source code
+      - ../../models/sam2/src:/workspace/src/sam2
       # Notebooks
       - ./notebook:/workspace/notebook
       # Nuscenes dataset for video prediction
