@@ -12,19 +12,7 @@ from .nuscenes_utils import (
 )
 from .schemas import Box3D, Box2D, Instance2D
 from .geometry import paste_cropped_mask
-
-TABLEAU10_NAMES: tuple[str, ...] = (
-    "tab:blue",
-    "tab:orange",
-    "tab:green",
-    "tab:red",
-    "tab:purple",
-    "tab:brown",
-    "tab:pink",
-    "tab:gray",
-    "tab:olive",
-    "tab:cyan",
-)
+from .visualize.colors import TABLEAU10_NAMES
 
 def plot_3d_boxes_on_image(
     image: Image.Image,

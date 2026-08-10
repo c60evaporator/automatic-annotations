@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+
+# Set environment variables for Depth-Anything-3 (TORCH_CUDA_ARCH_LIST for Gaussian head)
+ARG TORCH_CUDA_ARCH_LIST
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+# Depth-Anything-3 Python API needs http proxy to download weights from Huggin Face
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+# Install xformers
+RUN pip install xformers==0.0.28.post3
+# Clone Depth-Anything-3 repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git
+WORKDIR /workspace/Depth-Anything-3
+# Depth-Anything-3 doesn't need torch for building, so `--no-build-isolation` argument is not used
+RUN pip install -e .
+# Install Gaussian head
+RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && chown -R ${UID}:${GID} /workspace
+USER ${USERNAME}

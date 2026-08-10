@@ -37,6 +37,8 @@ BOX_EDGES = (
     (0, 4), (1, 5), (2, 6), (3, 7),  # 両面をつなぐ辺
 )
 
+
+###### 3D bounding box transformation functions ######
 def convert_global_bbox_to_ego(
     global_bbox: Box3D,
     ego_translation: np.ndarray | list[float],
@@ -81,7 +83,6 @@ def convert_global_bbox_to_ego(
     global_rotation = np.asarray(global_bbox.rotation, dtype=np.float64)
     if global_rotation.shape != (4,):
         raise ValueError(f"global_bbox.rotation must have shape (4,), got {global_rotation.shape}")
-    global_rotation = normalize_quaternion(global_rotation)
     ego_inverse_quaternion = quaternion_conjugate(ego_quaternion)
     rotation = normalize_quaternion(
         quaternion_multiply(ego_inverse_quaternion, global_rotation)
@@ -152,7 +153,7 @@ def make_box_corners_ego(box: Box3D) -> np.ndarray:
 def transform_ego_to_camera(
     points_ego: np.ndarray,
     camera_translation: np.ndarray | list[float],
-    camera_rotation: np.ndarray | list[float],
+    camera_quaternion: np.ndarray | list[float],
 ) -> np.ndarray:
     """
     ego座標の点群をカメラ座標へ変換する。
@@ -162,7 +163,7 @@ def transform_ego_to_camera(
             shape=(N, 3)
         camera_translation:
             カメラ原点のego座標 [x, y, z]
-        camera_rotation:
+        camera_quaternion:
             camera座標からego座標への回転 [w, x, y, z]
 
     Returns:
@@ -173,7 +174,7 @@ def transform_ego_to_camera(
         raise ValueError(f"points_ego must have shape (N, 3), got {points_ego.shape}")
 
     # calibration が表す camera -> ego pose から逆変換を作る。
-    camera_to_ego = make_transform(camera_rotation, camera_translation)
+    camera_to_ego = make_transform(camera_quaternion, camera_translation)
     ego_to_camera = invert_transform(camera_to_ego)
 
     return transform_points(points_ego, ego_to_camera)
@@ -309,7 +310,7 @@ def get_sample_data_bboxes(sample_data: dict[str, dict],
 
 def filter_boxes_in_camera_fov(boxes_3d_ego: list[Box3D],
                                camera_translation: np.ndarray,
-                               camera_rotation: np.ndarray,
+                               camera_quaternion: np.ndarray,
                                camera_intrinsic: np.ndarray,
                                image_width: int,
                                image_height: int) -> list[Box3D]:
@@ -319,7 +320,7 @@ def filter_boxes_in_camera_fov(boxes_3d_ego: list[Box3D],
     Args:
         boxes_3d_ego (list of Box3D): List of 3D bounding boxes in ego coordinates.
         camera_translation (np.ndarray): Camera translation in ego coordinates.
-        camera_rotation (np.ndarray): Camera rotation in ego coordinates.
+        camera_quaternion (np.ndarray): Camera rotation in ego coordinates.
         camera_intrinsic (np.ndarray): Camera intrinsic matrix.
         image_width (int): Width of the image.
         image_height (int): Height of the image.
@@ -339,7 +340,7 @@ def filter_boxes_in_camera_fov(boxes_3d_ego: list[Box3D],
     ).reshape(-1, 3)
     center_points_cam = transform_ego_to_camera(center_points_ego, 
                                                 camera_translation,
-                                                camera_rotation)
+                                                camera_quaternion)
     _, valid = project_camera_points(center_points_cam, camera_intrinsic,
                                      image_width, image_height)
     valid_boxes_3d_ego = [box for box, v in zip(boxes_3d_ego, valid) if v]
@@ -442,7 +443,7 @@ def _collect_near_clipped_box_points(
 
 def convert_3d_box_to_2d_box(box_3d_ego: Box3D, 
                              camera_translation: np.ndarray,
-                             camera_rotation: np.ndarray,
+                             camera_quaternion: np.ndarray,
                              camera_intrinsic: np.ndarray,
                              image_width: int,
                              image_height: int,
@@ -454,7 +455,7 @@ def convert_3d_box_to_2d_box(box_3d_ego: Box3D,
     Args:
         box_3d_ego (Box3D): 3D bounding box in ego coordinates.
         camera_translation (np.ndarray): Camera translation in ego coordinates.
-        camera_rotation (np.ndarray): Camera rotation in ego coordinates.
+        camera_quaternion (np.ndarray): Camera rotation in ego coordinates.
         camera_intrinsic (np.ndarray): Camera intrinsic matrix.
         image_width (int): Width of the image.
         image_height (int): Height of the image.
@@ -468,7 +469,7 @@ def convert_3d_box_to_2d_box(box_3d_ego: Box3D,
     corners_camera = transform_ego_to_camera(
         corners_ego,
         camera_translation,
-        camera_rotation,
+        camera_quaternion,
     )
 
     # Clip the box to the near plane
@@ -536,3 +537,61 @@ def convert_3d_box_to_2d_box(box_3d_ego: Box3D,
         track_id=box_3d_ego.track_id,
         attributes=box_3d_ego.attributes.copy(),
     )
+
+
+###### Point cloud transformation functions ######
+def transform_lidar_to_ego(
+    points_lidar: np.ndarray,
+    lidar_translation: np.ndarray | list[float],
+    lidar_quaternion: np.ndarray | list[float],
+) -> np.ndarray:
+    """
+    LiDAR座標の点群をego座標へ変換する。
+
+    Args:
+        points_lidar:
+            shape=(N, 3)
+        lidar_translation:
+            LiDAR原点のego座標 [x, y, z]
+        lidar_quaternion:
+            LiDAR座標からego座標への回転 [w, x, y, z]
+
+    Returns:
+        shape=(N, 3) のego座標
+    """
+    points_lidar = np.asarray(points_lidar, dtype=np.float64)
+    if points_lidar.ndim != 2 or points_lidar.shape[1] != 3:
+        raise ValueError(f"points_lidar must have shape (N, 3), got {points_lidar.shape}")
+
+    # calibration が表す lidar -> ego pose を使う。
+    lidar_to_ego = make_transform(lidar_quaternion, lidar_translation)
+
+    return transform_points(points_lidar, lidar_to_ego)
+
+def transform_ego_points_to_global(
+    points_ego: np.ndarray,
+    ego_translation: np.ndarray | list[float],
+    ego_quaternion: np.ndarray | list[float],
+) -> np.ndarray:
+    """
+    ego座標の点群をglobal座標へ変換する。
+
+    Args:
+        points_ego:
+            shape=(N, 3)
+        ego_translation:
+            ego原点のglobal座標 [x, y, z]
+        ego_quaternion:
+            ego座標からglobal座標への回転 [w, x, y, z]
+
+    Returns:
+        shape=(N, 3) のglobal座標
+    """
+    points_ego = np.asarray(points_ego, dtype=np.float64)
+    if points_ego.ndim != 2 or points_ego.shape[1] != 3:
+        raise ValueError(f"points_ego must have shape (N, 3), got {points_ego.shape}")
+
+    # ego pose を使って、ego -> global transform を作る。
+    ego_to_global = make_transform(ego_quaternion, ego_translation)
+
+    return transform_points(points_ego, ego_to_global)
