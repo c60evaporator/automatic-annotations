@@ -131,6 +131,8 @@ def plot_pseudo_lidar_with_ground_truth(
     ground_truth_points: np.ndarray,
     pseudo_lidar_colors: list[float] = [1.0, 0.0, 0.0],
     ground_truth_colors: list[float] = [0.117647, 0.564706, 1.0],
+    opacity: float = 0.4,
+    point_size: float = 0.5,
     axis_translation: np.ndarray | None = None,
     axis_quaternion: np.ndarray | None = None,
 ) -> go.Figure:
@@ -142,6 +144,8 @@ def plot_pseudo_lidar_with_ground_truth(
         ground_truth_points (np.ndarray): Mx3 array of ground truth points with global coordinates.
         pseudo_lidar_colors (list[float], optional): RGB color for pseudo-LiDAR points. Defaults to [1.0, 0.0, 0.0].
         ground_truth_colors (list[float], optional): RGB color for ground truth points. Defaults to [0.117647, 0.564706, 1.0].
+        opacity (float): Opacity of the points in the plot.
+        point_size (float): Size of the points in the plot.
         axis_translation (np.ndarray | None): Position of the axis origin in
             the rendering coordinate system, as ``(x, y, z)``. Used only when
             ``show_axes=True``. If None, the origin is placed at ``(0, 0, 0)``.
@@ -156,7 +160,7 @@ def plot_pseudo_lidar_with_ground_truth(
     points = np.vstack((pseudo_lidar_points, ground_truth_points))
     colors = np.vstack((np.tile(pseudo_lidar_colors, (pseudo_lidar_points.shape[0], 1)),
                         np.tile(ground_truth_colors, (ground_truth_points.shape[0], 1))))
-    plot_fig = plot_pointcloud(points, colors=colors, opacity=0.8, point_size=1.0,
+    plot_fig = plot_pointcloud(points, colors=colors, opacity=opacity, point_size=point_size,
                               axis_translation=axis_translation,
                               axis_quaternion=axis_quaternion)
 

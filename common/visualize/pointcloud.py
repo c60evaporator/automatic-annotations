@@ -3,17 +3,17 @@ from open3d.visualization.draw_plotly import get_plotly_fig
 import plotly.graph_objects as go
 import numpy as np
 
-from ..geometry import normalize_quaternion, quaternion_to_rotation_matrix
+from ..geometry.transform import normalize_quaternion, quaternion_to_rotation_matrix
 
 
 def plot_pointcloud(
     points: np.ndarray,
     colors: np.ndarray | None = None,
     opacity: float = 0.4,
+    point_size: float = 0.5,
     fig_width: int = 640,
     fig_height: int = 480,
     title: str = None,
-    point_size: float = 0.5,
     show_axes: bool = True,
     axis_translation: np.ndarray | None = None,
     axis_quaternion: np.ndarray | None = None,
@@ -25,10 +25,10 @@ def plot_pointcloud(
         points (np.ndarray): Nx3 array of point coordinates.
         colors (np.ndarray | None): Nx3 array of RGB colors (0-1 range) for each point. If None, points will be white.
         opacity (float): Opacity of the points in the plot.
+        point_size (float): Size of the points in the plot.
         fig_width (int): Width of the plot canvas in pixels.
         fig_height (int): Height of the plot canvas in pixels.
         title (str): Title of the plot.
-        point_size (float): Size of the points in the plot.
         show_axes (bool): Whether to show the axes lines in the plot. If False, axes will be hidden.
         axis_translation (np.ndarray | None): Position of the axis origin in
             the rendering coordinate system, as ``(x, y, z)``. Used only when

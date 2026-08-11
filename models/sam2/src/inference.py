@@ -9,7 +9,7 @@ from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from ..common.schemas import Box2D, Instance2D
-from ..common.geometry import resize_mask_nearest
+from ..common.geometry.crop_resize import resize_mask_nearest
 
 
 def _masks_to_instances(

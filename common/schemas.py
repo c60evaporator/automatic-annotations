@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-from .geometry import quaternion_to_yaw, rect_to_original, resize_mask_nearest
+from .geometry.transform import quaternion_to_yaw
+from .geometry.crop_resize import rect_to_original, resize_mask_nearest
 
 @dataclass
 class Box3D:
