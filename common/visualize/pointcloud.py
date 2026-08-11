@@ -30,12 +30,13 @@ def plot_pointcloud(
         title (str): Title of the plot.
         point_size (float): Size of the points in the plot.
         show_axes (bool): Whether to show the axes lines in the plot. If False, axes will be hidden.
-        axis_translation (np.ndarray | None): 描画座標系における軸原点の位置
-            ``(x, y, z)``。``show_axes=True`` の場合のみ使用する。None の場合は
-            原点 ``(0, 0, 0)`` に配置する。
-        axis_quaternion (np.ndarray | None): 軸ローカル座標から描画座標系への
-            回転を表すクォータニオン ``(w, x, y, z)``。描画軸に加えてカメラの
-            視点方向にも適用する。None の場合は回転しない。
+        axis_translation (np.ndarray | None): Position of the axis origin in
+            the rendering coordinate system, as ``(x, y, z)``. Used only when
+            ``show_axes=True``. If None, the origin is placed at ``(0, 0, 0)``.
+        axis_quaternion (np.ndarray | None): Quaternion ``(w, x, y, z)``
+            representing the rotation from the axis-local frame to the
+            rendering coordinate system. Applied to both the rendered axes and
+            the camera view direction. If None, no rotation is applied.
 
     Returns:
         go.Figure: A Plotly figure object for the point cloud visualization.

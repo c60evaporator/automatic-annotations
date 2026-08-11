@@ -568,7 +568,8 @@ def transform_lidar_to_ego(
 
     return transform_points(points_lidar, lidar_to_ego)
 
-def transform_ego_points_to_global(
+
+def transform_ego_to_global(
     points_ego: np.ndarray,
     ego_translation: np.ndarray | list[float],
     ego_quaternion: np.ndarray | list[float],
@@ -595,3 +596,34 @@ def transform_ego_points_to_global(
     ego_to_global = make_transform(ego_quaternion, ego_translation)
 
     return transform_points(points_ego, ego_to_global)
+
+
+def transform_cam_to_ego(
+    points_camera: np.ndarray,
+    camera_translation: np.ndarray | list[float],
+    camera_quaternion: np.ndarray | list[float],
+) -> np.ndarray:
+    """カメラ座標の点群をego座標へ変換する。（Pseudo LiDAR点群の変換を想定）
+
+    Args:
+        points_camera:
+            shape=(N, 3) のカメラ座標の点群。
+        camera_translation:
+            カメラ原点のego座標 [x, y, z]。
+        camera_quaternion:
+            camera座標からego座標への回転 [w, x, y, z]。
+
+    Returns:
+        shape=(N, 3) のego座標。
+    """
+    points_camera = np.asarray(points_camera, dtype=np.float64)
+    if points_camera.ndim != 2 or points_camera.shape[1] != 3:
+        raise ValueError(
+            "points_camera must have shape (N, 3), "
+            f"got {points_camera.shape}"
+        )
+
+    # calibration が表す camera -> ego pose をそのまま適用する。
+    camera_to_ego = make_transform(camera_quaternion, camera_translation)
+
+    return transform_points(points_camera, camera_to_ego)

@@ -4,15 +4,15 @@ from matplotlib.colors import to_rgb
 from matplotlib.axes import Axes
 from PIL import Image
 
-from .nuscenes_utils import (
+from ..nuscenes_utils import (
     make_box_corners_ego,
     project_camera_points,
     transform_ego_to_camera,
     BOX_EDGES
 )
-from .schemas import Box3D, Box2D, Instance2D
-from .geometry import paste_cropped_mask
-from .visualize.colors import TABLEAU10_NAMES
+from ..schemas import Box3D, Box2D, Instance2D
+from ..geometry import paste_cropped_mask
+from ..visualize.colors import TABLEAU10_NAMES
 
 def plot_3d_boxes_on_image(
     image: Image.Image,

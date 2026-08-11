@@ -3,6 +3,8 @@ from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 import numpy as np
 
+from ..visualize.pointcloud import plot_pointcloud
+
 def plot_depth_map(
     depth_map: np.ndarray,
     platform: str = "plotly",
@@ -10,7 +12,7 @@ def plot_depth_map(
     fig = None,
     cmap: str = "turbo",
     title: str = None,
-    unit: str | None = "m",
+    unit: str | None = "m"
 ) -> go.Figure | plt.Axes:
     """
     Visualize a depth map using Plotly.
@@ -119,5 +121,43 @@ def plot_depth_with_original_image(
         fig.update_xaxes(constrain="domain", row=1, col=2)
         fig.update_yaxes(autorange="reversed", scaleanchor="x2", scaleratio=1, row=1, col=2)
         
-        fig.update_layout(title_text=title if title else "Depth Map with Original Image")
+        fig.update_layout(title_text=title if title else "Depth Map with Original Image",
+                          width=1000, height=500)
         fig.show()
+
+
+def plot_pseudo_lidar_with_ground_truth(
+    pseudo_lidar_points: np.ndarray,
+    ground_truth_points: np.ndarray,
+    pseudo_lidar_colors: list[float] = [1.0, 0.0, 0.0],
+    ground_truth_colors: list[float] = [0.117647, 0.564706, 1.0],
+    axis_translation: np.ndarray | None = None,
+    axis_quaternion: np.ndarray | None = None,
+) -> go.Figure:
+    """
+    Visualize pseudo-LiDAR points and ground truth points in a 3D plot.
+
+    Args:
+        pseudo_lidar_points (np.ndarray): Nx3 array of pseudo-LiDAR with global coordinates.
+        ground_truth_points (np.ndarray): Mx3 array of ground truth points with global coordinates.
+        pseudo_lidar_colors (list[float], optional): RGB color for pseudo-LiDAR points. Defaults to [1.0, 0.0, 0.0].
+        ground_truth_colors (list[float], optional): RGB color for ground truth points. Defaults to [0.117647, 0.564706, 1.0].
+        axis_translation (np.ndarray | None): Position of the axis origin in
+            the rendering coordinate system, as ``(x, y, z)``. Used only when
+            ``show_axes=True``. If None, the origin is placed at ``(0, 0, 0)``.
+        axis_quaternion (np.ndarray | None): Quaternion ``(w, x, y, z)``
+            representing the rotation from the axis-local frame to the
+            rendering coordinate system. Applied to both the rendered axes and
+            the camera view direction. If None, no rotation is applied.
+
+    Returns:
+        go.Figure: A Plotly 3D figure containing the pseudo-LiDAR and ground truth points.
+    """
+    points = np.vstack((pseudo_lidar_points, ground_truth_points))
+    colors = np.vstack((np.tile(pseudo_lidar_colors, (pseudo_lidar_points.shape[0], 1)),
+                        np.tile(ground_truth_colors, (ground_truth_points.shape[0], 1))))
+    plot_fig = plot_pointcloud(points, colors=colors, opacity=0.8, point_size=1.0,
+                              axis_translation=axis_translation,
+                              axis_quaternion=axis_quaternion)
+
+    return plot_fig
