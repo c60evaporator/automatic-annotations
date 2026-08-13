@@ -40,19 +40,24 @@ def transform_cam_to_ego(
 def depth_map_to_point_cloud(
     depth_map: np.ndarray,
     camera_intrinsics: np.ndarray,
-    mask: np.ndarray | None = None
-) -> np.ndarray:
+    mask: np.ndarray | None = None,
+    masks: list[np.ndarray] | None = None,
+) -> np.ndarray | list[np.ndarray]:
     """
-    Generate a pseudo-LiDAR point cloud from a depth map and camera intrinsics.
+    Generate a pseudo-LiDAR point cloud from a depth map and camera intrinsics filtered by a mask or a list of masks.
 
     Args:
         depth_map (np.ndarray): HxW array of depth values.
         camera_intrinsics (np.ndarray): 3x3 camera intrinsic matrix.
         mask (np.ndarray | None): HxW binary mask array. Only points where mask is True will be included. If None, all points are included.
+        masks (list[np.ndarray] | None): List of HxW binary mask arrays. Only points where the masks are True will be included. If None, all points are included.
 
     Returns:
-        np.ndarray: Nx3 array of 3D points in the camera coordinate system. Only points where mask is True are included.
+        np.ndarray: Nx3 array of 3D points in the camera coordinate system if masks is None, otherwise a list of Nx3 arrays of 3D points for each mask in masks.
     """
+    if masks is not None and mask is not None:
+        raise ValueError("Only one of `mask` or `masks` can be provided, not both.")
+
     height, width = depth_map.shape
     i, j = np.meshgrid(np.arange(width), np.arange(height))
     i = i.flatten()
@@ -71,4 +76,9 @@ def depth_map_to_point_cloud(
     points = np.vstack((x, y, z)).T
     if mask is not None:
         points = points[mask.flatten()]
-    return points
+        return points
+    elif masks is not None:
+        points_list = [points[m.flatten()] for m in masks]
+        return points_list
+    else:
+        return points

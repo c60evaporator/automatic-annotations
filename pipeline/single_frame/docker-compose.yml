@@ -44,11 +44,13 @@ services:
       - ../../models/grounding_dino/weights:/workspace/GroundingDINO/weights
       # Weights for SAM2
       - ../../models/sam2/checkpoints:/workspace/sam2/checkpoints
-      # Common Source code
+      # Pipeline source code
+      - ./src:/workspace/src/single_frame
+      # Common source code
       - ../../common:/workspace/src/common
-      # GroundingDINO Source code
+      # GroundingDINO source code
       - ../../models/grounding_dino/src:/workspace/src/grounding_dino
-      # SAM2 Source code
+      # SAM2 source code
       - ../../models/sam2/src:/workspace/src/sam2
       # Notebooks
       - ./notebook:/workspace/notebook
