@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+
+# Clone Depth-Anything-3 repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/DepthAnything/Video-Depth-Anything
+# Install dependencies
+RUN pip install \
+    xformers==0.0.28.post3 \
+    einops==0.4.1 \
+    easydict==1.13 \
+    imageio==2.37.0 \
+    imageio-ffmpeg==0.4.7 \
+    open3d==0.19.0
+
+ENV PYTHONPATH=/workspace/Video-Depth-Anything:${PYTHONPATH}
+
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && chown -R ${UID}:${GID} /workspace
+USER ${USERNAME}

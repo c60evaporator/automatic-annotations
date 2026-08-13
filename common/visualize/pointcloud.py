@@ -11,6 +11,7 @@ def plot_pointcloud(
     colors: np.ndarray | None = None,
     opacity: float = 0.4,
     point_size: float = 0.5,
+    down_sample_size: int = None,
     fig_width: int = 640,
     fig_height: int = 480,
     title: str = None,
@@ -26,6 +27,7 @@ def plot_pointcloud(
         colors (np.ndarray | None): Nx3 array of RGB colors (0-1 range) for each point. If None, points will be white.
         opacity (float): Opacity of the points in the plot.
         point_size (float): Size of the points in the plot.
+        down_sample_size (int | None): If provided, the point cloud will be downsampled to this number of points by voxel downsampling. If None, no downsampling is applied.
         fig_width (int): Width of the plot canvas in pixels.
         fig_height (int): Height of the plot canvas in pixels.
         title (str): Title of the plot.
@@ -50,6 +52,10 @@ def plot_pointcloud(
         pcd.colors = o3d.utility.Vector3dVector(colors)
     else:
         pcd.paint_uniform_color([0.117647, 0.564706, 1.0])  # Default to mediumaquamarine if no colors provided
+
+    # Downsample the point cloud if requested
+    if down_sample_size is not None:
+        pcd = pcd.voxel_down_sample(voxel_size=down_sample_size)
 
     # Create a Plotly figure from the Open3D PointCloud
     fig = get_plotly_fig(

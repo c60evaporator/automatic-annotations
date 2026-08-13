@@ -16,7 +16,7 @@ wget wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_
 
 export `TORCH_CUDA_ARCH_LIST` environment variable based on [this page](https://en.wikipedia.org/wiki/CUDA#GPUs_supported) 
 
-```
+```bash
 export TORCH_CUDA_ARCH_LIST=8.9
 ```
 

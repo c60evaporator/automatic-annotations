@@ -1,18 +1,14 @@
 ## Installation
 
-Clone the weight of GroundingDINO-B
+Clone the weight of Metric-Video-Depth-Anything-Large
 
 ```bash
-mkdir weights
-cd weights
-wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth
+mkdir checkpoints
+cd checkpoints
+wget https://huggingface.co/depth-anything/Metric-Video-Depth-Anything-Large/resolve/main/metric_video_depth_anything_vitl.pth
 ```
 
-If you want to use GroundingDINO-T, please download its weight as well
-
-```bash
-wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
-```
+If you want to use other weights, see [here](https://github.com/DepthAnything/Video-Depth-Anything#pre-trained-models)
 
 export `TORCH_CUDA_ARCH_LIST` environment variable based on [this page](https://en.wikipedia.org/wiki/CUDA#GPUs_supported) 
 

@@ -40,6 +40,21 @@ RUN pip install \
     -e .
 # GroundingDINO expects transformers 4.x, so downgrade it
 RUN pip install "transformers<5"
+
+############################
+# Depth-Anything-3 Installation
+############################
+# Install xformers
+RUN pip install xformers==0.0.28.post3
+# Clone Depth-Anything-3 repository and install the required dependencies
+WORKDIR /workspace
+RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git
+WORKDIR /workspace/Depth-Anything-3
+# Depth-Anything-3 doesn't need torch for building, so `--no-build-isolation` argument is not used
+RUN pip install -e .
+# Install Gaussian head
+RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+
 WORKDIR /workspace
 
 ############################
