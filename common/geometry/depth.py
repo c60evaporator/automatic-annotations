@@ -40,6 +40,7 @@ def transform_cam_to_ego(
 def depth_map_to_point_cloud(
     depth_map: np.ndarray,
     camera_intrinsics: np.ndarray,
+    depth_threshold: float = None,
     mask: np.ndarray | None = None,
     masks: list[np.ndarray] | None = None,
 ) -> np.ndarray | list[np.ndarray]:
@@ -49,6 +50,7 @@ def depth_map_to_point_cloud(
     Args:
         depth_map (np.ndarray): HxW array of depth values.
         camera_intrinsics (np.ndarray): 3x3 camera intrinsic matrix.
+        depth_threshold (float, optional): If provided, points with depth greater than this threshold will be filtered out. Defaults to None.
         mask (np.ndarray | None): HxW binary mask array. Only points where mask is True will be included. If None, all points are included.
         masks (list[np.ndarray] | None): List of HxW binary mask arrays. Only points where the masks are True will be included. If None, all points are included.
 
@@ -74,6 +76,11 @@ def depth_map_to_point_cloud(
     z = depth
 
     points = np.vstack((x, y, z)).T
+
+    # Filter points based on depth threshold if provided
+    if depth_threshold is not None:
+        points = points[points[:, 2] <= depth_threshold]
+
     if mask is not None:
         points = points[mask.flatten()]
         return points

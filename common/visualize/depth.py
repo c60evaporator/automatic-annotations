@@ -133,6 +133,7 @@ def plot_pseudo_lidar_with_ground_truth(
     ground_truth_colors: list[float] = [0.117647, 0.564706, 1.0],
     opacity: float = 0.4,
     point_size: float = 0.5,
+    down_sample_size: int = None,
     axis_translation: np.ndarray | None = None,
     axis_quaternion: np.ndarray | None = None,
 ) -> go.Figure:
@@ -146,6 +147,7 @@ def plot_pseudo_lidar_with_ground_truth(
         ground_truth_colors (list[float], optional): RGB color for ground truth points. Defaults to [0.117647, 0.564706, 1.0].
         opacity (float): Opacity of the points in the plot.
         point_size (float): Size of the points in the plot.
+        down_sample_size (int | None): If provided, the point cloud will be downsampled to this number of points by voxel downsampling. If None, no downsampling is applied.
         axis_translation (np.ndarray | None): Position of the axis origin in
             the rendering coordinate system, as ``(x, y, z)``. Used only when
             ``show_axes=True``. If None, the origin is placed at ``(0, 0, 0)``.
@@ -161,7 +163,8 @@ def plot_pseudo_lidar_with_ground_truth(
     colors = np.vstack((np.tile(pseudo_lidar_colors, (pseudo_lidar_points.shape[0], 1)),
                         np.tile(ground_truth_colors, (ground_truth_points.shape[0], 1))))
     plot_fig = plot_pointcloud(points, colors=colors, opacity=opacity, point_size=point_size,
-                              axis_translation=axis_translation,
-                              axis_quaternion=axis_quaternion)
+                               down_sample_size=down_sample_size,
+                               axis_translation=axis_translation,
+                               axis_quaternion=axis_quaternion)
 
     return plot_fig
