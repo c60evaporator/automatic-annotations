@@ -335,4 +335,4 @@ def filter_category_group_bboxes(
                                    if v['category_group'] == category_group])
     filtered_boxes_3d = [box for box in boxes_3d if box.label in category_names_in_group]
     filtered_boxes_2d = [box for box in boxes_2d if box.label in category_names_in_group]
-    return category_names_in_group, filtered_boxes_3d, filtered_boxes_2d
+    return filtered_boxes_3d, filtered_boxes_2d

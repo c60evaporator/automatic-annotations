@@ -219,6 +219,10 @@ def crop_and_predict(
             normalized=False,
         ) for instance in instances]
 
+    # If no instances were detected, return None
+    if not instances:
+        return None, cropped_image
+
     # If multimask_output is False, return the instances as a Instance2D object instead of a list
     if not multimask_output:
         return instances[0], cropped_image
