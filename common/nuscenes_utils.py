@@ -173,7 +173,7 @@ def get_sample_window_contents(window_start: int,
     Returns:
         dict: Dictionary containing the contents of the specified sample.
     """
-    window_samples = dict(list(samples_in_scene.items())[window_start:window_end])
+    window_samples = dict(list(samples_in_scene.items())[window_start:window_end+1])
     window_sample_order = {sample_token: i for i, sample_token in enumerate(window_samples)}
 
     if sensor_token is not None:
@@ -233,7 +233,7 @@ def get_sample_data_bboxes(sample_data: dict[str, dict],
                            categories: dict[str, dict],
                            category_conversion: dict[str, str] = None,
                            delete_unspecified_categories: bool = True,
-                           tracking_ids: dict[str, int] = None):
+                           track_ids: dict[str, int] = None):
     """
     Get bounding boxes in the camera's field of view for each sample data entry.
 
@@ -244,7 +244,7 @@ def get_sample_data_bboxes(sample_data: dict[str, dict],
         categories (dict): Dictionary of categories. The keys are category tokens and the values are dict from category.json.
         category_conversion (dict): Dictionary for converting category names to desired labels. If None, the original category names will be used.
         delete_unspecified_categories (bool): If True, boxes with categories not in category_conversion will be deleted. If False, they will be kept with their original category names.
-        tracking_ids (dict): Dictionary for converting instance tokens to tracking IDs. If None, tracking IDs will be set to None.
+        track_ids (dict): Dictionary for converting instance tokens to tracking IDs. If None, tracking IDs will be set to None.
     """
     if category_conversion is None:
         category_conversion = {cat["name"]: cat["name"] for cat in categories.values()}
@@ -258,7 +258,7 @@ def get_sample_data_bboxes(sample_data: dict[str, dict],
         height=sa["size"][2],
         rotation=np.array(sa["rotation"]),
         label=category_conversion.get(categories[instances[sa["instance_token"]]["category_token"]]["name"], None),
-        track_id=tracking_ids[sa["instance_token"]] if tracking_ids is not None else None
+        track_id=track_ids[sa["instance_token"]] if track_ids is not None else None
     ) for sa in annotations_in_sample]
     print(f"Number of boxes in sample {sample_data['sample_token']}: {len(boxes_3d)}")
     # Delete boxes with unspecified categories if required
@@ -277,7 +277,7 @@ def get_sample_data_2d_bboxes(
     ego_poses: dict[str, dict],
     category_conversion: dict[str, str] = None,
     delete_unspecified_categories: bool = True,
-    tracking_ids: dict[str, int] = None
+    track_ids: dict[str, int] = None
 ) -> tuple[list[Box3D], list[Box2D]]:
     """
     Get bounding boxes in the camera's field of view for each sample data entry and convert them into 2D bounding boxes
@@ -291,7 +291,7 @@ def get_sample_data_2d_bboxes(
         categories (dict): Dictionary of categories. The keys are category tokens and the values are dict from category.json.
         category_conversion (dict): Dictionary for converting category names to desired labels. If None, the original category names will be used.
         delete_unspecified_categories (bool): If True, boxes with categories not in category_conversion will be deleted. If False, they will be kept with their original category names.
-        tracking_ids (dict): Dictionary for converting instance tokens to tracking IDs. If None, tracking IDs will be set to None.
+        track_ids (dict): Dictionary for converting instance tokens to tracking IDs. If None, tracking IDs will be set to None.
     """
     # Get the ground truth bounding boxes
     ego_pose = ego_poses[sample_data["ego_pose_token"]]
@@ -303,7 +303,7 @@ def get_sample_data_2d_bboxes(
     boxes_3d = get_sample_data_bboxes(sample_data, sample_annotations, instances, categories,
                                       category_conversion=category_conversion,
                                       delete_unspecified_categories=delete_unspecified_categories,
-                                      tracking_ids=tracking_ids)
+                                      track_ids=track_ids)
     boxes_3d_ego = [convert_global_bbox_to_ego(box, ego_pose["translation"], ego_pose["rotation"]) for box in boxes_3d]
     valid_boxes_3d_ego = filter_boxes_in_camera_fov(boxes_3d_ego, camera_translation, camera_rotation,
                                                     camera_intrinsic, image_width, image_height)

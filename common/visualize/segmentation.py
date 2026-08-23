@@ -9,14 +9,56 @@ from ..geometry.crop_resize import (
     paste_cropped_mask,
 )
 
-def plot_instance_masks_with_prompt(
-    instances: list[Instance2D],
+def plot_instance_mask(
+    instance: Instance2D,
     image_height: int,
     image_width: int,
-    plot_instance_boxes: bool = False,
-    input_points: list[tuple[int, int]] | None = None,
-    input_labels: list[int] | None = None,
-    input_boxes: list[Box2D] | None = None,
+    ax: Axes | None = None,
+    color: str | tuple[float, float, float] = "lime",
+) -> Axes:
+    """2D instance maskを描画する。
+
+    Args:
+        instance: 2D instance mask object.
+        image_height: 元画像の高さ[px]。
+        image_width: 元画像の幅[px]。
+        ax: 描画先のMatplotlib Axes。Noneの場合はplt.gca()を使用する。
+        color: マスクとインスタンスBoxの描画色。
+    """
+    if image_height <= 0 or image_width <= 0:
+        raise ValueError(f"image_height and image_width must be positive, got {image_height}, {image_width}")
+
+    if ax is None:
+        ax = plt.gca()
+
+    # Create a RGBA from the color input
+    if isinstance(color, str):
+        color_rgb = to_rgb(color)
+    elif isinstance(color, tuple) and len(color) == 3:
+        color_rgb = color
+    else:
+        raise ValueError(f"Invalid color value: {color}. Must be a string or a tuple of 3 floats.")
+
+    # Create a mask with the same size as the original image
+    global_mask = paste_cropped_mask(
+        cropped_mask=instance.mask,
+        original_height=image_height,
+        original_width=image_width,
+        crop_xyxy=instance.mask_region,
+    )
+    # Plot the mask
+    mask_overlay = np.zeros((image_height, image_width, 4), dtype=np.float32)
+    mask_overlay[global_mask > 0] = [*color_rgb, 0.5]
+    ax.imshow(mask_overlay, interpolation="none")
+
+
+def plot_instance_mask_with_prompt(
+    instance: Instance2D,
+    image_height: int,
+    image_width: int,
+    prompt_points: list[tuple[int, int]] | None = None,
+    prompt_labels: list[int] | None = None,
+    prompt_box: Box2D | None = None,
     ax: Axes | None = None,
     color: str | tuple[float, float, float] = "lime",
     prompt_box_color: str | tuple[float, float, float] = "red",
@@ -27,74 +69,63 @@ def plot_instance_masks_with_prompt(
     """2D instance maskを描画し、プロンプトを重ねる（SAM, SAM2を想定）。
 
     Args:
-        instances: A list of 2D instance mask objects.
+        instances: 2D instance mask object.
         image_height: 元画像の高さ[px]。
         image_width: 元画像の幅[px]。
-        plot_instance_boxes: Trueの場合は、instance_masksのboxを描画する。Falseの場合は描画しない。
-        input_points: プロンプトの点 ``(x, y)`` のリスト。Noneの場合は描画しない。
-        input_labels: プロンプトの点のラベル。1はforeground、0はbackground。Noneの場合は描画しない。
-        input_boxes: プロンプトのバウンディングボックスのリスト。Noneの場合は描画しない。
+        prompt_points: プロンプトの点 ``(x, y)`` のリスト。Noneの場合は描画しない。
+        prompt_labels: プロンプトの点のラベル。1はforeground、0はbackground。Noneの場合は描画しない。
+        prompt_box: プロンプトのバウンディングボックス。Noneの場合は描画しない。
         ax: 描画先のMatplotlib Axes。Noneの場合はplt.gca()を使用する。
         color: マスクとインスタンスBoxの描画色。
         prompt_box_color: str | tuple[float, float, float] = "red",
         pos_prompt_color: foregroundプロンプトの点の描画色。
         neg_prompt_color: backgroundプロンプトの点の描画色。
-        line_width: マスクの線幅[px]。
+        line_width: バウンディングボックスの線幅[px]。
 
     Returns:
         画像とマスクを描画したMatplotlib ``Axes``。
     """
-    if image_height <= 0 or image_width <= 0:
-        raise ValueError(f"image_height and image_width must be positive, got {image_height}, {image_width}")
-
-    if line_width <= 0:
-        raise ValueError(f"line_width must be positive, got {line_width}")
+    if (prompt_points is None) ^ (prompt_labels is None):
+        raise ValueError("Both prompt_labels and prompt_points should be provided")
+    if prompt_points is None:
+        prompt_points = []
+    if prompt_labels is None:
+        prompt_labels = []
 
     if ax is None:
         ax = plt.gca()
 
-    if (input_points is None) ^ (input_labels is None):
-        raise ValueError("Both input_labels and input_points should be provided")
-    if input_points is None:
-        input_points = []
-    if input_labels is None:
-        input_labels = []
-    if input_boxes is None:
-        input_boxes = []
-
     # Create a RGBA from the color input
     if isinstance(color, str):
         color_rgb = to_rgb(color)
-    else:
+    elif isinstance(color, tuple) and len(color) == 3:
         color_rgb = color
+    else:
+        raise ValueError(f"Invalid color value: {color}. Must be a string or a tuple of 3 floats.")
 
-    for instance in instances:
-        # Create a mask with the same size as the original image
-        global_mask = paste_cropped_mask(
-            cropped_mask=instance.mask,
-            original_height=image_height,
-            original_width=image_width,
-            crop_xyxy=instance.mask_region,
-        )
-        # Plot the mask
-        mask_overlay = np.zeros((image_height, image_width, 4), dtype=np.float32)
-        mask_overlay[global_mask > 0] = [*color_rgb, 0.5]
-        ax.imshow(mask_overlay, interpolation="none")
+    # Plot the instance mask
+    plot_instance_mask(
+        instance=instance,
+        image_height=image_height,
+        image_width=image_width,
+        ax=ax,
+        color=color_rgb,
+    )
 
     # Plot the prompt points
-    for input_point, input_label in zip(input_points, input_labels):
+    for prompt_point, prompt_label in zip(prompt_points, prompt_labels):
         ax.scatter(
-            input_point[0],
-            input_point[1],
-            color=pos_prompt_color if input_label == 1 else neg_prompt_color,
-            marker="*" if input_label == 1 else "o",
+            prompt_point[0],
+            prompt_point[1],
+            color=pos_prompt_color if prompt_label == 1 else neg_prompt_color,
+            marker="*" if prompt_label == 1 else "o",
             s=250,
             edgecolor="black",
         )
 
-    # Plot the prompt boxes
-    for input_box in input_boxes:
-        x1, y1, x2, y2 = input_box.xyxy
+    # Plot the prompt box
+    if prompt_box is not None:
+        x1, y1, x2, y2 = prompt_box.xyxy
         rect = plt.Rectangle(
             (x1, y1),
             x2 - x1,
@@ -105,28 +136,13 @@ def plot_instance_masks_with_prompt(
         )
         ax.add_patch(rect)
 
-    # Plot the instance box if requested
-    if plot_instance_boxes:
-        for instance in instances:
-            x1, y1, x2, y2 = instance.box.xyxy
-            rect = plt.Rectangle(
-                (x1, y1),
-                x2 - x1,
-                y2 - y1,
-                linewidth=line_width,
-                edgecolor=color_rgb,
-                facecolor="none",
-            )
-            ax.add_patch(rect)
 
-
-def plot_instance_masks_on_image(
-    instances: list[Instance2D],
+def plot_instance_mask_on_image(
+    instance: Instance2D,
     image: Image.Image,
-    plot_instance_boxes: bool = True,
-    input_points: list[tuple[int, int]] | None = None,
-    input_labels: list[int] | None = None,
-    input_boxes: list[Box2D] | None = None,
+    prompt_points: list[tuple[int, int]] | None = None,
+    prompt_labels: list[int] | None = None,
+    prompt_box: Box2D | None = None,
     ax: Axes | None = None,
     title: str | None = None,
     color: str | tuple[float, float, float] = "lime",
@@ -138,12 +154,11 @@ def plot_instance_masks_on_image(
     """2D instance maskを描画し、プロンプトを重ねる（SAM, SAM2を想定）。
 
     Args:
-        instances: A list of 2D instance mask objects.
+        instance: 2D instance maskオブジェクト。
         image: Matplotlib上に表示する画像。
-        plot_instance_boxes: Trueの場合は、instance_masksのboxを描画する。Falseの場合は描画しない。
-        input_points: プロンプトの点 ``(x, y)`` のリスト。Noneの場合は描画しない。
-        input_labels: プロンプトの点のラベル。1はforeground、0はbackground。Noneの場合は描画しない。
-        input_boxes: プロンプトのバウンディングボックスのリスト。Noneの場合は描画しない。
+        prompt_points: プロンプトの点 ``(x, y)`` のリスト。Noneの場合は描画しない。
+        prompt_labels: プロンプトの点のラベル。1はforeground、0はbackground。Noneの場合は描画しない。
+        prompt_box: プロンプトのバウンディングボックス。Noneの場合は描画しない。
         ax: 描画先のMatplotlib Axes。Noneの場合はpl
         title: Axesのタイトル。Noneの場合は設定しない。
         color: マスクとインスタンスBoxの描画色。
@@ -164,14 +179,13 @@ def plot_instance_masks_on_image(
 
     # Plot instance masks with prompts
     image_width, image_height = image.size
-    plot_instance_masks_with_prompt(
-        instances=instances,
+    plot_instance_mask_with_prompt(
+        instance=instance,
         image_height=image_height,
         image_width=image_width,
-        plot_instance_boxes=plot_instance_boxes,
-        input_points=input_points,
-        input_labels=input_labels,
-        input_boxes=input_boxes,
+        prompt_points=prompt_points,
+        prompt_labels=prompt_labels,
+        prompt_box=prompt_box,
         ax=ax,
         color=color,
         prompt_box_color=prompt_box_color,

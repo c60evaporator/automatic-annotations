@@ -98,6 +98,7 @@ def plot_2d_boxes(
     boxes_2d: list[Box2D],
     ax: Axes | None = None,
     color: str | tuple[float, float, float] | dict[str, str] | dict[str, tuple[float, float, float]] = "lime",
+    color_attr: str = "label",
     line_width: int = 2,
 ) -> Axes:
     """2D bounding boxを描画する。
@@ -105,7 +106,8 @@ def plot_2d_boxes(
     Args:
         boxes_2d: 2D bounding boxのリスト。
         ax: 描画先のMatplotlib Axes。Noneの場合はplt.gca()を使用する。
-        color: bboxの描画色。dictの場合は、bboxのlabelに応じて色を変える。
+        color: bboxの描画色。dictの場合は、``color_attr``で指定した``boxes_2d``の属性に応じて色を変える。
+        color_attr: colorがdictの場合に使用するBox2Dの属性名。"label"または"track_id"を指定可能。
         line_width: bboxの線幅[px]。
 
     Returns:
@@ -119,12 +121,12 @@ def plot_2d_boxes(
 
     # Plot each box
     for box in boxes_2d:
-        if isinstance(color, dict) and box.label is None:
-            raise ValueError("box.label must be provided when color is a dict")
+        if isinstance(color, dict) and getattr(box, color_attr, None) is None:
+            raise ValueError(f"box.{color_attr} must be provided when color is a dict")
         x1, y1, x2, y2 = box.xyxy
-        color_to_use = color if not isinstance(color, dict) else color.get(box.label, "lime")
+        color_to_use = color if not isinstance(color, dict) else color.get(getattr(box, color_attr), "lime")
         ax.plot([x1, x2, x2, x1, x1], [y1, y1, y2, y2, y1], color=color_to_use, 
-                linewidth=line_width, label=box.label if isinstance(color, dict) else None)
+                linewidth=line_width, label=getattr(box, color_attr) if isinstance(color, dict) else None)
 
 
 def plot_2d_boxes_on_image(
@@ -133,6 +135,7 @@ def plot_2d_boxes_on_image(
     ax: Axes | None = None,
     title: str | None = None,
     color: str | tuple[float, float, float] | dict[str, str] | dict[str, tuple[float, float, float]] = "lime",
+    color_attr: str = "label",
     line_width: int = 2,
 ) -> Axes:
     """2D bounding boxを画像と一緒に描画する。
@@ -140,9 +143,10 @@ def plot_2d_boxes_on_image(
     Args:
         image: Matplotlib上に表示する画像。
         boxes_2d: 2D bounding boxのリスト。
-        ax: 描画先のMatplotlib Axes。Noneの場合はplt.gca()を使用する。
+        ax: 描画先のMatplotlib ``Axes``。Noneの場合は``plt.gca()``を使用する。
         title: Axesのタイトル。Noneの場合は設定しない。
-        color: bboxの描画色。dictの場合は、bboxのlabelに応じて色を変える。
+        color: bboxの描画色。dictの場合は、``color_attr``で指定した``boxes_2d``の属性に応じて色を変える。
+        color_attr: colorがdictの場合に使用するBox2Dの属性名。"label"または"track_id"を指定可能。
         line_width: bboxの線幅[px]。
 
     Returns:
@@ -156,7 +160,7 @@ def plot_2d_boxes_on_image(
     ax.set_axis_off()
 
     # Plot the boxes
-    plot_2d_boxes(boxes_2d, ax=ax, color=color, line_width=line_width)
+    plot_2d_boxes(boxes_2d, ax=ax, color=color, color_attr=color_attr, line_width=line_width)
 
     # Add legend if color is a dict
     if isinstance(color, dict):

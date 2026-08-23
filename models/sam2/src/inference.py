@@ -1,22 +1,25 @@
 from typing import Optional
 from contextlib import nullcontext
+from collections import OrderedDict
 import numpy as np
 import torch
-import torch.nn.functional as F
+from torchvision.transforms import v2
 import numpy as np
 from PIL import Image
 
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.sam2_video_predictor import SAM2VideoPredictor
 
 from ..common.schemas import Box2D, Instance2D
 from ..common.geometry.crop_resize import resize_mask_nearest
 
 
-def _masks_to_instances(
+def masks_to_instances(
     masks: np.ndarray,
     image_height: int,
     image_width: int,
     labels: list[str] | None = None,
+    track_ids: list[int] | None = None,
     scores: np.ndarray | None = None,
     boxes: np.ndarray | None = None,
     threshold: float = 0.5,
@@ -25,10 +28,11 @@ def _masks_to_instances(
     Converts the predicted masks to a list of Instance2D objects.
 
     Args:
-        masks: The predicted masks as a NumPy array of shape (C, H, W).
+        masks: The predicted masks as a NumPy array of shape (C, H, W). The values should be 0 or 1 of uint8 or float32 type.
         image_height: The height of the image before resizing.
         image_width: The width of the image before resizing.
         labels: The labels for each instance.
+        track_ids: The tracking IDs for each instance.
         scores: The confidence scores for each instance.
         boxes: The bounding boxes for each instance.
         threshold: The threshold to binarize the masks.
@@ -91,6 +95,7 @@ def _masks_to_instances(
                 box=Box2D(
                     xyxy=xyxy,
                     label=None if labels is None else labels[index],
+                    track_id=None if track_ids is None else int(track_ids[index]),
                     score=None if scores is None else float(scores[index]),
                 ),
                 mask=mask,
@@ -99,12 +104,14 @@ def _masks_to_instances(
         )
     return instances
 
+
+####### Single Image Inference #######
 def predict(
     predictor: SAM2ImagePredictor,
     image: Image.Image,
     point_coords: np.ndarray | None = None,
     point_labels: np.ndarray | None = None,
-    box: Box2D | None = None,
+    box_coords: np.ndarray | None = None,
     multimask_output: bool = False,
     device: str = "cuda",
 ) -> list[Instance2D]:
@@ -116,7 +123,7 @@ def predict(
         image: The input image for which to predict the segmentation mask.
         point_coords: The coordinates of the points for interactive segmentation.
         point_labels: The labels of the points for interactive segmentation.
-        box: The bounding box for the object to segment. The coordinates should be **pixel values** in the xyxy format.
+        box_coords: The bounding box for the object to segment. The coordinates should be **pixel values** in the xyxy format.
         multimask_output: Whether to output multiple masks per instance. Default is False.
         x_offset: The horizontal offset of the cropped image within the original image. Default is 0.
         y_offset: The vertical offset of the cropped image within the original image. Default is 0.
@@ -136,7 +143,7 @@ def predict(
         masks, scores, logits = predictor.predict(
             point_coords=point_coords,
             point_labels=point_labels,
-            box=box,
+            box=box_coords,
             multimask_output=multimask_output,
         )
 
@@ -147,13 +154,15 @@ def predict(
         scores = scores[sorted_indices]
 
     # Convert masks to Instance2D objects
-    instances = _masks_to_instances(
+    boxes = np.stack([box_coords] * len(masks)) if box_coords is not None else None
+    instances = masks_to_instances(
         masks=masks,
         image_height=image.height,
         image_width=image.width,
         labels=None,
+        track_ids=None,
         scores=scores,
-        boxes=None,
+        boxes=boxes, # Save box prompt as the ``box`` attribute of the Instance2D object.
     )
     return instances
 
@@ -205,7 +214,7 @@ def crop_and_predict(
         image=cropped_image,
         point_coords=point_coords_local if point_coords is not None else None,
         point_labels=point_labels if point_labels is not None else None,
-        box=np.array([0, 0, cropped_image.width-1, cropped_image.height-1], dtype=np.int64),
+        box_coords=np.array([0, 0, cropped_image.width-1, cropped_image.height-1], dtype=np.int64),
         multimask_output=multimask_output,
         device=device,
     )
@@ -228,3 +237,302 @@ def crop_and_predict(
         return instances[0], cropped_image
     else:
         return instances, cropped_image
+
+
+###### Video Inference ######
+def _load_video_frames(
+    images: list[Image.Image],
+    image_size,
+    img_mean=(0.485, 0.456, 0.406),
+    img_std=(0.229, 0.224, 0.225),
+    compute_device=torch.device("cuda"),
+) -> tuple[torch.Tensor, int, int]:
+    """
+    Loads and preprocesses image frames for video inference.
+
+    Args:
+        images: A list of PIL.Image.Image objects representing the video frames.
+        image_size: The size to which the images should be resized.
+        img_mean: The mean for normalization.
+        img_std: The standard deviation for normalization.
+        compute_device: The device to which the images should be transferred.
+    Returns:
+        A tuple containing:
+            - A tensor of shape (N, C, H, W) containing the preprocessed images.
+            - The original height of the images.
+            - The original width of the images.
+    """
+    # PIL -> Tensor
+    cpu_image_transform = v2.Compose([
+        v2.ToImage(),
+    ])
+    images = [cpu_image_transform(img) for img in images]
+    images = torch.stack(images)  # (N, C, H, W)
+    original_height, original_width = images.shape[-2], images.shape[-1]
+    # resize and normalize
+    cpu_batch_transform = v2.Compose([
+        v2.Resize(size=(image_size, image_size), antialias=True),
+    ])
+    device_transform = v2.Compose([
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(mean=img_mean, std=img_std),
+    ])
+    images = cpu_batch_transform(images)
+    images = images.pin_memory()  # Pin memory for faster transfer to GPU
+    images = images.to(compute_device, non_blocking=True)  # Transfer to GPU. `non_blocking=True`` allows for asynchronous transfer, which can improve performance when using pinned memory.
+    images = device_transform(images)
+
+    return images, original_height, original_width
+
+
+def init_frame_state(
+    predictor: SAM2VideoPredictor,
+    images: list[Image.Image],
+) -> dict:
+    """
+    Initializes the frame state for video inference.
+
+    Args:
+        predictor: An instance of SAM2VideoPredictor.
+        images: The input images as a list of PIL.Image.Image.
+        device: The device to run the model on. If None, uses the predictor's device.
+    """
+    offload_video_to_cpu=False
+    offload_state_to_cpu=False
+    # Load and preprocess the video frames
+    image_tensors, video_height, video_width = _load_video_frames(
+        images=images,
+        image_size=predictor.image_size,
+        compute_device=predictor.device,
+    )
+    # Store the inference state
+    inference_state = {}
+    inference_state["images"] = image_tensors
+    inference_state["num_frames"] = len(images)
+    inference_state["offload_video_to_cpu"] = offload_video_to_cpu # whether to offload the video frames to CPU memory
+    inference_state["offload_state_to_cpu"] = offload_state_to_cpu # whether to offload the inference state to CPU memory
+    inference_state["video_height"] = video_height # Original height of the video frames
+    inference_state["video_width"] = video_width # Original width of the video frames
+    inference_state["device"] = predictor.device
+    if offload_state_to_cpu:
+        inference_state["storage_device"] = torch.device("cpu")
+    else:
+        inference_state["storage_device"] = predictor.device  # `offload_state_to_cpu` is always False, so the storage device is always the predictor's device
+    inference_state["storage_device"] = predictor.device
+    # inputs on each frame
+    inference_state["point_inputs_per_obj"] = {}
+    inference_state["mask_inputs_per_obj"] = {}
+    # visual features on a small number of recently visited frames for quick interactions
+    inference_state["cached_features"] = {}
+    # values that don't change across frames (so we only need to hold one copy of them)
+    inference_state["constants"] = {}
+    # mapping between client-side object id and model-side object index
+    inference_state["obj_id_to_idx"] = OrderedDict()
+    inference_state["obj_idx_to_id"] = OrderedDict()
+    inference_state["obj_ids"] = []
+    # Slice (view) of each object tracking results, sharing the same memory with "output_dict"
+    inference_state["output_dict_per_obj"] = {}
+    # A temporary storage to hold new outputs when user interact with a frame
+    inference_state["temp_output_dict_per_obj"] = {}
+    # Frames that already holds consolidated outputs from click or mask inputs
+    inference_state["frames_tracked_per_obj"] = {}
+    # Warm up the visual backbone and cache the image feature on frame 0
+    predictor._get_image_feature(inference_state, frame_idx=0, batch_size=1)
+    
+    return inference_state
+
+def add_box_prompts(
+    predictor: SAM2VideoPredictor,
+    inference_state: dict,
+    frame_idx: int,
+    box_prompts: list[Box2D],
+    point_prompts: Optional[list[dict]] = None,
+) -> list[Instance2D]:
+    """
+    Adds bounding box prompts for a specific frame in the video.
+
+    Args:
+        predictor: An instance of SAM2VideoPredictor.
+        inference_state: The current state of the video inference.
+        frame_idx: The index of the frame to which the box prompt should be added.
+        box_prompts: The list of bounding boxes to add as prompts, in xyxy format. **``track_id`` attribute is used as the object ID for tracking.**
+        point_prompts: An optional list of point prompts to add alongside the box prompts. Each element should be a dictionary containing 'points' and 'labels'.
+
+        The format of each point prompt dictionary should be:
+        {
+            'point': [x, y],  # The coordinates of the point in pixel values.
+            'label': int,  # The label of the point. 1 for positive points, 0 for negative points.
+            'obj_id': int  # representing the object ID associated with these points. This is useful for tracking objects across frames.
+        }
+
+    Returns:
+        A list of Instance2D objects representing the predicted instances for the added box prompts.
+    """
+    if point_prompts is None:
+        point_prompts = []
+
+    for box in box_prompts:
+        obj_id = box.track_id
+        obj_point_prompts = [point_prompt for point_prompt in point_prompts if point_prompt.get('obj_id') == obj_id]
+        if len(obj_point_prompts) > 0:
+            points = [point_prompt['point'] for point_prompt in obj_point_prompts]
+            labels = [point_prompt['label'] for point_prompt in obj_point_prompts]
+        else:
+            points = None
+            labels = None
+        # Convert box to numpy array
+        box_array = np.array(box.xyxy, dtype=np.float32)
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=frame_idx,
+            obj_id=obj_id,
+            points=points,
+            labels=labels,
+            box=box_array,
+        )
+
+    # Only the last out_obj_ids and out_mask_logits are used
+    out_masks = (np.squeeze(out_mask_logits, axis=1) > 0.0).cpu().numpy()  # (N, H, W)
+
+    # Convert masks to Instance2D objects
+    predicted_instances = masks_to_instances(
+        masks=out_masks,
+        image_height=inference_state["video_height"],
+        image_width=inference_state["video_width"],
+        labels=None,
+        track_ids=out_obj_ids,
+        scores=None,
+        boxes=[np.array(box.xyxy, dtype=np.float32) for box in box_prompts] if box_prompts is not None else None,
+    )
+
+    return predicted_instances
+
+
+def propagate_inference(
+    predictor: SAM2VideoPredictor,
+    inference_state: dict,
+) -> dict[int, list[dict]]:
+    """
+    Inference propagation for all objects across all frames in the video.
+
+    Args:
+        predictor: An instance of SAM2VideoPredictor.
+        inference_state: The inference state created by init_frame_state() and updated by add_box_prompts() to add prompts.
+
+    Returns:
+        A list of dictionaries, each containing the predicted instances for a specific frame in the video.
+    
+        Each dictionary in the list contains:
+            - "obj_id": The tracking ID of the object.
+            - "frame_idx": The index of the frame.
+            - "instance": The Instance2D object representing the predicted instance for that frame.
+    """
+    result_instances = {}
+    # run propagation throughout the video
+    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
+        result_instances[out_frame_idx] = {}
+        # Convert masks to Instance2D objects
+        out_masks = (np.squeeze(out_mask_logits, axis=1) > 0.0).cpu().numpy()  # (N, H, W)
+        predicted_instances = masks_to_instances(
+            masks=out_masks,
+            image_height=inference_state["video_height"],
+            image_width=inference_state["video_width"],
+            labels=None,
+            track_ids=out_obj_ids,
+            scores=None,
+            boxes=None,  # Box prompts are note associated with each frame, so we don't have box prompts for each frame. Therefore, we set boxes to None.
+        )
+        for predicted_instance in predicted_instances:
+            out_obj_id = predicted_instance.box.track_id
+            result_instances[out_frame_idx][out_obj_id] = predicted_instance
+
+    return result_instances
+
+
+def retrieve_prompts_from_inference_state(
+    inference_state: dict,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Retrieves the prompt points, labels, and boxes from inference_state in the original image coordinate system.
+
+    Args:
+        inference_state: The current state of the video inference.
+
+    Returns:
+        A tuple containing:
+            - A list of box prompts, where each box prompt is a dictionary containing:
+                - "obj_id": The tracking ID of the object.
+                - "frame_idx": The index of the frame.
+                - "xyxy": The bounding box coordinates in xyxy format.
+            - A list of point prompts, where each point prompt is a dictionary containing:
+                - "obj_id": The tracking ID of the object.
+                - "frame_idx": The index of the frame.
+                - "points": The coordinates of the points in pixel values.
+                - "labels": The labels of the points. 1 for positive points, 0 for negative points.
+    """
+    point_inputs_per_obj = inference_state["point_inputs_per_obj"]
+    mask_inputs_per_obj = inference_state["mask_inputs_per_obj"]
+    obj_idx_to_id = inference_state["obj_idx_to_id"]
+    proc_height = inference_state["images"].shape[-2]
+    proc_width = inference_state["images"].shape[-1]
+    original_height = inference_state["video_height"]
+    original_width = inference_state["video_width"]
+
+    box_prompts = []
+    point_prompts = []
+
+    for obj_idx, obj_point_inputs in point_inputs_per_obj.items():
+        obj_id = obj_idx_to_id[obj_idx]
+        for frame_idx, frame_point_inputs in obj_point_inputs.items():
+            # Retrieve point prompts
+            point_coords = frame_point_inputs["point_coords"].cpu().numpy()[0]
+            point_labels = frame_point_inputs["point_labels"].cpu().numpy()[0]
+            # Convert point coordinates from processed image coordinate system to original image coordinate system
+            point_coords[:, 0] = point_coords[:, 0] * (original_width / proc_width)
+            point_coords[:, 1] = point_coords[:, 1] * (original_height / proc_height)
+
+            box_topleft = None
+            box_bottomright = None
+            points = []
+            labels = []
+            for point_coord, point_label in zip(point_coords, point_labels):
+                # Negative point
+                if point_label == 0:
+                    points.append(point_coord)
+                    labels.append(0)
+                # Positive point
+                elif point_label == 1:
+                    points.append(point_coord)
+                    labels.append(1)
+                # Box topleft
+                elif point_label == 2:
+                    if box_topleft is not None:
+                        raise ValueError(f"Multiple box topleft points found for obj_id {obj_id} in frame {frame_idx}.")
+                    box_topleft = point_coord
+                # Box bottomright
+                elif point_label == 3:
+                    if box_bottomright is not None:
+                        raise ValueError(f"Multiple box bottomright points found for obj_id {obj_id} in frame {frame_idx}.")
+                    box_bottomright = point_coord
+                else:
+                    raise ValueError(f"Invalid point label {point_label} for obj_id {obj_id} in frame {frame_idx}. Must be 0, 1, 2, or 3.")
+            # Build point prompt
+            if len(points) > 0:
+                point_prompts.append({
+                    "obj_id": obj_id,
+                    "frame_idx": frame_idx,
+                    "points": np.stack(points, axis=0).astype(np.float32),
+                    "labels": np.array(labels, dtype=np.int32),
+                })
+
+            # Build box prompt
+            if (box_topleft is None) ^ (box_bottomright is None):
+                raise ValueError(f"Only one of box_topleft or box_bottomright is set for obj_id {obj_id} in frame {frame_idx}. Both must be set or both must be None.")
+            elif box_topleft is not None and box_bottomright is not None:
+                box_prompts.append({
+                    "obj_id": obj_id,
+                    "frame_idx": frame_idx,
+                    "xyxy": np.concatenate([box_topleft, box_bottomright], axis=0),
+                })
+
+    return box_prompts, point_prompts
