@@ -1,10 +1,10 @@
 from typing import Optional
 from contextlib import nullcontext
 from collections import OrderedDict
+
 import numpy as np
 import torch
 from torchvision.transforms import v2
-import numpy as np
 from PIL import Image
 
 from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -12,7 +12,6 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor
 
 from ..common.schemas import Box2D, Instance2D
 from ..common.geometry.crop_resize import resize_mask_nearest
-
 
 def masks_to_instances(
     masks: np.ndarray,
@@ -399,7 +398,7 @@ def add_box_prompts(
         masks=out_masks,
         image_height=inference_state["video_height"],
         image_width=inference_state["video_width"],
-        labels=None,
+        labels=[box.label for box in box_prompts] if box_prompts is not None else None, # Use the labels from the box prompts if available
         track_ids=out_obj_ids,
         scores=None,
         boxes=[np.array(box.xyxy, dtype=np.float32) for box in box_prompts] if box_prompts is not None else None,
@@ -411,6 +410,9 @@ def add_box_prompts(
 def propagate_inference(
     predictor: SAM2VideoPredictor,
     inference_state: dict,
+    start_frame_idx: int = 0,
+    max_frame_num_to_track=None,
+    reverse=False,
 ) -> dict[int, list[dict]]:
     """
     Inference propagation for all objects across all frames in the video.
@@ -429,7 +431,12 @@ def propagate_inference(
     """
     result_instances = {}
     # run propagation throughout the video
-    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
+    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
+        inference_state,
+        start_frame_idx=start_frame_idx,
+        max_frame_num_to_track=max_frame_num_to_track,
+        reverse=reverse,
+    ):
         result_instances[out_frame_idx] = {}
         # Convert masks to Instance2D objects
         out_masks = (np.squeeze(out_mask_logits, axis=1) > 0.0).cpu().numpy()  # (N, H, W)
@@ -447,92 +454,3 @@ def propagate_inference(
             result_instances[out_frame_idx][out_obj_id] = predicted_instance
 
     return result_instances
-
-
-def retrieve_prompts_from_inference_state(
-    inference_state: dict,
-) -> tuple[list[dict], list[dict]]:
-    """
-    Retrieves the prompt points, labels, and boxes from inference_state in the original image coordinate system.
-
-    Args:
-        inference_state: The current state of the video inference.
-
-    Returns:
-        A tuple containing:
-            - A list of box prompts, where each box prompt is a dictionary containing:
-                - "obj_id": The tracking ID of the object.
-                - "frame_idx": The index of the frame.
-                - "xyxy": The bounding box coordinates in xyxy format.
-            - A list of point prompts, where each point prompt is a dictionary containing:
-                - "obj_id": The tracking ID of the object.
-                - "frame_idx": The index of the frame.
-                - "points": The coordinates of the points in pixel values.
-                - "labels": The labels of the points. 1 for positive points, 0 for negative points.
-    """
-    point_inputs_per_obj = inference_state["point_inputs_per_obj"]
-    mask_inputs_per_obj = inference_state["mask_inputs_per_obj"]
-    obj_idx_to_id = inference_state["obj_idx_to_id"]
-    proc_height = inference_state["images"].shape[-2]
-    proc_width = inference_state["images"].shape[-1]
-    original_height = inference_state["video_height"]
-    original_width = inference_state["video_width"]
-
-    box_prompts = []
-    point_prompts = []
-
-    for obj_idx, obj_point_inputs in point_inputs_per_obj.items():
-        obj_id = obj_idx_to_id[obj_idx]
-        for frame_idx, frame_point_inputs in obj_point_inputs.items():
-            # Retrieve point prompts
-            point_coords = frame_point_inputs["point_coords"].cpu().numpy()[0]
-            point_labels = frame_point_inputs["point_labels"].cpu().numpy()[0]
-            # Convert point coordinates from processed image coordinate system to original image coordinate system
-            point_coords[:, 0] = point_coords[:, 0] * (original_width / proc_width)
-            point_coords[:, 1] = point_coords[:, 1] * (original_height / proc_height)
-
-            box_topleft = None
-            box_bottomright = None
-            points = []
-            labels = []
-            for point_coord, point_label in zip(point_coords, point_labels):
-                # Negative point
-                if point_label == 0:
-                    points.append(point_coord)
-                    labels.append(0)
-                # Positive point
-                elif point_label == 1:
-                    points.append(point_coord)
-                    labels.append(1)
-                # Box topleft
-                elif point_label == 2:
-                    if box_topleft is not None:
-                        raise ValueError(f"Multiple box topleft points found for obj_id {obj_id} in frame {frame_idx}.")
-                    box_topleft = point_coord
-                # Box bottomright
-                elif point_label == 3:
-                    if box_bottomright is not None:
-                        raise ValueError(f"Multiple box bottomright points found for obj_id {obj_id} in frame {frame_idx}.")
-                    box_bottomright = point_coord
-                else:
-                    raise ValueError(f"Invalid point label {point_label} for obj_id {obj_id} in frame {frame_idx}. Must be 0, 1, 2, or 3.")
-            # Build point prompt
-            if len(points) > 0:
-                point_prompts.append({
-                    "obj_id": obj_id,
-                    "frame_idx": frame_idx,
-                    "points": np.stack(points, axis=0).astype(np.float32),
-                    "labels": np.array(labels, dtype=np.int32),
-                })
-
-            # Build box prompt
-            if (box_topleft is None) ^ (box_bottomright is None):
-                raise ValueError(f"Only one of box_topleft or box_bottomright is set for obj_id {obj_id} in frame {frame_idx}. Both must be set or both must be None.")
-            elif box_topleft is not None and box_bottomright is not None:
-                box_prompts.append({
-                    "obj_id": obj_id,
-                    "frame_idx": frame_idx,
-                    "xyxy": np.concatenate([box_topleft, box_bottomright], axis=0),
-                })
-
-    return box_prompts, point_prompts

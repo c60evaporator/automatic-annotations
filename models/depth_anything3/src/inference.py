@@ -1,8 +1,8 @@
 import numpy as np
+from matplotlib.colors import to_rgb
 
 from ..common.geometry.crop_resize import scale_intrinsic
-from ..common.geometry.depth import depth_map_to_point_cloud
-from ..common.image_processing.segmentation import mask_morphology
+from ..common.geometry.depth import depth_map_to_point_cloud, depth_map_to_masked_point_clouds
 
 from depth_anything_3.specs import Prediction
 
@@ -78,11 +78,8 @@ def get_metric_depth(prediction: Prediction,
 
 def get_pseudo_lidar(metric_depth: np.ndarray,
                      scaled_intrinsics: np.ndarray,
-                     sky_mask: np.ndarray | None = None,
-                     mask: np.ndarray | None = None,
-                     masks: list[np.ndarray] | None = None,
-                     morph_kernel_sizes: list[int] | None = None,
-                     ratio_morphology: bool = False,
+                     non_sky_mask: np.ndarray | None = None,
+                     depth_threshold: float | None = None,
 ) -> np.ndarray:
     """
     Generate a pseudo-LiDAR point cloud from a depth map and camera intrinsics.
@@ -90,35 +87,16 @@ def get_pseudo_lidar(metric_depth: np.ndarray,
     Args:
         metric_depth (np.ndarray): HxW array of metric depth values.
         scaled_intrinsics (np.ndarray): 3x3 scaled camera intrinsic matrix.
-        sky_mask (np.ndarray | None): HxW binary mask array for the sky. Points where sky_mask is True will be excluded.
-        mask (np.ndarray | None): HxW binary mask array. Only points where mask is True will be included. If None, all points are included.
-        masks (list[np.ndarray] | None): List of HxW binary mask arrays. Only points where the masks are True will be included. If None, all points are included.
-        morph_kernel_sizes (list[int] | None): List of kernel sizes for morphological operations. Positive size represents dilation, whereas negative size represents erosion. If None, no morphological operations are applied.
-        ratio_morphology (bool): Whether to apply ratio-based morphology. If True, the applied kernel sizes are computed by multiplying `morph_kernel_sizes` by the average of the mask bounding box height and width.
+        non_sky_mask (np.ndarray | None): HxW binary mask array for the non-sky areas. Only points where non_sky_mask is True will be included.
+        depth_threshold (float | None): If provided, points with depth greater than this threshold will be filtered out. Defaults to None.
 
     Returns:
-        np.ndarray: Nx3 array of 3D points in the camera coordinate system. Only points where mask is True are included.
+        np.ndarray: Nx3 array of 3D points in the camera coordinate system.
     """
-    if masks is not None and mask is not None:
-        raise ValueError("Only one of `mask` or `masks` can be provided, not both.")
+    if non_sky_mask is not None:
+        return depth_map_to_masked_point_clouds(metric_depth, scaled_intrinsics, [non_sky_mask], 
+                                                depth_threshold=depth_threshold)[0]
 
-    # Apply morphological operations to the mask if specified
-    if morph_kernel_sizes is not None:
-        if mask is not None:
-            mask = mask_morphology(mask, kernel_sizes=morph_kernel_sizes,
-                                ratio_morphology=ratio_morphology)
-        elif masks is not None:
-            masks = [mask_morphology(m, kernel_sizes=morph_kernel_sizes,
-                                ratio_morphology=ratio_morphology) for m in masks]
-
-    # Apply the sky mask to the mask / masks if provided
-    if sky_mask is not None:
-        if mask is not None:
-            mask = np.logical_and(mask, np.logical_not(sky_mask))
-        elif masks is not None:
-            masks = [np.logical_and(m, np.logical_not(sky_mask)) for m in masks]
-
-    # Unproject the depth_map to 3D points in camera coordinates
-    points = depth_map_to_point_cloud(metric_depth, scaled_intrinsics, mask, masks)
-
-    return points
+    else:
+        return depth_map_to_point_cloud(metric_depth, scaled_intrinsics,
+                                        depth_threshold=depth_threshold)
