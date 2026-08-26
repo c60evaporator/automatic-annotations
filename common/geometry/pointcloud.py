@@ -36,6 +36,36 @@ def transform_lidar_to_ego(
     return transform_points(points_lidar, lidar_to_ego)
 
 
+def transform_ego_to_lidar(
+    points_ego: np.ndarray,
+    lidar_translation: np.ndarray | list[float],
+    lidar_quaternion: np.ndarray | list[float],
+) -> np.ndarray:
+    """
+    ego座標の点群をLiDAR座標へ変換する。
+
+    Args:
+        points_ego:
+            shape=(N, 3)
+        lidar_translation:
+            LiDAR原点のego座標 [x, y, z]
+        lidar_quaternion:
+            LiDAR座標からego座標への回転 [w, x, y, z]
+
+    Returns:
+        shape=(N, 3) のLiDAR座標
+    """
+    points_ego = np.asarray(points_ego, dtype=np.float64)
+    if points_ego.ndim != 2 or points_ego.shape[1] != 3:
+        raise ValueError(f"points_ego must have shape (N, 3), got {points_ego.shape}")
+
+    # calibration が表す lidar -> ego pose から逆変換を作る。
+    lidar_to_ego = make_transform(lidar_quaternion, lidar_translation)
+    ego_to_lidar = invert_transform(lidar_to_ego)
+
+    return transform_points(points_ego, ego_to_lidar)
+
+
 def transform_ego_to_global(
     points_ego: np.ndarray,
     ego_translation: np.ndarray | list[float],
@@ -63,6 +93,36 @@ def transform_ego_to_global(
     ego_to_global = make_transform(ego_quaternion, ego_translation)
 
     return transform_points(points_ego, ego_to_global)
+
+
+def transform_global_to_ego(
+    points_global: np.ndarray,
+    ego_translation: np.ndarray | list[float],
+    ego_quaternion: np.ndarray | list[float],
+) -> np.ndarray:
+    """
+    global座標の点群をego座標へ変換する。
+
+    Args:
+        points_global:
+            shape=(N, 3)
+        ego_translation:
+            ego原点のglobal座標 [x, y, z]
+        ego_quaternion:
+            ego座標からglobal座標への回転 [w, x, y, z]
+
+    Returns:
+        shape=(N, 3) のego座標
+    """
+    points_global = np.asarray(points_global, dtype=np.float64)
+    if points_global.ndim != 2 or points_global.shape[1] != 3:
+        raise ValueError(f"points_global must have shape (N, 3), got {points_global.shape}")
+
+    # ego pose が表す ego -> global transform から逆変換を作る。
+    ego_to_global = make_transform(ego_quaternion, ego_translation)
+    global_to_ego = invert_transform(ego_to_global)
+
+    return transform_points(points_global, global_to_ego)
 
 
 def transform_ego_to_camera(
