@@ -55,6 +55,14 @@ RUN pip install -e .
 # Install Gaussian head
 RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
 
+############################
+# Other dependencies
+############################
+
+# Patchwork++
+RUN apt-get update && apt-get install -y libeigen3-dev cmake
+RUN pip install pypatchworkpp
+
 WORKDIR /workspace
 
 ############################

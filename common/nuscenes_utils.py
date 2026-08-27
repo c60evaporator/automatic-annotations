@@ -43,7 +43,8 @@ def get_scene_contents(scene_token: str,
                        calibrated_sensors_all: list[dict],
                        get_non_key_frames: bool = False,
                        sample_annotations_all: list[dict] | None = None,
-                       instances_all: list[dict] | None = None) -> dict[str, dict]:
+                       instances_all: list[dict] | None = None,
+                       max_samples: int | None = None) -> dict[str, dict]:
     """
     Get all the contents of a scene from the Nuscenes dataset as a dictionary whose keys are their tokens.
 
@@ -56,6 +57,7 @@ def get_scene_contents(scene_token: str,
         get_non_key_frames (bool): Whether to retrieve the non-key frames of sample data, ego_poses, and calibrated_sensors. Defaults to False.
         sample_annotations_all (list[dict]): List of all sample annotations in the dataset. If None, the sample_annotations key will not be included in the returned dictionary.
         instances_all (list[dict]): List of all instances in the dataset. If None, the instances key will not be included in the returned dictionary.
+        max_samples (int | None): The maximum number of samples to retrieve. If None, all samples in the scene will be retrieved. Defaults to None.
 
     Returns:
         dict: A dictionary containing all the contents of the scene.
@@ -76,7 +78,12 @@ def get_scene_contents(scene_token: str,
     samples = {sample["token"]: sample for sample in samples_all 
                if sample["scene_token"] == scene_token}
     samples = dict(sorted(samples.items(), key=lambda item: item[1]["timestamp"]))
+    
+    if max_samples is not None:
+        samples = dict(list(samples.items())[:max_samples])
+
     sample_order = {sample_token: i for i, sample_token in enumerate(samples.keys())}
+
     # Select the sample_data in the scene and filter by is_key_frame, then sort them by sample order
     sample_data = {sd["token"]: sd for sd in sample_data_all if sd["sample_token"] in samples.keys()}
     # Filter by is_key_frame if get_non_key_frames is False
@@ -409,9 +416,9 @@ def get_lidar_pointcloud_in_sample(sample_index: int,
             "intensity": intensity,
             "timestamp": sd["timestamp"],
             "ego_translation": keyframe_ego_pose["translation"], # Use the keyframe ego translation and rotation for all sweeps to ensure consistency with the ``points``
-            "ego_rotation": keyframe_ego_pose["rotation"],
+            "ego_quaternion": keyframe_ego_pose["rotation"],
             "lidar_translation": keyframe_calibrated_sensor["translation"], # Use the keyframe calibrated sensor translation and rotation for all sweeps to ensure consistency with the ``points``
-            "lidar_rotation": keyframe_calibrated_sensor["rotation"],
+            "lidar_quaternion": keyframe_calibrated_sensor["rotation"],
             "is_key_frame": sd["is_key_frame"]
         })
 
