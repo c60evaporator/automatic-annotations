@@ -1,0 +1,28 @@
+services:
+  # Frontend and DB (Streamlit and SQLite)
+  webapp:
+    image: annotation_web
+    build:
+      context: ./streamlit
+      args:
+        # Proxy settings (if needed for development)
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+    ports:
+      # Expose Streamlit on port 80 externally
+      - 80:8501
+    volumes:
+      # appフォルダをマウント
+      - ./streamlit/app:/app
+      # データセットをマウント
+      - ${HOST_DATA_ROOT}:/data:ro
+
+  # Inference server (backend for model inference)
+  inference:
+    image: annotation_inference
+    build:
+      context: ./backend
+    ports:
+      - 8000:8000
+    volumes:
+      - ${HOST_DATA_ROOT}:/data:ro

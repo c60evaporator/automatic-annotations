@@ -1,0 +1,10 @@
+pyyaml
+pandas
+streamlit
+plotly
+Pillow
+sqlalchemy
+pydantic
+pydantic-settings
+requests
+shapely
