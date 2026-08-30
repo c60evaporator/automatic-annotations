@@ -24,6 +24,11 @@ project-root/
     ├── .env
     ├── webapp/
     │   ├── Dockerfile
+    │   ├── alembic.ini
+    │   ├── alembic/
+    │   │   ├── env.py
+    │   │   ├── script.py.mako
+    │   │   └── versions/                       # 各バージョンのマイグレーションスクリプト格納用フォルダ
     │   └── app/
     │       ├── main.py                         # Streamlitのメインページ（データセット選択）
     │       ├── json_conversion/                # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
@@ -100,8 +105,8 @@ project-root/
   `assert_within_dataroot()` でデータルート外を弾く
 - 既存 map_set の backfill はマイグレーション `a1c74f9be2d0`（純 SQL・冪等）で行う
 
-## Frontend
-- 描画:      Deck.gl 9.x
+## Streamlit
+- 本体:     Streamlit
 - UI:        React 19 + TypeScript 5.x + Vite 6.x
 - スタイル:  Tailwind CSS 4.x + shadcn/ui
 - 状態管理:  Zustand 5.x

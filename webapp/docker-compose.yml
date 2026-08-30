@@ -3,7 +3,7 @@ services:
   webapp:
     image: annotation_web
     build:
-      context: ./streamlit
+      context: ./webapp
       args:
         # Proxy settings (if needed for development)
         - HTTP_PROXY=${HTTP_PROXY:-}
@@ -13,16 +13,23 @@ services:
       - 80:8501
     volumes:
       # appフォルダをマウント
-      - ./streamlit/app:/app
+      - ./webapp/app:/app
       # データセットをマウント
       - ${HOST_DATA_ROOT}:/data:ro
+      - derived:/data/_derived         # 深度マップ等の派生物は書き込み可
+      # SQLite 用のボリューム
+      - dbdata:/db
 
   # Inference server (backend for model inference)
-  inference:
-    image: annotation_inference
-    build:
-      context: ./backend
-    ports:
-      - 8000:8000
-    volumes:
-      - ${HOST_DATA_ROOT}:/data:ro
+  # inference:
+  #   image: annotation_inference
+  #   build:
+  #     context: ./backend
+  #   ports:
+  #     - 8000:8000
+  #   volumes:
+  #     - ${HOST_DATA_ROOT}:/data:ro
+
+volumes:
+  derived:
+  dbdata:
