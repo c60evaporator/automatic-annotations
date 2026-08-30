@@ -345,12 +345,32 @@ def _build_map_rows(
 
 # ── メイン処理 ────────────────────────────────────────────────────────────────
 
+def _discover_dataroots(data_root: Path, version: str) -> list[str]:
+    """DATA_ROOT 配下から、指定 version を含むデータセットルートを探す.
+
+    DATA_ROOT の直下には複数のデータセットルートが並ぶ想定:
+        /data/nuscenes/v1.0-mini/...
+        /data/dataset2/v1.0-mini/...
+    --dataroot の指定ミス時に候補を提示するために使う。
+    """
+    if not data_root.is_dir():
+        return []
+    found: list[str] = []
+    # DATA_ROOT 直下（--dataroot .）と、その1階層下を探す
+    if (data_root / version).is_dir():
+        found.append(".")
+    for child in sorted(data_root.iterdir()):
+        if child.is_dir() and (child / version).is_dir():
+            found.append(child.name)
+    return found
+
+
 def import_nuscenes(
     session: Session,
     *,
     name: str,
     version: str,
-    dataroot: str = ".",
+    dataroot: str,
     description: str | None = None,
     replace: bool = False,
     dry_run: bool = False,
@@ -361,7 +381,18 @@ def import_nuscenes(
     meta_dir = root / version
 
     if not meta_dir.is_dir():
-        raise ImportError_(f"メタデータのディレクトリがありません: {meta_dir}")
+        candidates = _discover_dataroots(settings.DATA_ROOT, version)
+        hint = (
+            "\n  --dataroot に指定できる候補: "
+            + ", ".join(repr(c) for c in candidates)
+            if candidates else
+            f"\n  DATA_ROOT ({settings.DATA_ROOT}) 配下に "
+            f"'{version}' を含むディレクトリが見つかりません。"
+            "\n  データのマウント先と --version の指定を確認してください。"
+        )
+        raise ImportError_(
+            f"メタデータのディレクトリがありません: {meta_dir}{hint}"
+        )
 
     logger.info("importing from %s", meta_dir)
     started = time.perf_counter()
@@ -570,8 +601,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="DB 上のデータセット名（一意）。例: mini")
     p.add_argument("--version", required=True,
                    help="メタデータのディレクトリ名。例: v1.0-mini")
-    p.add_argument("--dataroot", default=".",
-                   help="DATA_ROOT からの相対パス（既定: . ）")
+    p.add_argument("--dataroot", required=True,
+                   help="DATA_ROOT からのデータセットルートの相対パス。例: nuscenes\n"
+                        "（DATA_ROOT 直下にメタデータがある場合は '.' を指定）")
     p.add_argument("--description", default=None, help="任意の説明文")
     p.add_argument("--replace", action="store_true",
                    help="同名のデータセットが既にある場合、削除してから取り込む")
