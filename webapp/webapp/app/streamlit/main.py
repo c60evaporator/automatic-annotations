@@ -1,66 +1,97 @@
-import os
-import json
-import yaml
+"""メインページ: データセット選択."""
+from __future__ import annotations
 
-import streamlit as st
 import pandas as pd
+import streamlit as st
 
-from utils.session import init_session
-from utils.map_utils import build_basemap_cache
-from services.nuscenes_loader import build_datasets_dataframe, load_nuscenes
-from services.scene_manager import build_scene_dataframe
+from app.core.config import get_settings
+from app.streamlit import state as S
+from app.streamlit.data_access import clear_caches, get_dataset, list_datasets
 
-init_session()
-
-# Set the page configuration
+# set_page_config はアプリ内で最初の Streamlit 呼び出しである必要があり、
+# メインスクリプトでのみ設定する
 st.set_page_config(
-    page_title="NuScenes Cutter",
-    page_icon=":car:",
+    page_title="Automatic Annotation",
+    page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Load the configuration
-with open("config/settings.yml", "r") as f:
-    config = yaml.safe_load(f)
-st.session_state.config = config
+st.title("🚗 Automatic Annotation")
+st.caption("nuScenes データセットの自動アノテーション（3D bounding box）デモ")
 
-# Header placeholder
-header_ph = st.empty()
-header_ph.subheader("Loading the datasets")
+datasets = list_datasets()
 
-# Get the list of dataset folders in the input directory
-INPUT_BASE = "/data/input"
-datasets_df = build_datasets_dataframe(INPUT_BASE)
+if not datasets:
+    st.warning("データセットがまだ登録されていません。")
+    settings = get_settings()
+    st.markdown(
+        "先にインポート CLI を実行してください。\n\n"
+        "```bash\n"
+        "docker compose run --rm webapp \\\n"
+        "  python -m app.json_conversion.to_nusc_db \\\n"
+        "    --name mini --version v1.0-mini --dataroot nuscenes\n"
+        "```\n\n"
+        f"データは `{settings.DATA_ROOT}` にマウントされています。"
+        "`--dataroot` にはその直下のデータセットルート名を指定します。"
+    )
+    st.stop()
 
-header_ph.subheader("Please select a dataset to load")
+# --- 一覧表示 -----------------------------------------------------------------
+df = pd.DataFrame(datasets)[[
+    "name", "version", "dataset_type", "dataroot",
+    "nbr_scenes", "nbr_samples", "nbr_annotations", "description", "created_at",
+]]
 
-# Show the datasets in a selectable table
+st.subheader("データセットを選択")
 event = st.dataframe(
-    datasets_df,
+    df,
     hide_index=True,
+    width="stretch",
     selection_mode="single-row",
     on_select="rerun",
+    key="_w_dataset_table",
+    column_config={
+        "name": st.column_config.TextColumn("名前"),
+        "version": st.column_config.TextColumn("バージョン"),
+        "dataset_type": st.column_config.TextColumn("種別"),
+        "dataroot": st.column_config.TextColumn("データルート"),
+        "nbr_scenes": st.column_config.NumberColumn("シーン数", format="%d"),
+        "nbr_samples": st.column_config.NumberColumn("サンプル数", format="%d"),
+        "nbr_annotations": st.column_config.NumberColumn("アノテーション数", format="%d"),
+        "description": st.column_config.TextColumn("説明"),
+        "created_at": st.column_config.DatetimeColumn("登録日時", format="YYYY-MM-DD HH:mm"),
+    },
 )
-selected_rows = event.selection.rows
-selected_folder = datasets_df.iloc[selected_rows[0]]["dataset_name"] if selected_rows else None
-selected_version = datasets_df.iloc[selected_rows[0]]["version"] if selected_rows else None
 
-# Select the dataset folder and load the dataset
-if st.button("Load Dataset", disabled=not selected_rows):
-    header_ph.write(f"Loading dataset: {selected_folder}, version: {selected_version}")
-    dataset_root = os.path.join(INPUT_BASE, selected_folder)
-    # Store the dataset root in session state
-    st.session_state.dataset_root = dataset_root
-    nusc = load_nuscenes(dataset_root, selected_version)
-    st.session_state.nusc = nusc
-    st.session_state.scene_df = build_scene_dataframe(nusc)
-    st.session_state.basemap_cache = build_basemap_cache(nusc, scale=st.session_state.config["basemap"]["cache_scale"])
-    st.session_state.selected_scene_info = None
-    st.session_state.scene_browser_revision += 1
-    header_ph.empty()
-    st.markdown(f"**Loaded dataset: {selected_folder}, version: {selected_version}**")
+selected_rows = event.selection.rows if event and event.selection else []
+selected = datasets[selected_rows[0]] if selected_rows else None
 
-if st.session_state.nusc is not None:
-    if st.button("Open Dataset Browser", type="primary"):
-        st.switch_page("pages/1_Dataset_Browser.py")
+# --- 選択の確定 ---------------------------------------------------------------
+# テーブルの選択状態はウィジェットに紐づくため、ページを移ると失われる。
+# ボタンで明示的に正規キーへ確定させる（state.set_selection）。
+col1, col2, col3 = st.columns([2, 2, 6])
+
+with col1:
+    if st.button("このデータセットを使う", type="primary", disabled=selected is None):
+        S.set_selection(S.DATASET_ID, selected["id"])
+        st.switch_page("pages/1_Scene_Selection.py")
+
+with col2:
+    if st.button("再読み込み", help="DB の変更をキャッシュに反映します"):
+        clear_caches()
+        st.rerun()
+
+# --- 現在の選択 ---------------------------------------------------------------
+current_id = S.get(S.DATASET_ID)
+current = get_dataset(current_id) if current_id else None
+
+if current:
+    st.success(f"選択中: **{current['name']}** ({current['version']})")
+    if st.button("シーン選択へ進む"):
+        st.switch_page("pages/1_Scene_Selection.py")
+elif selected:
+    st.info(f"**{selected['name']}** を選択中です。"
+            "「このデータセットを使う」で確定してください。")
+
+S.render_selection_sidebar(dataset_name=current["name"] if current else None)
