@@ -1,166 +1,95 @@
-# nuscenes-viewer
-nuScenesデータセットを可視化＆データやアノテーションを追加・修正するためのWebアプリ
+# automatic-annotation-app
+nuScenesデータセットの自動アノテーションを実施するデモ用Streamlit Webアプリ
 
 ## Project Overview
-NuScenes dataset + Map expansion visualizer / annotation tool
-- Backend: FastAPI (Python 3.12)
-- Frontend: React + TypeScript + Deck.gl
-- Data: ローカルフォルダのnuscenesデータセットのうち、メタデータを初期化時にDatabaseに読み込み、画像、点群データはローカルフォルダから直接読込
-- DB schema: backend/app/modelsフォルダにあるSQL Alchemy形式スキーマを使用する
-- 全サービスをDockerコンテナで構成
+NuScenes datasetをDBに読み込み、推論サーバーでAIモデルによる自動アノテーション（3D bounding box）を実施。Streamlitで表示
+- Frontend: Streamlit
+- DB: SQLite（`webapp/app/models`フォルダにあるSQL Alchemy形式スキーマを使用する）
+- Data: ホスト側のフォルダ（環境変数`HOST_DATA_ROOT`で指定）にnuscenesデータセットを格納してコンテナにマウント。メタデータを初期化時にDatabaseに読み込み、画像、点群データはローカルフォルダから直接読込
+- 推論サーバー: 以下3種類の推論をパイプライン的に実施。FastAPIでトリガーと結果を返すREST APIを提供
+  1. 2D Object Detection: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出
+  2. Instance-Tracking: 1で検出したbounding boxesをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得
+  3. Depth Estimation & Box Fitting: Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionして3D bounding boxを割り当て
+- 以下サービスをDockerコンテナで構成
+  - webapp: Streamlitによるフロントエンド＋SQLiteによるDB
+  - inference: FastAPI＋AIによる推論サーバー
 
 ## Directory Structure
 ```
 project-root/
-├── CLAUDE.md
-├── docker-compose.yml
-├── .env
-├── backend/
-│   ├── Dockerfile
-│   ├── pyproject.toml
-│   └── app/
-│       ├── main.py                         # FastAPIアプリ初期化・ルーター登録
-│       ├── dependencies.py                 # DBセッションなど共通依存関係
-│       ├── json_conversion/                # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
-│       │   ├── schemas_nuscenes.py         # NuScenes本体データセットJSONのPydantic形式スキーマ
-│       │   ├── to_nuscenes.py              # NuScenes本体データセットをDBからJSONに変換
-│       │   ├── to_nusc_db.py               # NuScenes本体データセットをJSONからDBに変換
-│       │   ├── schemas_mapexpansion.py     # Map expansionデータセットJSONのPydantic形式スキーマ
-│       │   ├── to_map_db.py                # Map expansionデータセットをJSONからDBに変換
-│       │   ├── to_mapexpansion.py          # Map expansionデータセットをDBからJSONに変換
-│       │   └── tokens.py                   # token名前空間化（uuid5）ユーティリティ
-│       ├── core/
-│       │   ├── config.py                   # 環境変数・設定（Pydantic Settings）
-│       │   └── logging.py                  # ロギング設定
-│       ├── db/
-│       │   ├── base.py                     # DeclarativeBase
-│       │   ├── session.py                  # AsyncSession ファクトリ
-│       │   └── poitgis.py                  # PostGIS初期化・拡張確認（ファイル名は typo だが変更禁止）
-│       ├── models/                         # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
-│       │   ├── __init__.py                 # Alembicがモデルを検出できるよう全importを記載
-│       │   ├── dataset.py                  # Dataset（データセット単位。map_set_idでマップを参照）
-│       │   ├── map_set.py                  # MapSet（マップ一式の単位。複数datasetで共有）
-│       │   ├── scene.py                    # Scene, Sample
-│       │   ├── annotation.py               # SampleAnnotation, Instance, Category
-│       │   ├── sensor.py                   # Sensor, CalibratedSensor, EgoPose
-│       │   └── map.py                      # Map expansion（PostGISジオメトリ含む）
-│       ├── schemas/                        # Pydantic スキーマ（APIスキーマ）
-│       │   ├── scene.py                    # SceneResponse, SampleResponse
-│       │   ├── annotation.py               # BoundingBox3DResponse, AnnotationResponse
-│       │   ├── sensor.py                   # CalibratedSensorResponse, EgoPoseResponse
-│       │   ├── map.py                      # Map expansion (MapResponse, GeoJSONFeature)
-│       │   └── common.py                   # Point3D, Quaternion, Dimensions3D など共通型
-│       ├── lib/
-│       │   ├── storage.py                  # ローカル / S3 のファイル読み出し
-│       │   └── basemap.py                  # basemap パス解決（投入時）とデータルート検証（配信時）
-│       ├── converters/                     # DB → APIスキーマへの変換ロジック
-│       │   ├── annotation.py               # SampleAnnotation → BoundingBox3D
-│       │   ├── scene.py                    # Scene → SceneResponse
-│       │   ├── sensor.py                   # EgoPose → 変換行列など
-│       │   ├── dataset.py                  # Dataset / MapSet → レスポンス
-│       │   ├── map.py                      # MapMeta → MapMetaResponse（GPS原点を settings.yml から解決）
-│       │   └── geometry.py                 # GeoAlchemy2 → GeoJSON変換など
-│       ├── services/                       # ビジネスロジック層（Repository + Converter の組合せ）
-│       │   ├── map_set_link_service.py     # dataset ↔ map_set の紐付け（CLI 3本で共有）
-│       │   ├── scene_import_service.py     # POST /scenes/import
-│       │   ├── scene_delete_service.py     # DELETE /scenes/{token}
-│       │   ├── annotation_edit_service.py  # prev/next チェーンの書き換え
-│       │   ├── annotation_merger.py        # SampleAnnotation + AnnotationEdit のマージ
-│       │   ├── nuscenes_export_service.py  # nuScenes 形式エクスポート（dataset スコープ）
-│       │   └── nuscenes_export_builders.py # 各 JSON ファイルの組み立て
-│       ├── repositories/                   # DBアクセスの抽象化（クエリの責務）
-│       │   ├── dataset.py                  # DatasetRepository, MapSetRepository（作成・削除含む）
-│       │   ├── scene.py                    # SceneRepository
-│       │   ├── annotation.py               # AnnotationRepository
-│       │   ├── sensor.py                   # SensorRepository
-│       │   └── map.py                      # MapRepository（空間クエリ含む） Map expansion用
-│       └── api/
-│           └── v1/
-│               ├── router.py               # v1ルーターの集約
-│               └── endpoints/
-│                   ├── scenes.py           # GET /scenes, GET /scenes/{token}, GET /scenes/{token}/samples, GET /scenes/{token}/ego-poses
-│                   ├── samples.py          # GET /samples/{token}, GET /samples/{token}/annotations, GET /samples/{token}/sensor-data, GET /samples/{token}/instances
-│                   ├── annotations.py      # GET /annotations, GET /annotations/{token}, PATCH /annotations/{token}
-│                   ├── sensors.py          # GET /sensors, GET /calibrated-sensors, GET /ego-poses, GET /sensor-data/{token}/image, GET /sensor-data/{token}/pointcloud
-│                   ├── maps.py             # GET /maps, GET /maps/{token}, GET /maps/{token}/geojson, GET /maps/{location}/basemap
-│                   ├── categories.py       # GET /categories
-│                   ├── attributes.py       # GET /attributes
-│                   ├── visibilities.py     # GET /visibilities
-│                   ├── datasets.py         # GET /datasets, GET /datasets/{id}, GET /map-sets（dataset_id 不要）
-│                   ├── export.py           # GET /export/nuscenes, GET /export/nuscenes/{scene_token}
-│                   ├── instances.py        # GET /instances, GET /instances/{token}, GET /instances/{token}/annotations, GET /instances/{token}/best-camera
-│                   └── logs.py             # GET /logs
-├── frontend/
-│   ├── Dockerfile
-│   ├── vitest.config.ts
-│   └── src/
-│       ├── pages/               # ScenePage, SamplePage, InstancePage, AnnotationPage, MapPage, SampleMapPage
-│       ├── components/          # layout/, common/, scene/, sample/, instance/, annotation/, map/, sample-map/, ui/
-│       ├── api/                 # TanStack Query hooks（client.ts の apiFetch / apiUrl が URL に /datasets/{id} を差し込む）
-│       ├── store/               # viewerStore, navigationStore, mapLayerStore, layerStore
-│       ├── types/               # annotation, scene, sensor, map, navigation, common
-│       ├── layers/              # MapAnnotationLayers.ts（Deck.gl レイヤー定義）
-│       └── lib/                 # coordinateUtils.ts, canvasUtils.ts, utils.ts
-└── db/
-    └── initdb.d/
-        ├── 01_init.sh
-        └── 02-init.sql
+:
+└── webapp/
+    ├── CLAUDE.md
+    ├── docker-compose.yml
+    ├── .env
+    ├── webapp/
+    │   ├── Dockerfile
+    │   └── app/
+    │       ├── main.py                         # Streamlitのメインページ（データセット選択）
+    │       ├── json_conversion/                # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
+    │       │   ├── schemas_nuscenes.py         # NuScenes本体データセットJSONのPydantic形式スキーマ
+    │       │   ├── to_nuscenes.py              # NuScenes本体データセットをDBからJSONに変換
+    │       │   └── to_nusc_db.py               # NuScenes本体データセットをJSONからDBに変換
+    │       ├── core/
+    │       │   ├── config.py                   # 環境変数・設定（Pydantic Settings）
+    │       │   └── logging.py                  # ロギング設定
+    │       ├── db/
+    │       │   ├── base.py                     # DeclarativeBase
+    │       │   ├── engine.py                   # 
+    │       │   └── session.py                  # AsyncSession ファクトリ
+    │       ├── models/                         # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
+    │       │   ├── __init__.py                 # Alembicがモデルを検出できるよう全importを記載
+    │       │   ├── dataset.py                  # Dataset（データセット単位）
+    │       │   ├── scene.py                    # Scene, Sample
+    │       │   ├── annotation.py               # SampleAnnotation, Instance, Category
+    │       │   ├── sensor.py                   # Sensor, CalibratedSensor, EgoPose
+    │       │   ├── map.py                      # Map
+    │       │   └── ann_intermediate.py         # 自動アノテーションの中間出力（Detection2DParams, Detection2D, InstanceTracking2DParams, InstanceTracking2D, DepthEstimationParams, DepthEstimation）
+    │       ├── services/                       # ビジネスロジック層（Repositoryで取得したデータを変形）
+    │       │   ├── annotation_service.py  # prev/next チェーンの書き換え
+    │       │   ├── nuscenes_export_service.py  # nuScenes 形式エクスポート
+    │       │   └── nuscenes_export_builders.py # 各 JSON ファイルの組み立て
+    │       ├── repositories/                   # DBアクセスの抽象化（クエリの責務）
+    │       │   ├── dataset.py                  # DatasetRepository（作成・削除含む）
+    │       │   ├── scene.py                    # SceneRepository
+    │       │   ├── annotation.py               # AnnotationRepository
+    │       │   ├── sensor.py                   # SensorRepository
+    │       │   └── map.py                      # MapRepository
+    │       └── streamlit/                      # StreamlitのUI実装（フロントエンド）
+    │           ├── main.py                     # メインページ（データセット選択）
+    │           ├── pages/                      # 各ページの実装
+    │           │   ├── 1_Scene_Selection.py    # シーン選択ページ
+    │           │   ├── 2_Detection2D.py        # 2D Object Detection（GroundingDINO）で各ラベルの2D bounding box検出を実施するページ
+    │           │   ├── 3_Instance_Tracking.py  # 検出したbboxをプロンプトとしたInstance-Tracking（SAM2）で、各インスタンスのマスクとtrack_id（instance_id）を取得するページ
+    │           │   └── 4_Depth_Boxfitting.py   # Depth Estimation（DA3）で推論した点群とLiDAR点群をミックスして、マスク範囲にprojectionして3D bounding boxを割り当てるページ
+    │           └── components                  # Streamlitの各種描画処理をコンポーネント関数化
+    │               ├── waypoint_viewer.py      # basemap上にego_poseを描画
+    │               ├── det2d_viewer.py         # カメラ画像上に2D bounding boxを描画
+    │               ├── instance_tracking_viewer.py # カメラ画像上にInstance segmentationとトラッキング結果を描画
+    │               ├── depth_est_viewer.py     # 深度推定とマスクprojection結果を、Depth Mapで表示
+    │               └── pointcloud_viewer.py    # 点群（LiDARまたは深度推定から得る）を表示
+    └── inference/
+        ├── Dockerfile
+        └── app/
+            ├── main.py                         # FastAPIアプリ初期化・ルーター登録
+            ├── routers/                        # エンドポイント定義
+            │   ├── det2d.py                    # 2D Object Detection関係のエンドポイント
+            │   ├── instance_tracking.py        # Instance-Tracking関係のエンドポイント
+            │   └── depth_boxfitting.py         # Depth Estimation & Box Fitting関係のエンドポイント
+            ├── schemas/                        # Pydantic スキーマ（APIスキーマ）
+            │   ├── det2d.py                    # 2D Object Detection関係のスキーマ
+            │   ├── instance_tracking.py        # Instance-Tracking関係のスキーマ
+            │   └── depth_boxfitting.py         # Depth Estimation & Box Fitting関係のスキーマ
+            └── 
 ```
 
 ## Schema Rules（最重要）
-- `backend/app/models/` が唯一のスキーマ定義とする
-- Pydanticスキーマ・CRUDは必ずmodelsから派生させる
+- `webapp/app/models/` が唯一のスキーマ定義とする
+- CRUDは必ずmodelsから派生させる
 - **カラム追加・変更は必ずmodels/を先に修正してから伝播させる**
 - モデル変更時はAlembicマイグレーションも同時に生成すること
-- 実際のデータ構造は`./data/nuscenes`フォルダのシンボリックリンク先のデータセットも参照する
-
-### 複数データセット対応（datasets / map_sets）
-- データ系の全テーブルは `dataset_id`（FK → datasets, CASCADE）、マップ系の全テーブルは
-  `map_set_id`（FK → map_sets, CASCADE）を持つ。どちらも **NOT NULL・server_default なし**
-  → 書き込み経路（サービス層 / エンドポイント / インポート）が必ず明示的に値を決める
-- `datasets.map_set_id`（RESTRICT）でデータセットが使うマップ一式を指す。
-  trainval と mini のように同じマップを使うデータセットは同一 map_set を共有し、複製しない
-- `datasets.map_set_id` は **nullable**（マップなしのデータセット登録を許容する）。
-  後から `scripts/link_map_set.py` で紐付け／解除できる。紐付けロジックは
-  `app/services/map_set_link_service.py` に集約し、CLI 3 本で共有する
-  （location 整合性チェック: dataset の logs.location ⊆ map_set の map_meta.location）
-- **`/datasets` `/map-sets` を除く全エンドポイントが URL に dataset を含む**
-  （`/api/v1/datasets/{dataset_id}/...`。`dependencies.get_dataset` → `CurrentDataset` が
-  Path から読む）。dataset を含まない URL はルートが無いので 404、不明な ID も 404。
-  既定データセットへのフォールバックは作らない。
-  プレフィックスは `api/v1/router.py` の `DATASET_SCOPED_PREFIX` で一括付与し、
-  各エンドポイントのデコレータには書かない
-- maps 系だけは dataset ではなく **その dataset が参照する map_set** にスコープする。
-  `map_set_id` が NULL のときは `GET /maps` が空リスト、他は 404
-- 「存在しない token」と「他データセットの token」は**区別せず同一の 404 + 同一 detail** を返す
-  （区別すると他データセットのレコードの存在有無が漏れる）。読み取りだけでなく
-  書き込み（PATCH/POST/DELETE annotations, DELETE scenes）も同じガードを通す
-- 未紐付けデータセットへの `POST /scenes/import` は log.location の検証をスキップし、
-  `SceneImportResult.warnings` で通知する。スキップ判定は必ずサービス層が
-  DB の `dataset.map_set_id` を見て行う（リクエスト側のフラグは受け付けない）。
-  なお **投入先は URL の `/datasets/{dataset_id}` で一意に決まる**（Form では受け取らない）
-- インポート時に token を `uuid5(dataset_id または map_set_id, 元token)` で名前空間化し、
-  元 token は各テーブルの `source_token` に保存する（mini と trainval の token 衝突対策）。
-  変換の実装は `app/json_conversion/tokens.py` の `make_token_mapper` のみを使う
-- POST /scenes/import に渡す JSON の token は常に「元データセットの token（source 空間）」。
-  DB の既存行を指す参照（calibrated_sensor.sensor_token 等）も同じ規則で変換して解決する
-- **エクスポートは既定で source 空間の token を出力する**（`token_format=source`）。
-  逆変換は uuid5 を逆算できないため DB の `source_token` を引く。実装は
-  `app/services/export_token_map.py` に集約し、builder には書かない
-  （組み立て済みレコードをキー名ルールで一括変換する。`token` / `prev` / `next` /
-  `*_token` / `*_tokens` が対象）。`source_token` が NULL のレコード
-  （`annotation_edits` / `instance_edits` / `map_meta`）は名前空間化後の token のまま出力する。
-  `token_format=internal` は DB 突き合わせ用で、**再インポートには使えない**
-  （source 空間を前提とする import 側で uuid5 が二重に掛かる）
-- URL のパスに現れる token（`/scenes/{token}` 等）は常に **DB の token**。
-  token_format が変えるのはエクスポート JSON の中身だけ
-- リポジトリは dataset_id を自力で推論しない（**引数で必須**。デフォルト値 None を付けない）
-- **JOIN では起点テーブル 1 箇所にだけ dataset_id 条件を付ける**（JOIN 先には付けない）。
-  どのテーブルを起点にしたかは必ずコメントで残す
-- sample_annotations と annotation_edits をマージする経路（一覧・エクスポート）は
-  **両テーブルとも** dataset_id で絞る。片方だけだと他データセットの編集差分が混入する
-- `app/services/annotation_merger.py` だけは例外で dataset_id を取らない（名前空間化済みの
-  単一 token 起点の引き当てのみで、呼び出し元が必ずスコープ済み）
+- 実際のデータ構造は環境変数`HOST_DATA_ROOT`で指定したフォルダ内のデータセットも参照する（カメラ画像・LiDAR点群データ）
+- 同じデータセットやマップデータを複数のメタデータが参照（例：trainvalとminiが同じデータを参照）すると、tokenの重複が発生し、DBのprimary keyのidentity制約でエラーが出る。このケースをハンドルするにはtokenをprimary keyにする前に名前空間を付与する等が有効だが、今回はこのようなハンドリングは実施せず、token重複を防ぐよう運用側でカバーする。よって**1データセットで読み込めるメタデータ・マップデータは1つのみという制約をドキュメントに明記するものとする**
 
 ### basemap 画像の配信
 - 配信元は **`map_meta.basemap_path`**（DB）。エンドポイント側にファイル名を持たない

@@ -6,7 +6,7 @@ import streamlit as st
 
 from services.cut_scene_manager import init_cut_scene_session_state, get_cut_scenes_list, load_cut_scene
 from services.dataset_creator import create_new_dataset
-from components.waypoint_viewer import render_scene_waypoint
+from webapp.webapp.app.streamlit.components.waypoint_viewer import render_scene_waypoint
 from components.sensor_viewer import render_selected_sample_sensors
 from utils.page_guard import require_dataset_loaded
 from utils.scene_utils import get_samples_in_scene

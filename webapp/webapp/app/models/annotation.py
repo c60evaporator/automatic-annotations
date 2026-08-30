@@ -48,11 +48,11 @@ class Instance(Base):
     nbr_annotations: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 先頭・末尾アノテーションへの参照（SET NULL：アノテーション削除時も行は残す）
     first_annotation_token: Mapped[str | None] = mapped_column(
-        ForeignKey("sample_annotations.token", ondelete="SET NULL", use_alter=True),  # 循環参照のため遅延定義
+        String,  # SQLiteと相性が悪いため循環FKは張らない
         nullable=True,
     )
     last_annotation_token: Mapped[str | None] = mapped_column(
-        ForeignKey("sample_annotations.token", ondelete="SET NULL", use_alter=True),  # 循環参照のため遅延定義
+        String,  # SQLiteと相性が悪いため循環FKは張らない
         nullable=True,
     )
     # 初回インポート=false / ユーザ追加=true

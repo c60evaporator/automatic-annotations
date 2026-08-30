@@ -22,4 +22,4 @@ RUN groupadd -g ${GID} ${USERNAME} \
     && chown -R ${UID}:${GID} /app
 USER ${USERNAME}
 
-ENTRYPOINT ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
+ENTRYPOINT ["streamlit", "run", "streamlit/main.py", "--server.port=8501", "--server.address=0.0.0.0"]

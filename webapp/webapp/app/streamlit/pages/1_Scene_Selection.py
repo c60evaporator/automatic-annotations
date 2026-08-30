@@ -1,6 +1,6 @@
 import streamlit as st
 
-from components.waypoint_viewer import render_scene_waypoint
+from webapp.webapp.app.streamlit.components.waypoint_viewer import render_scene_waypoint
 from utils.page_guard import require_dataset_loaded
 
 require_dataset_loaded()
@@ -55,5 +55,5 @@ if st.session_state.scene_token is not None:
             )
             if st.button("Cut This Scene", type="primary"):
                 st.switch_page(
-                    "pages/2_Scene_Cutter.py"
+                    "pages/2_Detection2D.py"
                 )
