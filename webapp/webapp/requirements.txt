@@ -1,10 +1,22 @@
-pyyaml
-pandas
+# --- Web / UI ---
 streamlit
 plotly
 Pillow
-sqlalchemy
-pydantic
+# --- DB ---
+sqlalchemy>=2.0
+alembic                 # Migration tool for database schema changes
+# --- Validation ---
+pydantic>=2
 pydantic-settings
+# --- Data Processing ---
+numpy
+pandas
+shapely                 # Polygon operations
+pyyaml
+# --- Import CLI ---
+tqdm                    # Progress display when inserting a large number of records
+orjson                  # High-speed parsing of nuScenes JSON (significant difference in trainval)
+ijson                   # Incremental JSON parser for large files such as trainval of nuScenes
+
+# --- Communication with inference server ---
 requests
-shapely

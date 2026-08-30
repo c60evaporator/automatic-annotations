@@ -24,6 +24,7 @@ project-root/
     ├── .env
     ├── webapp/
     │   ├── Dockerfile
+    │   ├── docker-entrypoint.sh
     │   ├── alembic.ini
     │   ├── alembic/
     │   │   ├── env.py

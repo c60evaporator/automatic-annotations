@@ -8,27 +8,65 @@ services:
         # Proxy settings (if needed for development)
         - HTTP_PROXY=${HTTP_PROXY:-}
         - HTTPS_PROXY=${HTTPS_PROXY:-}
+        # Match host UID/GID to avoid permission issues on bind mounts
+        - UID=${UID:-1000}
+        - GID=${GID:-1000}
     ports:
       # Expose Streamlit on port 80 externally
       - 80:8501
+    # .env を環境変数として注入（pydantic-settingsのenv_fileはプロセスのCWD基準で解決されるため、環境変数で渡すほうが確実）
+    env_file:
+      - .env
+    environment:
+      # コンテナ内の固定パス
+      DATA_ROOT: /data
+      DERIVED_ROOT: /derived
+      SQLITE_PATH: /db/app.db
     volumes:
-      # appフォルダをマウント
-      - ./webapp/app:/app
+      # webappフォルダをマウント
+      - ./webapp:/workspace
       # データセットをマウント
-      - ${HOST_DATA_ROOT}:/data:ro
-      - derived:/data/_derived         # 深度マップ等の派生物は書き込み可
-      # SQLite 用のボリューム
+      - ${HOST_DATA_ROOT}:/data:ro  # 読み取り専用
+      # 深度マップ等の生成派生物保存先
+      - derived:/data/_derived
+      # SQLite 用のボリューム（バインドマウントだとホストOSによってWALのロックが正しく効かないため、名前付きボリュームを使う）
       - dbdata:/db
 
   # Inference server (backend for model inference)
-  # inference:
-  #   image: annotation_inference
-  #   build:
-  #     context: ./backend
-  #   ports:
-  #     - 8000:8000
-  #   volumes:
-  #     - ${HOST_DATA_ROOT}:/data:ro
+  inference:
+    image: "${IMAGE_NAME:-autoann-pipeline3}:${IMAGE_TAG:-cu124-${IMAGE_RUNTIME:-devel}}"
+    build:
+      context: ./inference
+      dockerfile: Dockerfile_${IMAGE_RUNTIME:-devel}
+      args:
+        # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
+        TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-8.9}"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+    ports:
+      - 8000:8000
+    environment:
+      DATA_ROOT: /data
+      DERIVED_ROOT: /derived
+      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
+    volumes:
+      - ./inference:/workspace
+      - ${HOST_DATA_ROOT}:/data:ro
+      - derived:/derived
+    # GPU を使う場合
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   derived:
