@@ -1,6 +1,4 @@
 # syntax=docker/dockerfile:1
-# inference/Dockerfile_devel
-
 # Base image
 FROM jidohub/base-cu124-devel-ubuntu22.04:latest
 
@@ -8,21 +6,11 @@ FROM jidohub/base-cu124-devel-ubuntu22.04:latest
 ARG TORCH_CUDA_ARCH_LIST
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 
-# プロキシはビルド時のみ有効にする（ENV にすると実行時にも残り、
-# プロキシの無い環境で外部アクセスが全て失敗するようになる）
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG http_proxy
-ARG https_proxy
-
-# サードパーティのリポジトリは /opt に置く。
-# /workspace は docker-compose で ./inference をバインドマウントするため、
-# ここに clone するとマウント時に丸ごと隠れて `pip install -e` の
-# 参照先が消え、import が失敗する。
+# Folder for downloading GroundingDINO/SAM2/Depth-Antying-3
 ENV THIRD_PARTY_ROOT=/opt/third_party
 RUN mkdir -p ${THIRD_PARTY_ROOT}
 
-# モデル重みのキャッシュ先。ボリュームでマウントして再ダウンロードを防ぐ
+# Directries for storing model weights
 ENV HF_HOME=/opt/cache/huggingface \
     TORCH_HOME=/opt/cache/torch \
     CHECKPOINT_DIR=/opt/checkpoints
@@ -31,6 +19,7 @@ RUN mkdir -p ${HF_HOME} ${TORCH_HOME} ${CHECKPOINT_DIR}
 ############################
 # SAM2 Installation
 ############################
+# Clone SAM2 repository and install the required dependencies
 WORKDIR ${THIRD_PARTY_ROOT}
 RUN git clone https://github.com/facebookresearch/sam2.git
 WORKDIR ${THIRD_PARTY_ROOT}/sam2
@@ -45,6 +34,12 @@ RUN pip install \
 ############################
 # Environment variable for GroundingDINO (CUDA_HOME)
 ENV CUDA_HOME=/usr/local/cuda
+# GroundingDINO Python API needs http proxy to download config files
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+# Clone GroundingDINO repository and install the required dependencies
 WORKDIR ${THIRD_PARTY_ROOT}
 RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
 WORKDIR ${THIRD_PARTY_ROOT}/GroundingDINO
@@ -59,7 +54,9 @@ RUN pip install "transformers<5"
 ############################
 # Depth-Anything-3 Installation
 ############################
+# Install xformers
 RUN pip install xformers==0.0.28.post3
+# Clone Depth-Anything-3 repository and install the required dependencies
 WORKDIR ${THIRD_PARTY_ROOT}
 RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git
 WORKDIR ${THIRD_PARTY_ROOT}/Depth-Anything-3
@@ -81,9 +78,6 @@ RUN pip install pypatchworkpp
 ############################
 # API server dependencies
 ############################
-# NOTE: `pip install fastapi` だけでは uvicorn は入らない
-#       （fastapi の依存は starlette / pydantic などのみ）。
-#       CMD の `--reload` には watchfiles も必要なので standard を入れる。
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
@@ -95,17 +89,14 @@ ARG UID=1000
 ARG GID=1000
 RUN groupadd -g ${GID} ${USERNAME} \
     && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME}
-
-# アプリのコード置き場。マウントされるので中身は空でよいが、
-# 所有者を先に合わせておく
+# Change the owner of /workspace dir
 RUN mkdir -p /workspace /derived \
     && chown -R ${UID}:${GID} /workspace /derived ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
 
 USER ${USERNAME}
 WORKDIR /workspace
 
-# uvicorn は CWD を sys.path に入れる（--app-dir の既定値が "."）が、
-# 明示しておくとサブプロセスからの import でも確実になる
+# Set PYTHONPATH to ensure import from subprocesses
 ENV PYTHONPATH=/workspace \
     PYTHONUNBUFFERED=1
 
@@ -114,7 +105,7 @@ EXPOSE 8000
 ############################
 # Run FastAPI
 ############################
-# --workers は必ず 1。GPU モデルをプロセス数だけロードすることになり
+# --workers should be always one to prevent multiple model load
 # VRAM が溢れる
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \

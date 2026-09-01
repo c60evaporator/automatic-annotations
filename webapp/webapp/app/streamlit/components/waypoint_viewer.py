@@ -157,8 +157,8 @@ def render_scene_waypoint(
     basemap_img: Image.Image | None = None,
     canvas_edge: Sequence[float] | None = None,
     highlight_index: int | None = None,
-    height: int = 480,
     show_sample_info: bool = True,
+    height: int = 480,
 ) -> None:
     """シーンの自車軌跡を描画する（データは呼び出し側が用意する）."""
     if not waypoints:
@@ -232,9 +232,9 @@ def render_scene_waypoint_view(
     *,
     title: str = "",
     highlight_index: int | None = None,
-    height: int = 480,
     show_sample_info: bool = True,
     show_notice: bool = True,
+    height: int = 480,
     scale: float = DEFAULT_SCALE,
 ) -> list[dict[str, Any]]:
     """シーンを指定するだけで軌跡ビュー一式を描画する.
@@ -256,7 +256,7 @@ def render_scene_waypoint_view(
         basemap_img=basemap.image,
         canvas_edge=basemap.canvas_edge,
         highlight_index=highlight_index,
-        height=height,
         show_sample_info=show_sample_info,
+        height=height,
     )
     return waypoints

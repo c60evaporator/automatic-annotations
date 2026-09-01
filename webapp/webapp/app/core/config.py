@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """アプリケーション設定.
-
+ 
     値は .env または環境変数から読み込む。
     ホスト側のデータフォルダ（HOST_DATA_ROOT）は docker-compose 側で
     DATA_ROOT にマウントされる想定で、アプリからは DATA_ROOT のみを参照する。
@@ -18,16 +18,16 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=True,
     )
-
+ 
     APP_NAME:  str = "automatic-annotation-app"
     LOG_LEVEL: str = "INFO"
-
+ 
     # --- データ配置 -------------------------------------------------------
     # コンテナ内でのデータセットルート（ホスト側 HOST_DATA_ROOT のマウント先）
     DATA_ROOT: Path = Path("/data")
     # 推論の派生成果物（深度マップ .npz 等）の保存先
     DERIVED_ROOT: Path = Path("/data/_derived")
-
+ 
     # --- データベース -----------------------------------------------------
     SQLITE_PATH: Path = Path("/db/app.db")
     SQL_ECHO:    bool = False
@@ -82,7 +82,6 @@ class Settings(BaseSettings):
     }
 
     # --- 2D Object Detection ---------------------------------------------
-    DET2D_CATEGORY_GROUPS: list[str] = ["car", "truck", "bus", "motorcycle", "bicycle", "pedestrian"]
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
         "vehicle": 0.35,
@@ -103,6 +102,9 @@ class Settings(BaseSettings):
         "pedestrian": 0.6,
     }
     DET2D_NMS_CROSS_CLASS_IOU: float = 0.85
+
+    # TODO: Will be deleted
+    DET2D_STUB_DELAY_SEC: float | None = 0.05
 
     @property
     def database_url(self) -> str:

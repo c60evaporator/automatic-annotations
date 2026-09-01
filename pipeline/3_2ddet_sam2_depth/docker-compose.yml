@@ -59,4 +59,4 @@ services:
       # Notebooks
       - ./notebook:/workspace/notebook
       # Nuscenes dataset for video prediction
-      - /data/nuscenes:/workspace/data/nuscenes
+      - /data/nuscenes_datasets/nuscenes:/workspace/data/nuscenes

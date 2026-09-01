@@ -31,6 +31,10 @@ DATASET_ID = "sel_dataset_id"
 SCENE_TOKEN = "sel_scene_token"
 SAMPLE_IDX = "sel_sample_idx"
 
+# 実行中ジョブの id（推論サーバー側のジョブ）。
+# シーンに紐づくので、シーンを変えたらクリアされる必要がある
+DET2D_JOB_ID = "sel_det2d_job_id"
+
 # 各推論ステップの実行単位（*Params.id）。ページ間で引き継ぐ
 DET2D_PARAMS_ID = "sel_det2d_params_id"
 TRACKING_PARAMS_ID = "sel_tracking_params_id"
@@ -45,9 +49,9 @@ W_SAMPLE = "_w_sample"
 # 例: データセットを変えたのにシーン選択が残っていると、
 #     別データセットの scene_token を参照して空の結果になる。
 _CASCADE: dict[str, tuple[str, ...]] = {
-    DATASET_ID: (SCENE_TOKEN, SAMPLE_IDX,
+    DATASET_ID: (SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
                  DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
-    SCENE_TOKEN: (SAMPLE_IDX,
+    SCENE_TOKEN: (SAMPLE_IDX, DET2D_JOB_ID,
                   DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     DET2D_PARAMS_ID: (TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     TRACKING_PARAMS_ID: (DEPTH_PARAMS_ID,),
@@ -80,7 +84,7 @@ def clear_downstream(key: str) -> None:
 
 def clear_all() -> None:
     """全ての選択状態をリセットする."""
-    for key in (DATASET_ID, SCENE_TOKEN, SAMPLE_IDX,
+    for key in (DATASET_ID, SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
                 DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID):
         st.session_state.pop(key, None)
 

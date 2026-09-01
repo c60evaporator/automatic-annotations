@@ -18,75 +18,85 @@ NuScenes datasetをDBに読み込み、推論サーバーでAIモデルによる
 ```
 project-root/
 :
-└── webapp/
+└── webapp/                                  # ★ここがコンテナの /workspace になる
     ├── CLAUDE.md
     ├── docker-compose.yml
     ├── .env
     ├── webapp/
     │   ├── Dockerfile
-    │   ├── docker-entrypoint.sh
+    │   ├── docker-entrypoint.sh            # 起動時に alembic upgrade head を実行
+    │   ├── requirements.txt
     │   ├── alembic.ini
     │   ├── alembic/
-    │   │   ├── env.py
+    │   │   ├── env.py                      # render_as_batch=True 必須（SQLite）
     │   │   ├── script.py.mako
-    │   │   └── versions/                       # 各バージョンのマイグレーションスクリプト格納用フォルダ
+    │   │   └── versions/
     │   └── app/
-    │       ├── main.py                         # Streamlitのメインページ（データセット選択）
-    │       ├── json_conversion/                # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
-    │       │   ├── schemas_nuscenes.py         # NuScenes本体データセットJSONのPydantic形式スキーマ
-    │       │   ├── to_nuscenes.py              # NuScenes本体データセットをDBからJSONに変換
-    │       │   └── to_nusc_db.py               # NuScenes本体データセットをJSONからDBに変換
+    │       ├── json_conversion/            # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
+    │       │   ├── schemas_nuscenes.py     # NuScenes本体データセットJSONのPydantic形式スキーマ
+    │       │   ├── to_nuscenes.py          # NuScenes本体データセットをDBからJSONに変換
+    │       │   └── to_nusc_db.py           # NuScenes本体データセットをJSONからDBに変換（CLI）
     │       ├── core/
-    │       │   ├── config.py                   # 環境変数・設定（Pydantic Settings）
-    │       │   └── logging.py                  # ロギング設定
+    │       │   ├── config.py               # 環境変数・設定（Pydantic Settings）
+    │       │   └── logging.py              # ロギング設定
     │       ├── db/
-    │       │   ├── base.py                     # DeclarativeBase
-    │       │   ├── engine.py                   # 
-    │       │   └── session.py                  # AsyncSession ファクトリ
-    │       ├── models/                         # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
-    │       │   ├── __init__.py                 # Alembicがモデルを検出できるよう全importを記載
-    │       │   ├── dataset.py                  # Dataset（データセット単位）
-    │       │   ├── scene.py                    # Scene, Sample
-    │       │   ├── annotation.py               # SampleAnnotation, Instance, Category
-    │       │   ├── sensor.py                   # Sensor, CalibratedSensor, EgoPose
-    │       │   ├── map.py                      # Map
-    │       │   └── ann_intermediate.py         # 自動アノテーションの中間出力（Detection2DParams, Detection2D, InstanceTracking2DParams, InstanceTracking2D, DepthEstimationParams, DepthEstimation）
-    │       ├── services/                       # ビジネスロジック層（Repositoryで取得したデータを変形）
-    │       │   ├── annotation_service.py  # prev/next チェーンの書き換え
+    │       │   ├── base.py                 # DeclarativeBase（naming_convention 必須）
+    │       │   ├── engine.py               # Engine生成 + SQLite PRAGMA
+    │       │   └── session.py              # 同期 Session ファクトリ
+    │       ├── models/                     # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
+    │       │   ├── __init__.py             # Alembicがモデルを検出できるよう全importを記載
+    │       │   ├── dataset.py              # Dataset（データセット単位）
+    │       │   ├── scene.py                # Log, Scene, Sample
+    │       │   ├── annotation.py           # Category, Attribute, Visibility, Instance, SampleAnnotation, annotation_attribute
+    │       │   ├── sensor.py               # Sensor, CalibratedSensor, EgoPose, SampleData
+    │       │   ├── map.py                  # MapMeta
+    │       │   └── ann_intermediate.py     # 自動アノテーションの中間出力（Detection2DParams, Detection2D, InstanceTracking2DParams, InstanceTracking2D, DepthEstimationParams, DepthEstimation）
+    │       ├── services/                   # ビジネスロジック層（Streamlit非依存）
+    │       │   ├── annotation_service.py   # prev/next チェーンの書き換え
+    │       │   ├── basemap_service.py      # basemap のリサイズキャッシュ（DERIVED_ROOT配下）
     │       │   ├── nuscenes_export_service.py  # nuScenes 形式エクスポート
     │       │   └── nuscenes_export_builders.py # 各 JSON ファイルの組み立て
-    │       ├── repositories/                   # DBアクセスの抽象化（クエリの責務）
-    │       │   ├── dataset.py                  # DatasetRepository（作成・削除含む）
-    │       │   ├── scene.py                    # SceneRepository
-    │       │   ├── annotation.py               # AnnotationRepository
-    │       │   ├── sensor.py                   # SensorRepository
-    │       │   └── map.py                      # MapRepository
-    │       └── streamlit/                      # StreamlitのUI実装（フロントエンド）
-    │           ├── main.py                     # メインページ（データセット選択）
-    │           ├── pages/                      # 各ページの実装
-    │           │   ├── 1_Scene_Selection.py    # シーン選択ページ
-    │           │   ├── 2_Detection2D.py        # 2D Object Detection（GroundingDINO）で各ラベルの2D bounding box検出を実施するページ
-    │           │   ├── 3_Instance_Tracking.py  # 検出したbboxをプロンプトとしたInstance-Tracking（SAM2）で、各インスタンスのマスクとtrack_id（instance_id）を取得するページ
-    │           │   └── 4_Depth_Boxfitting.py   # Depth Estimation（DA3）で推論した点群とLiDAR点群をミックスして、マスク範囲にprojectionして3D bounding boxを割り当てるページ
-    │           └── components                  # Streamlitの各種描画処理をコンポーネント関数化
-    │               ├── waypoint_viewer.py      # basemap上にego_poseを描画
-    │               ├── det2d_viewer.py         # カメラ画像上に2D bounding boxを描画
-    │               ├── instance_tracking_viewer.py # カメラ画像上にInstance segmentationとトラッキング結果を描画
-    │               ├── depth_est_viewer.py     # 深度推定とマスクprojection結果を、Depth Mapで表示
-    │               └── pointcloud_viewer.py    # 点群（LiDARまたは深度推定から得る）を表示
-    └── inference/
-        ├── Dockerfile
-        └── app/
-            ├── main.py                         # FastAPIアプリ初期化・ルーター登録
-            ├── routers/                        # エンドポイント定義
-            │   ├── det2d.py                    # 2D Object Detection関係のエンドポイント
-            │   ├── instance_tracking.py        # Instance-Tracking関係のエンドポイント
-            │   └── depth_boxfitting.py         # Depth Estimation & Box Fitting関係のエンドポイント
-            ├── schemas/                        # Pydantic スキーマ（APIスキーマ）
-            │   ├── det2d.py                    # 2D Object Detection関係のスキーマ
-            │   ├── instance_tracking.py        # Instance-Tracking関係のスキーマ
-            │   └── depth_boxfitting.py         # Depth Estimation & Box Fitting関係のスキーマ
-            └── 
+    │       ├── repositories/               # DBアクセスの抽象化（クエリの責務）。戻り値は必ず dict
+    │       │   ├── dataset.py              # DatasetRepository
+    │       │   ├── scene.py                # SceneRepository
+    │       │   ├── annotation.py           # AnnotationRepository
+    │       │   ├── sensor.py               # SensorRepository
+    │       │   └── map.py                  # MapRepository
+    │       └── streamlit/                  # StreamlitのUI実装（フロントエンド）
+    │           ├── main.py                 # メインページ（データセット選択）
+    │           ├── state.py                # セッション状態管理・ページガード
+    │           ├── data_access.py          # @st.cache_data 付きのデータ取得
+    │           ├── pages/
+    │           │   ├── 1_Scene_Selection.py
+    │           │   ├── 2_Detection2D.py
+    │           │   ├── 3_Instance_Tracking.py
+    │           │   └── 4_Depth_Boxfitting.py
+    │           └── components/
+    │               ├── waypoint_viewer.py
+    │               ├── det2d_viewer.py
+    │               ├── instance_tracking_viewer.py
+    │               ├── depth_est_viewer.py
+    │               └── pointcloud_viewer.py
+    ├── inference/
+    │   ├── Dockerfile
+    │   └── app/
+    │       ├── main.py                  # FastAPIアプリ初期化・ルーター登録
+    │       ├── core/
+    │       │   ├── config.py            # 環境変数・設定（Pydantic Settings）
+    │       │   ├── logging.py           # ロギング設定
+    │       │   ├── jobs.py              # 非同期推論ジョブの管理
+    │       │   └── models.py            # モデルの遅延ロードと GPU 占有の管理
+    │       ├── routers/
+    │       │   ├── det2d.py
+    │       │   ├── instance_tracking.py
+    │       │   └── depth_boxfitting.py
+    │       └── schemas/
+    │           ├── det2d.py
+    │           ├── instance_tracking.py
+    │           └── depth_boxfitting.py
+    ├── checkpoints/                    # GroundingDINO/SAM2の重み
+    └── common/                         # Webアプリ・推論の共通処理（座標変換へルパ等）
+    │   ├── Dockerfile
 ```
 
 ## Schema Rules（最重要）
@@ -96,219 +106,96 @@ project-root/
 - モデル変更時はAlembicマイグレーションも同時に生成すること
 - 実際のデータ構造は環境変数`HOST_DATA_ROOT`で指定したフォルダ内のデータセットも参照する（カメラ画像・LiDAR点群データ）
 - 同じデータセットやマップデータを複数のメタデータが参照（例：trainvalとminiが同じデータを参照）すると、tokenの重複が発生し、DBのprimary keyのidentity制約でエラーが出る。このケースをハンドルするにはtokenをprimary keyにする前に名前空間を付与する等が有効だが、今回はこのようなハンドリングは実施せず、token重複を防ぐよう運用側でカバーする。よって**1データセットで読み込めるメタデータ・マップデータは1つのみという制約をドキュメントに明記するものとする**
+  - この制約は `to_nusc_db.py` の衝突ガードが機械的に検出して中断する（運用任せにしない）
+  - 同一データセットルート内の `v1.0-mini` と `v1.0-trainval` は mini が trainval の部分集合であり token が完全に重複するため、同じDBには入れられない。切り替えは `--replace` を使う
 
-### basemap 画像の配信
-- 配信元は **`map_meta.basemap_path`**（DB）。エンドポイント側にファイル名を持たない
-- 投入時に `app/lib/basemap.py` の `resolve_basemap_path()` が
-  `maps/{location}.png` → nuScenes 標準 4 ロケーションの対応表 → `maps/basemap/{location}.png`
-  の順に**実在するファイル**を探して決める（無ければ NULL）
-- 配信時は location の正規表現チェック（400）に加え、DB 由来のパスも
-  `assert_within_dataroot()` でデータルート外を弾く
-- 既存 map_set の backfill はマイグレーション `a1c74f9be2d0`（純 SQL・冪等）で行う
+### モデル定義の必須ルール
+- **全てのモデルに `dataset: Mapped["Dataset"] = relationship()` を持たせる**
+  - `Dataset` へのrelationshipが無いと、SQLAlchemyのunit-of-workが `datasets` → 子テーブルのINSERT順を解決できず、`FOREIGN KEY constraint failed` になる。FK列があるだけでは順序は決まらない
+  - 同様に `scene_token` を持つ `*Params` テーブルには `scene: Mapped["Scene"] = relationship()` も必要
+  - `Dataset` 側に逆方向のコレクションは張らない（削除はDBのCASCADEに委ねる方が速い）
+- **モジュール間のimportは `if TYPE_CHECKING:` に置き、relationshipは文字列のフォワード参照にする**（循環import防止）
+- boolean の既定値は `server_default=text("0")` を使う
+- 自己参照FK（`prev`/`next`）と `ondelete="SET NULL"` / `"RESTRICT"` の対象列には `index=True` を付ける（削除時のトリガをindex scanにするため）
 
-## Streamlit
-- 本体:     Streamlit
-- UI:        React 19 + TypeScript 5.x + Vite 6.x
-- スタイル:  Tailwind CSS 4.x + shadcn/ui
-- 状態管理:  Zustand 5.x
-- API通信:   TanStack Query（@tanstack/react-query）5.x
-- フォーム:  React Hook Form 7.x + Zod 3.x（アノテーション編集部分）
-- テスト:    Vitest 3.x
+### アノテーションの生成元管理
+- `Instance.source` / `SampleAnnotation.source` は `'imported' | 'auto' | 'manual'`（定数は `app/models/annotation.py`）
+- `SampleAnnotation.depth_estimation_params_id`（nullable FK）で、どのBox Fitting実行が生成したボックスかを辿れる
+  - 実行単位の行を削除するとCASCADEでその実行の成果物だけが消え、パラメータを変えた再推論がクリーンにやり直せる
+  - GT（`source='imported'`）はこのFKがNULLなので巻き込まれない
+- 推論3ステップは `*Params` テーブルが「1回の実行」を表し、後段が前段の `*Params.id` を参照する（系譜: `DepthEstimationParams` → `InstanceTracking2DParams` → `Detection2DParams`）
+- 深度マップは絶対にDBに入れず `.npz` としてディスクに置き `DepthEstimation.depth_path` にパスのみ保持する。マスクはCOCO RLE（`InstanceTracking2D.mask_rle`）で保持し、肥大化したらファイル方式に切り替える
 
-### 型定義
-- `src/types/` がフロントエンドの唯一の型定義
-- バックエンドの `schemas/` と1対1で対応させる
-- Claude Codeは型を勝手に作らず必ず `src/types/` を参照する
+## DB / Alembic Rules
+- **同期 Session を使う（AsyncSessionは使わない）**。Streamlitは同期実行モデルであり、DBも単一ファイルのSQLiteなのでasyncの利点がなく複雑さだけが増す
+- `sessionmaker(expire_on_commit=False)` 必須。Trueだとcommit直後に属性が期限切れになり、UI描画時に `DetachedInstanceError` になる
+- SQLiteのPRAGMAは**接続ごと**に適用する（`event.listen(engine, "connect")`）。一度実行して終わりではない
+  - `foreign_keys=ON`（これが無いと `ondelete='CASCADE'` が効かない）
+  - `journal_mode=WAL`（推論の書き込み中もUIの読み取りをブロックしない）
+  - `synchronous=NORMAL`, `busy_timeout`
+- `db/base.py` の `naming_convention` は**初回マイグレーションを切る前に**決めること。SQLiteのbatchモードは制約名が無いと `Constraint must have a name` で失敗する。後から変えると既存DBの制約名と食い違う
+- Alembicの `env.py` は `render_as_batch=True` 必須（SQLiteは `ALTER TABLE` で制約変更ができない）
+- **Alembic専用のEngineはFK PRAGMAを適用しない**（`create_migration_engine`）。batchはテーブルを作り直すため、FKがONだと再作成の過程で `ON DELETE CASCADE` が発火して行が消える危険がある
+- `alembic check` をCIに入れるとモデルとDBの乖離を防げる
+- SQLiteファイルは名前付きボリュームに置く（バインドマウントだとホストOSによってWALのロックが正しく効かない）
 
-### 状態管理
-- サーバーデータ（APIレスポンス）→ TanStack Query で管理
-- UIの選択状態・表示設定 → Zustand で管理
-- ローカルのフォームstate → React Hook Form で管理
-- この3つを混在させない
+## Config Rules
+- **モジュールレベルで `Settings()` を評価しない**。環境変数が1つ欠けただけでモジュールのimport自体が失敗し、alembicのenv.pyやCLIまで巻き込んで落ちる。必ず `@lru_cache` 付きの `get_settings()` 経由で遅延評価する
+- `.env` は `pydantic-settings` の `env_file` に頼らず、docker-composeの `env_file:` で環境変数として注入する。`env_file` はプロセスのCWD基準で解決されるためコンテナ内では当てにならない
+- アプリが参照するのは `DATA_ROOT`（コンテナ内パス）であり、`HOST_DATA_ROOT` はcompose側のマウント指定にのみ使う
 
-### Deck.glレイヤー
-- レイヤー定義は `src/layers/` に集約する
-- コンポーネント内にレイヤー定義を直接書かない
+## Docker Rules
+- **`./webapp` を `/workspace` にマウントし、WORKDIRは `/workspace`**。`./webapp/app` を `/app` にマウントすると `/app` が `app` パッケージの「中身」になり、`from app.core.config import ...` が `ModuleNotFoundError` になる。alembic.ini と alembic/ もコンテナ内に必要
+- **`ENV PYTHONPATH=/workspace` 必須**。`streamlit run` はスクリプトのあるディレクトリをsys.pathに入れるだけでCWDは入れない
+- **派生物（DERIVED_ROOT）は `/data` の外に置く**。`${HOST_DATA_ROOT}:/data:ro` の内側にボリュームを重ねると、マウントポイントを作れず `read-only file system` で起動に失敗する。`/derived` を使う
+- **`USER` 切り替え前に `mkdir -p /db /derived && chown`** する。Dockerは空の名前付きボリュームを初期化する際にイメージ側ディレクトリの所有者をコピーするため、これが無いとボリュームがroot所有になり非rootユーザーがSQLiteを書けない
+- **起動コマンドは `ENTRYPOINT` ではなく `CMD`** に置く。`ENTRYPOINT` はマイグレーション適用スクリプト専用にし、`docker compose run --rm webapp python -m ...` でCLIを差し替え実行できるようにする
+- データセットは `:ro` でマウントし、元データを壊す事故を防ぐ
+- **SQLite本体のインストールは不要**。Pythonの `sqlite3` は標準ライブラリで、公式イメージにlibsqlite3がリンク済み（bookworm系はSQLite 3.40+で、SQLAlchemy 2.xがINSERTに使うRETURNING構文の要件3.35+を満たす）。`sqlite3` CLIはデバッグ用に任意で入れる
+- ビルド時のUID/GIDはホストのユーザーに合わせる（`UID=$(id -u) GID=$(id -g) docker compose up --build`）
 
-### APIアクセス
-- fetch は必ず `src/api/client.ts` の `apiFetch` を経由する
-- コンポーネントから直接 fetch を呼ばない
-- **URL への `/datasets/{id}` の差し込みは `apiFetch` / `apiUrl` に一元化**する
-  （呼び出し側は `/scenes?limit=50` のようなリソース相対パスだけを書く）。
-  バイナリ配信（画像 / basemap / export ZIP）だけは生 fetch が必要なので、
-  URL 組み立てに `apiUrl()` を使う
-- **全 queryKey の第2要素に datasetId を入れる**（`['scenes', datasetId, ...]`）。
-  入れ忘れるとデータセット切り替え時に前のデータが表示される。特に
-  `staleTime: Infinity` のもの（sensor-image / calibrated-sensors / basemap 等）は必須。
-  無効化（`invalidateQueries`）のキーも同じ並びに合わせる
-- 保険として Header のデータセット切り替え時に `queryClient.removeQueries()` を実行する
+## Import CLI（to_nusc_db.py）Rules
+- 実行例: `docker compose run --rm webapp python -m app.json_conversion.to_nusc_db --name mini --version v1.0-mini --dataroot nuscenes`
+- `--dataroot` は必須。`DATA_ROOT` 直下には複数のデータセットルートが並ぶ想定（`/data/nuscenes/v1.0-mini/...`）
+- **INSERTはFK依存の位相順に流す**
+  `dataset → log → map_meta → sensor → calibrated_sensor → ego_pose → scene → sample → sample_data → category/attribute/visibility → instance → sample_annotation → annotation_attributes`
+- **`prev`/`next` の自己参照FKは第2パスのUPDATEで埋める**。1パスで入れると必ず前方参照になりFK違反で落ちる
+- **ORMではなくCoreのTable（`Model.__table__`）に対してexecutemanyする**。`session.execute(insert(Model), [dict,...])` はORMのバルク処理パスに入り、主キー同期や永続オブジェクト追従の制約に引っかかる
+- **大きいJSONはストリーミングで読む**。trainvalの `sample_annotation.json` は数百MBあり、一括読み込みするとPythonオブジェクト展開後に数GBを占めてメモリ不足で落ちる
+  - 対象は `ego_pose.json` / `sample_data.json` / `sample_annotation.json`。ijson（Cバックエンド yajl2_c）で逐次パースし、5000件ずつINSERTする
+  - `ijson.items(f, "item", use_float=True)` の `use_float=True` は必須。既定では小数がDecimalで返り、JSON列への書き込みで落ちる
+  - 第2パスのリンクもリストに溜めず、JSONを流し直す
+  - 実測: 168万アノテーションで約190秒、ピークRSS 751MB
+- `MapMeta` は3ファイルの突き合わせで作る。`map.json` 単体にはlocationもversionもcanvas_edgeも無い
+  - `location`: `log_tokens` から `log.location` を引く
+  - `version` / `canvas_edge`: `maps/expansion/<location>.json`
+  - Map Expansionが無い場合はbasemap PNGの画素数 × 0.1 m/px から推定（nuScenesのbasemapは0.1 m/pixel）
+- インポート全体を1トランザクションで実行し、失敗時は全ロールバックする
 
-## Database
-- Engine: PostgreSQL 16 + PostGIS 3.4
-- ORM: SQLAlchemy 2.x + GeoAlchemy2
-- Migration: Alembic
+## Streamlit Rules
+- **ウィジェットキーと正規キーを分離する**（`app/streamlit/state.py`）
+  - Streamlitのマルチページでは、ウィジェットに紐づく `session_state` のキーは、そのウィジェットが描画されない実行で破棄される。ページ1のselectboxの値はページ2に移った時点で消え得る
+  - ウィジェットは `_w_` 接頭辞、アプリが参照する正規キーは `sel_` 接頭辞。ウィジェットの `on_change` で正規キーへ書き写す
+  - 上位の選択が変わったら下位を再帰的にクリアする（データセット変更 → シーン・サンプル・各推論の実行IDまで全て破棄）
+- **各ページの先頭で `require_*()` を1行呼ぶ**。未選択時はメッセージとリンクを出して `st.stop()` する
+- **`st.page_link` は必ず例外を握って呼ぶ**（`_safe_page_link`）。ページ未登録時に `KeyError: 'url_pathname'` を投げ、ガード自体が例外死してメッセージすら出なくなる
+- **Repositoryは ORM インスタンスではなく dict を返す**。`@st.cache_data` は戻り値を保持するため、ORMオブジェクトを返すとSessionが閉じた後に `DetachedInstanceError` になる
+- **`@st.cache_data` の引数に `dataset_id` / `scene_token` を必ず含める**。キャッシュキーは引数から作られるので、含め忘れるとデータセットを切り替えても古い結果が返り続ける。データ書き換え後は `clear_caches()` を呼ぶ
+- Engine / sessionmaker を `@st.cache_resource` で包む必要はない。`app/db/` 側の `lru_cache` で1つに保たれる（Streamlitはスクリプトを再実行するがimport済みモジュールは再読み込みしない）
+- `use_container_width` は非推奨。`width="stretch"` を使う
+- テーブルの行選択だけでは正規キーに書かず、ボタンで明示的に確定させる（ページ移動で選択が失われるため）
+- basemapのリサイズキャッシュは `DERIVED_ROOT/basemap_cache/<dataset_id>/<name>_x<scale>.png` に置く。`/data` は読み取り専用なのでデータセット配下には書けない
+- `canvas_edge` をコードに直書きしない。DBの `MapMeta` から取る
+- Figureの組み立て（`build_*_figure`）と描画（`render_*`）を分ける。テストしやすく、使い回しも効く
+- 軌跡表示はマップ全体ではなく軌跡の範囲 ± マージンにズームする（マップ全体だとシーンが点にしか見えない）
+- 画像など重いリソースのキャッシュキーは、それが実際に対応する単位（basemap ならロケーション/パス）にする。呼び出し側の単位（scene_token）でキャッシュすると同じ実体が重複して載る
+- コンポーネントは「純粋な描画関数」と「取得込みの高レベル関数」を分ける。前者は data_access に依存させない
 
-### ジオメトリ型のルール
-- DBカラム型: GeoAlchemy2の `Geometry` 型を使用
-  - Point    → `Geometry('POINT', srid=4326)`
-  - LineString → `Geometry('LINESTRING', srid=4326)`
-  - Polygon  → `Geometry('POLYGON', srid=4326)`
-- SRID: 常に4326（WGS84）を使用
-- API入出力: 常にGeoJSON形式（`{"type": "Point", "coordinates": [...]}` 等）
-- GeoJSON ↔ PostGIS変換: **geoalchemy2.shape と shapely を使用**
-  - 変換ロジックは `app/converters/geometry.py` に集約する
-  - RouterやCRUDに変換コードを直接書かない
-
-### geometry.pyの変換パターン（参考実装）
-```python
-# GeoJSON dict → WKBElement（DB保存時）
-from geoalchemy2.shape import from_shape
-from shapely.geometry import shape
-
-def geojson_to_wkb(geojson: dict):
-    return from_shape(shape(geojson), srid=4326)
-
-# WKBElement → GeoJSON dict（APIレスポンス時）
-from geoalchemy2.shape import to_shape
-
-def wkb_to_geojson(wkb) -> dict:
-    return to_shape(wkb).__geo_interface__
-```
-
-## API Design
-### 共通ルール
-- prefix: `/api/v1`
-- レスポンスは常にPydantic schemaを通す
-- ジオメトリフィールドはGeoJSON形式で返す
-- エラーは `{"detail": "..."}`形式で返す
-
-### エンドポイント構成
-実装済みリソース: **datasets / map-sets / scenes / samples / annotations / sensors / maps /
-categories / attributes / visibilities / instances / logs / export**
-
-**`/datasets` と `/map-sets` 以外の全エンドポイントは URL に dataset を含む**
-（`/api/v1/datasets/{dataset_id}/...`）。dataset を含まない URL はルートが存在せず
-404 / 不明な ID も 404。`POST /scenes/import` も URL で投入先が決まる（Form には入れない）。
-
-**新規エンドポイントを追加するときは、デコレータにプレフィックスを書かない。**
-`app/api/v1/router.py` の `DATASET_SCOPED_PREFIX` を付けて `include_router` する
-（デコレータ側に書くと付け忘れが起き、しかも FastAPI は起動時に検査しないので
-実行時 422 になるまで気付けない）。スコープ外に置くのは
-「まだ選択していないデータセットを参照する」エンドポイントだけで、
-`tests/integration/test_api_route_scope.py` の許可リストに理由付きで追加する。
-
-主要エンドポイント一覧（`/datasets` `/map-sets` 以外は `/api/v1/datasets/{dataset_id}` 配下）:
-
-| Method | Path | 用途 |
-|--------|------|------|
-| GET | `/api/v1/datasets` | データセット一覧（map_set_name 付き。dataset_id 不要） |
-| GET | `/api/v1/datasets/{id}` | データセット1件（dataset_id 不要） |
-| GET | `/api/v1/datasets/{id}/stats` | データセットの統計（件数 / locations / sensor_channels。**スコープ外**） |
-| GET | `/api/v1/map-sets` | マップセット一覧（dataset_id 不要） |
-| GET | `/api/v1/datasets/{dataset_id}/scenes` | シーン一覧（limit/offset） |
-| GET | `/api/v1/datasets/{dataset_id}/scenes/{token}` | シーン1件 |
-| GET | `/api/v1/datasets/{dataset_id}/scenes/{token}/samples` | シーン内サンプル一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/scenes/{token}/ego-poses` | シーン内全 Ego Pose |
-| GET | `/api/v1/datasets/{dataset_id}/samples/{token}` | サンプル1件 |
-| GET | `/api/v1/datasets/{dataset_id}/samples/{token}/annotations` | サンプルのアノテーション一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/samples/{token}/sensor-data` | サンプルのセンサーデータマップ（channel→SensorDataBrief） |
-| GET | `/api/v1/datasets/{dataset_id}/samples/{token}/instances` | サンプル内インスタンスサマリ一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/annotations` | アノテーション一覧（limit/offset） |
-| GET | `/api/v1/datasets/{dataset_id}/annotations/{token}` | アノテーション1件 |
-| PATCH | `/api/v1/datasets/{dataset_id}/annotations/{token}` | アノテーション部分更新 |
-| GET | `/api/v1/datasets/{dataset_id}/calibrated-sensors` | キャリブレーション済みセンサー一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/sensor-data/{token}/image` | センサー画像バイナリ配信 |
-| GET | `/api/v1/datasets/{dataset_id}/sensor-data/{token}/pointcloud` | 点群 JSON 配信 |
-| GET | `/api/v1/datasets/{dataset_id}/maps` | マップ一覧（canvas_edge と GPS 原点 origin_lat/lon を含む） |
-| GET | `/api/v1/datasets/{dataset_id}/maps/{token}/geojson` | マップ GeoJSON |
-| GET | `/api/v1/datasets/{dataset_id}/maps/{location}/basemap` | ベースマップ画像バイナリ配信（map_meta.basemap_path 経由） |
-| GET | `/api/v1/datasets/{dataset_id}/categories` | カテゴリ一覧（全件・ページネーションなし） |
-| GET | `/api/v1/datasets/{dataset_id}/attributes` | 属性一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/visibilities` | 可視性レベル一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/instances` | インスタンス一覧（scene_token/category_name フィルタ対応） |
-| GET | `/api/v1/datasets/{dataset_id}/instances/{token}/annotations` | インスタンスの全アノテーション（timestamp 昇順） |
-| GET | `/api/v1/datasets/{dataset_id}/instances/{token}/best-camera` | インスタンスが最もよく写るカメラチャンネルと sample_data_token |
-| GET | `/api/v1/datasets/{dataset_id}/logs` | ログ一覧 |
-| GET | `/api/v1/datasets/{dataset_id}/export/nuscenes` | 指定データセット全体の nuScenes 形式 ZIP（`token_format` 対応） |
-| GET | `/api/v1/datasets/{dataset_id}/export/nuscenes/{scene_token}` | 単一シーンの nuScenes 形式 ZIP（`token_format` 対応） |
-
-フルCRUD（POST/PUT/DELETE）は現時点では annotations と scenes（import/delete）のみ実装。
-将来的に POST/PUT/DELETE を追加する場合は各エンドポイントファイルに追記すること。
-
-### ページネーション
-```python
-# 全GETリストエンドポイントで共通化（dataset は URL の階層で指定）
-GET /api/v1/datasets/<uuid>/scenes?limit=50&offset=0
-```
-
-### LiDAR点群の形式
-センサーデータ（LiDAR点群）はPotree形式に変換せず`.pcd.bin`バイナリ直接配信でよい
-- フォーマット: float32 × 5列（x, y, z, intensity, ring_index）
-- DBの fileformat カラム値: `pcd`
-- APIレスポンス: JSON形式 `{"points": [[x,y,z,intensity], ...], "num_points": N}`
-
-## Docker構成
-### コンテナ一覧
-プロジェクトルートの `docker-compose.yml` を参照。
-
-### 環境変数（backend）
-プロジェクトルートの `.env` を参照。
-
-### 起動コマンド
-```bash
-make dev      # docker compose up --build
-make migrate  # alembic upgrade head
-make test     # pytest + vitest
-```
-
-### データ投入コマンド
-マップ（map_set）を先に作り、データセットからそれを参照する。
-```bash
-# 1) Map expansion を map_set として投入（4ロケーション）
-docker compose run --rm api python scripts/import_nuscenes_map.py \
-  --map-set-name nuscenes-map-v1.3 --map-set-version 1.3
-
-# 2) NuScenes 本体を dataset として投入（マップは投入せず map_set を参照するだけ）
-docker compose run --rm api python scripts/import_nuscenes.py \
-  --dataset-name nuscenes-trainval --dataset-version v1.0-trainval \
-  --map-set-name nuscenes-map-v1.3
-
-# 同名が既にある場合は --overwrite で削除→再投入（配下データも消える）
-
-# 3) マップなしでデータセットを投入する（--map-set-name を省略 → map_set_id = NULL）
-docker compose run --rm api python scripts/import_nuscenes.py \
-  --dataset-name my-dataset --dataset-version v1.0-mini
-
-# 4) 後からマップを紐付ける／解除する
-docker compose run --rm api python scripts/link_map_set.py \
-  --dataset-name my-dataset --map-set-name nuscenes-map-v1.3
-docker compose run --rm api python scripts/link_map_set.py --dataset-name my-dataset --detach
-#   別の map_set が既に紐付いている場合は --force、
-#   dataset の location が map_set に足りない場合は --allow-missing-locations（既定はエラー）
-
-# マップ投入と同時に紐付けることもできる
-docker compose run --rm api python scripts/import_nuscenes_map.py \
-  --map-set-name nuscenes-map-v1.3 --attach-to-dataset my-dataset
-```
-
-basemap 画像は map_meta.basemap_path から配信する。マップ投入時に自動で解決されるが、
-このカラムが入る前に投入した map_set はマイグレーション `a1c74f9be2d0` が backfill する
-（`make migrate` で適用される）。
-
-## 実装上の制約
-- SQLAlchemy 2.xの `Session` は `Annotated` + `Depends` でDI
-- 非同期（async/await）を使用する（ドライバ: asyncpg）
-- CORSは開発時 `*` 許可、本番は環境変数で制御
-- テストDBは別コンテナ（postgresのみ、PostGIS不要）ではなく同一イメージを使う
-- NuScenesのデータパスは環境変数 NUSCENES_DATAROOT で渡す
-- map expansionのレイヤー（drivable_area, lane等）はGeoJSON形式でフロントに渡す
-
-## 行動原則
-- 3ステップ以上のタスクは必ずPlanモードで開始する
-- コードを読まずに書かない。必ず既存コードを確認してから変更する
-
-## よくある実装ミスの禁止事項
-- RouterにDB変換ロジックを書かない → app/service/ と app/converters/ に集約
-- Pydanticモデルをmodels/と独立して定義しない → schemas/はmodels/から派生
-- ジオメトリをWKBのままAPIレスポンスに含めない → 必ずGeoJSONに変換
-- 新リソース追加時は endpoints/ + service/ + repository/ + schemas/ をセットで追加する
+## Testing
+- Streamlitのページは `streamlit.testing.v1.AppTest` でヘッドレスに実行して検証できる
+  ```python
+  at = AppTest.from_file("app/streamlit/pages/1_Scene_Selection.py")
+  at.session_state["sel_dataset_id"] = dataset_id
+  at.run()
+  assert not at.exception
+  ```

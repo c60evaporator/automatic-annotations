@@ -22,6 +22,7 @@ services:
       DATA_ROOT: /data
       DERIVED_ROOT: /derived
       SQLITE_PATH: /db/app.db
+      INFERENCE_BASE_URL: http://inference:8000
     volumes:
       # webappフォルダをマウント
       - ./webapp:/workspace
@@ -31,42 +32,60 @@ services:
       - derived:/derived
       # SQLite 用のボリューム（バインドマウントだとホストOSによってWALのロックが正しく効かないため、名前付きボリュームを使う）
       - dbdata:/db
+    depends_on:
+      inference:
+        # Waiting for the inference server
+        condition: service_healthy
 
   # Inference server (backend for model inference)
-  # inference:
-  #   image: "${IMAGE_NAME:-autoann-pipeline3}:${IMAGE_TAG:-cu124-${IMAGE_RUNTIME:-devel}}"
-  #   build:
-  #     context: ./inference
-  #     dockerfile: Dockerfile_${IMAGE_RUNTIME:-devel}
-  #     args:
-  #       # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
-  #       TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-8.9}"
-  #       # Match host UID/GID to avoid permission issues on bind mounts
-  #       USERNAME: "${USERNAME:-developer}"
-  #       UID: "${HOST_UID:-1000}"
-  #       GID: "${HOST_GID:-1000}"
-  #       # Proxy settings (if needed)
-  #       HTTP_PROXY: "${HTTP_PROXY:-}"
-  #       HTTPS_PROXY: "${HTTPS_PROXY:-}"
-  #       http_proxy: "${HTTP_PROXY:-}"
-  #   ports:
-  #     - 8000:8000
-  #   environment:
-  #     DATA_ROOT: /data
-  #     DERIVED_ROOT: /derived
-  #     CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
-  #   volumes:
-  #     - ./inference:/workspace
-  #     - ${HOST_DATA_ROOT}:/data:ro
-  #     - derived:/derived
-  #   # GPU を使う場合
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
+  inference:
+    image: "${IMAGE_NAME:-autoann-app-inference}:${IMAGE_TAG:-cu124-${IMAGE_RUNTIME:-devel}}"
+    build:
+      context: ./inference
+      dockerfile: Dockerfile_${IMAGE_RUNTIME:-devel}
+      args:
+        # GPU architecture (https://en.wikipedia.org/wiki/CUDA#GPUs_supported)
+        TORCH_CUDA_ARCH_LIST: "${TORCH_CUDA_ARCH_LIST:-8.9}"
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+        # Proxy settings (if needed)
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+        https_proxy: "${HTTPS_PROXY:-}"
+    ports:
+      - 8000:8000
+    environment:
+      DATA_ROOT: /data
+      DERIVED_ROOT: /derived
+      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
+    volumes:
+      - ./inference:/workspace
+      - ${HOST_DATA_ROOT}:/data:ro
+      - derived:/derived
+      # Weights for Depth-Anything-3 (Hugging Face cache)
+      - ~/.cache/huggingface:/home/${USERNAME:-developer}/.cache/huggingface
+      # Weights for GroundingDINO and SAM2
+      - ./checkpoints:/opt/checkpoints
+    shm_size: "${SHM_SIZE:-8g}"  # --shm-size
+    healthcheck:
+      # webapp を待たせるため、/health は「起動済み」を返す軽い実装にする
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      # Wait longer initially to allow model downloads
+      start_period: 300s
+    # GPU を使う場合
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   derived:
