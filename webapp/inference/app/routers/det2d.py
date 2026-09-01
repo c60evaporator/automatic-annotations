@@ -94,6 +94,9 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                             labels=group.labels,
                             score_threshold=group.score_threshold,
                             nms_same_class_iou=group.nms_same_class_iou,
+                            # グループ内でのクラス跨ぎ NMS。
+                            # グループ間の重複はこの後フレーム単位で潰す
+                            nms_cross_class_iou=req.nms_cross_class_iou,
                             stub_delay_sec=req.stub_delay_sec,
                         )
                         for b in detected:

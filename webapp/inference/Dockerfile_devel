@@ -82,6 +82,23 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 ############################
+# Import smoke test
+############################
+# ここで落とすことで、実行時（最初の推論リクエスト）ではなくビルド時に
+# 依存の壊れを検出する。
+# 特に numpy: ベースイメージの C 拡張は numpy 1.x でビルドされているため、
+# 追加インストールで 2.x へ上がると matplotlib などが
+# "compiled using NumPy 1.x cannot be run in NumPy 2.x" で落ちる。
+# GroundingDINO は visualizer 経由で matplotlib を import するので直撃する。
+RUN python -c "\
+import numpy, matplotlib, torch, torchvision; \
+assert numpy.__version__.startswith('1.'), f'numpy が 1.x ではありません: {numpy.__version__}'; \
+import matplotlib.pyplot; \
+import groundingdino.util.inference; \
+import sam2; \
+print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
+
+############################
 # Create non-root user
 ############################
 ARG USERNAME=developer

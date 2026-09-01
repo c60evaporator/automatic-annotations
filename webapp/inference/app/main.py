@@ -39,19 +39,25 @@ def register_model_loaders() -> None:
     settings = get_settings()
 
     def load_grounding_dino():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.grounding_dino_stub import GroundingDinoDetectorStub
+            return GroundingDinoDetectorStub()
+
         from app.models_impl.grounding_dino import GroundingDinoDetector
         return GroundingDinoDetector(
-            model_id=settings.GROUNDING_DINO_MODEL, device=settings.DEVICE
+            config_path=settings.GROUNDINGDINO_CONFIG_PATH,
+            weight_path=settings.GROUNDINGDINO_WEIGHT_PATH,
+            device=settings.device,
         )
 
     def load_sam2():
         from app.models_impl.sam2_tracker import Sam2Tracker
-        return Sam2Tracker(model_id=settings.SAM2_MODEL, device=settings.DEVICE)
+        return Sam2Tracker(model_id=settings.SAM2_MODEL, device=settings.device)
 
     def load_depth_anything():
         from app.models_impl.depth_anything import DepthAnythingEstimator
         return DepthAnythingEstimator(
-            model_id=settings.DEPTH_ANYTHING_MODEL, device=settings.DEVICE
+            model_id=settings.DEPTH_ANYTHING_MODEL, device=settings.device
         )
 
     model_registry.register_loader("grounding_dino", load_grounding_dino)
@@ -63,7 +69,8 @@ def register_model_loaders() -> None:
 async def lifespan(app: FastAPI):
     setup_logging()
     settings = get_settings()
-    logger.info("starting %s (device=%s)", settings.APP_NAME, settings.DEVICE)
+    logger.info("starting %s (device=%s, stub=%s)",
+                settings.APP_NAME, settings.device, settings.USE_STUB_MODELS)
     register_model_loaders()
     try:
         yield
@@ -104,7 +111,8 @@ def system_info() -> dict[str, Any]:
     """GPU とモデルの状態を返す（UI の表示・デバッグ用）."""
     settings = get_settings()
     info: dict[str, Any] = {
-        "device": settings.DEVICE,
+        "device": settings.device,
+        "use_stub_models": settings.USE_STUB_MODELS,
         "max_resident_models": settings.MAX_RESIDENT_MODELS,
         "loaded_models": model_registry.loaded_models(),
         "cuda": None,

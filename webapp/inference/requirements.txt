@@ -1,17 +1,12 @@
 # --- API ---
 # fastapi + uvicorn + watchfiles + httptools (via [standard] extras)
 fastapi[standard]
- 
-# --- Settings ---
-pydantic>=2
 pydantic-settings
  
-# --- Data Processing ---
-numpy
-Pillow
-opencv-python-headless    # Postprocessing for masks and bounding boxes without GUI dependencies
-pycocotools               # RLE encoding/decoding for masks
-scipy                     # 3D bounding box fitting (PCA, convex hull, etc.)
+# --- Settings ---
+pydantic-settings
  
-# --- Progress & Logging ---
-tqdm
+# --- numpy の固定 ---
+# ベースイメージの C 拡張は numpy 1.x でビルドされている。
+# 他パッケージの依存で 2.x へ上がるのを防ぐため明示的に上限を切る
+numpy<2

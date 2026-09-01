@@ -1,39 +1,65 @@
-"""Grounding DINO のラッパー.
+"""Grounding DINO のラッパー（ルーターから使う入口）.
 
-現状は**スタブ**。指定秒だけ待って、それらしいボックスを返す。
-UI とジョブの流れを詰めるためのもので、実際の推論は入っていない。
+公式リポジトリ版（IDEA-Research/GroundingDINO）を使う。
+重みは checkpoints ボリューム（既定 /opt/checkpoints）に手動で置く。
 
-本実装に差し替えるときは predict() のシグネチャを保つこと。
-呼び出し側（routers/det2d.py）は
-「1フレーム × 1カテゴリグループ」で1回呼ぶ想定。
+  GroundingDINO_SwinB_cfg.py : /opt/third_party/GroundingDINO/groundingdino/config/
+  groundingdino_swinb_cogcoor.pth : /opt/checkpoints/
 
-スコア閾値と同一クラス NMS はグループ単位なので、この中で完結させる。
-クラスをまたぐ NMS は複数グループの結果が揃わないと適用できないため、
-呼び出し側（フレーム単位）の責務にしてある。
+呼び出し側（routers/det2d.py）は「1フレーム × 1カテゴリグループ」で
+1回 predict() を呼ぶ。スコア閾値と同一クラス NMS はグループ単位なので
+この中で完結させる。クラスをまたぐ NMS は複数グループの結果が
+揃わないと適用できないため、呼び出し側（フレーム単位）の責務。
 """
 from __future__ import annotations
 
-import hashlib
-import random
-import time
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from app.core.logging import get_logger
-from app.services.postprocess import same_class_nms
+from app.models_impl.prompt import denormalize_boxes
 
 logger = get_logger(__name__)
 
-# スタブが1推論あたり待つ既定秒数
-DEFAULT_STUB_DELAY_SEC = 0.12
-
 
 class GroundingDinoDetector:
-    def __init__(self, model_id: str, device: str) -> None:
-        self.model_id = model_id
+    def __init__(
+        self,
+        config_path: str | Path,
+        weight_path: str | Path,
+        device: str = "cuda",
+    ) -> None:
+        # 重い import はここで行う。モジュールのトップに置くと、
+        # サーバー起動時に torch と CUDA 拡張が読み込まれ、
+        # 1つでも壊れているとサーバー自体が起動しなくなる
+        from groundingdino.util.inference import load_model
+
+        self.config_path = str(config_path)
+        self.weight_path = str(weight_path)
         self.device = device
-        # 本実装ではここでモデルをロードする
-        logger.info("GroundingDinoDetector (stub) ready: %s on %s", model_id, device)
+
+        if not Path(self.weight_path).exists():
+            raise FileNotFoundError(
+                f"Grounding DINO の重みが見つかりません: {self.weight_path}\n"
+                "checkpoints フォルダに groundingdino_swinb_cogcoor.pth を "
+                "配置してマウントしてください。"
+            )
+        if not Path(self.config_path).exists():
+            raise FileNotFoundError(
+                f"Grounding DINO の config が見つかりません: {self.config_path}"
+            )
+
+        logger.info("loading Grounding DINO: %s", self.weight_path)
+        self.model = load_model(self.config_path, self.weight_path, device=device)
+        logger.info("Grounding DINO ready on %s", device)
+
+    def to(self, device: str):
+        """models.py の解放処理から呼ばれる（VRAM を返すため）."""
+        self.model.to(device)
+        self.device = device
+        return self
 
     def predict(
         self,
@@ -43,41 +69,39 @@ class GroundingDinoDetector:
         *,
         score_threshold: float = 0.3,
         nms_same_class_iou: float = 0.6,
-        stub_delay_sec: float | None = None,
+        nms_cross_class_iou: float = 0.85,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1画像 × 1カテゴリグループの検出を行う.
 
-        Args:
-            labels: このグループでプロンプトにするラベル一覧
-            score_threshold: このグループのスコア閾値
-            nms_same_class_iou: このグループ内の同一クラス NMS IoU
-
         Returns:
             [{"xmin":.., "ymin":.., "xmax":.., "ymax":.., "label":.., "score":..}, ...]
+            座標は画素単位の整数。
         """
-        delay = DEFAULT_STUB_DELAY_SEC if stub_delay_sec is None else stub_delay_sec
-        time.sleep(delay)
+        from app.models_impl.groundingdino_predict import predict_multi_labels
 
-        # 画像パスとグループ名から決まる擬似乱数にして、
-        # 再実行しても同じ結果が出るようにする（UI の確認がしやすい）
-        seed = int(hashlib.md5(f"{image_path}:{group_name}".encode()).hexdigest()[:8], 16)
-        rng = random.Random(seed)
+        with Image.open(image_path) as img:
+            image = img.convert("RGB")
 
-        boxes: list[dict[str, Any]] = []
-        for _i in range(rng.randint(0, 5)):
-            label = rng.choice(labels)
-            score = round(rng.uniform(0.15, 0.98), 3)
-            if score < score_threshold:
-                continue
-            x = rng.randint(0, 1400)
-            y = rng.randint(0, 700)
-            w = rng.randint(60, 220)
-            h = rng.randint(50, 200)
-            boxes.append({
-                "xmin": x, "ymin": y,
-                "xmax": min(x + w, 1600), "ymax": min(y + h, 900),
-                "label": label, "score": score, "group": group_name,
-            })
+        boxes, caption = predict_multi_labels(
+            model=self.model,
+            image=image,
+            labels=labels,
+            box_threshold=score_threshold,
+            same_class_nms_iou=nms_same_class_iou,
+            cross_class_nms_iou=nms_cross_class_iou,
+            device=self.device,
+        )
+        logger.debug("caption=%r -> %d boxes", caption, len(boxes))
 
-        return same_class_nms(boxes, nms_same_class_iou)
+        # Grounding DINO は正規化座標を返すので、画像サイズを掛けて整数化する
+        pixel_boxes = denormalize_boxes(
+            [b["xyxy"] for b in boxes], image.width, image.height
+        )
+        return [
+            {
+                "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+                "label": b["label"], "score": b["score"], "group": group_name,
+            }
+            for b, (xmin, ymin, xmax, ymax) in zip(boxes, pixel_boxes, strict=True)
+        ]

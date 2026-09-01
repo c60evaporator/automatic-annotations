@@ -77,7 +77,7 @@ project-root/
     │               ├── instance_tracking_viewer.py
     │               ├── depth_est_viewer.py
     │               └── pointcloud_viewer.py
-    ├── inference/
+    ├── inference/                       # 推論サーバー
     │   ├── Dockerfile
     │   └── app/
     │       ├── main.py                  # FastAPIアプリ初期化・ルーター登録
@@ -99,7 +99,8 @@ project-root/
     │   ├── Dockerfile
 ```
 
-## Schema Rules（最重要）
+## webappコンテナ（Streamlitによるフロントエンド＋SQLiteによるDB）
+### Schema Rules（最重要）
 - `webapp/app/models/` が唯一のスキーマ定義とする
 - CRUDは必ずmodelsから派生させる
 - **カラム追加・変更は必ずmodels/を先に修正してから伝播させる**
@@ -109,7 +110,7 @@ project-root/
   - この制約は `to_nusc_db.py` の衝突ガードが機械的に検出して中断する（運用任せにしない）
   - 同一データセットルート内の `v1.0-mini` と `v1.0-trainval` は mini が trainval の部分集合であり token が完全に重複するため、同じDBには入れられない。切り替えは `--replace` を使う
 
-### モデル定義の必須ルール
+#### モデル定義の必須ルール
 - **全てのモデルに `dataset: Mapped["Dataset"] = relationship()` を持たせる**
   - `Dataset` へのrelationshipが無いと、SQLAlchemyのunit-of-workが `datasets` → 子テーブルのINSERT順を解決できず、`FOREIGN KEY constraint failed` になる。FK列があるだけでは順序は決まらない
   - 同様に `scene_token` を持つ `*Params` テーブルには `scene: Mapped["Scene"] = relationship()` も必要
@@ -118,7 +119,7 @@ project-root/
 - boolean の既定値は `server_default=text("0")` を使う
 - 自己参照FK（`prev`/`next`）と `ondelete="SET NULL"` / `"RESTRICT"` の対象列には `index=True` を付ける（削除時のトリガをindex scanにするため）
 
-### アノテーションの生成元管理
+#### アノテーションの生成元管理
 - `Instance.source` / `SampleAnnotation.source` は `'imported' | 'auto' | 'manual'`（定数は `app/models/annotation.py`）
 - `SampleAnnotation.depth_estimation_params_id`（nullable FK）で、どのBox Fitting実行が生成したボックスかを辿れる
   - 実行単位の行を削除するとCASCADEでその実行の成果物だけが消え、パラメータを変えた再推論がクリーンにやり直せる
@@ -126,7 +127,7 @@ project-root/
 - 推論3ステップは `*Params` テーブルが「1回の実行」を表し、後段が前段の `*Params.id` を参照する（系譜: `DepthEstimationParams` → `InstanceTracking2DParams` → `Detection2DParams`）
 - 深度マップは絶対にDBに入れず `.npz` としてディスクに置き `DepthEstimation.depth_path` にパスのみ保持する。マスクはCOCO RLE（`InstanceTracking2D.mask_rle`）で保持し、肥大化したらファイル方式に切り替える
 
-## DB / Alembic Rules
+### DB / Alembic Rules
 - **同期 Session を使う（AsyncSessionは使わない）**。Streamlitは同期実行モデルであり、DBも単一ファイルのSQLiteなのでasyncの利点がなく複雑さだけが増す
 - `sessionmaker(expire_on_commit=False)` 必須。Trueだとcommit直後に属性が期限切れになり、UI描画時に `DetachedInstanceError` になる
 - SQLiteのPRAGMAは**接続ごと**に適用する（`event.listen(engine, "connect")`）。一度実行して終わりではない
@@ -139,12 +140,12 @@ project-root/
 - `alembic check` をCIに入れるとモデルとDBの乖離を防げる
 - SQLiteファイルは名前付きボリュームに置く（バインドマウントだとホストOSによってWALのロックが正しく効かない）
 
-## Config Rules
+### Config Rules
 - **モジュールレベルで `Settings()` を評価しない**。環境変数が1つ欠けただけでモジュールのimport自体が失敗し、alembicのenv.pyやCLIまで巻き込んで落ちる。必ず `@lru_cache` 付きの `get_settings()` 経由で遅延評価する
 - `.env` は `pydantic-settings` の `env_file` に頼らず、docker-composeの `env_file:` で環境変数として注入する。`env_file` はプロセスのCWD基準で解決されるためコンテナ内では当てにならない
 - アプリが参照するのは `DATA_ROOT`（コンテナ内パス）であり、`HOST_DATA_ROOT` はcompose側のマウント指定にのみ使う
 
-## Docker Rules
+### Docker Rules
 - **`./webapp` を `/workspace` にマウントし、WORKDIRは `/workspace`**。`./webapp/app` を `/app` にマウントすると `/app` が `app` パッケージの「中身」になり、`from app.core.config import ...` が `ModuleNotFoundError` になる。alembic.ini と alembic/ もコンテナ内に必要
 - **`ENV PYTHONPATH=/workspace` 必須**。`streamlit run` はスクリプトのあるディレクトリをsys.pathに入れるだけでCWDは入れない
 - **派生物（DERIVED_ROOT）は `/data` の外に置く**。`${HOST_DATA_ROOT}:/data:ro` の内側にボリュームを重ねると、マウントポイントを作れず `read-only file system` で起動に失敗する。`/derived` を使う
@@ -154,7 +155,7 @@ project-root/
 - **SQLite本体のインストールは不要**。Pythonの `sqlite3` は標準ライブラリで、公式イメージにlibsqlite3がリンク済み（bookworm系はSQLite 3.40+で、SQLAlchemy 2.xがINSERTに使うRETURNING構文の要件3.35+を満たす）。`sqlite3` CLIはデバッグ用に任意で入れる
 - ビルド時のUID/GIDはホストのユーザーに合わせる（`UID=$(id -u) GID=$(id -g) docker compose up --build`）
 
-## Import CLI（to_nusc_db.py）Rules
+### Import CLI（to_nusc_db.py）Rules
 - 実行例: `docker compose run --rm webapp python -m app.json_conversion.to_nusc_db --name mini --version v1.0-mini --dataroot nuscenes`
 - `--dataroot` は必須。`DATA_ROOT` 直下には複数のデータセットルートが並ぶ想定（`/data/nuscenes/v1.0-mini/...`）
 - **INSERTはFK依存の位相順に流す**
@@ -172,7 +173,7 @@ project-root/
   - Map Expansionが無い場合はbasemap PNGの画素数 × 0.1 m/px から推定（nuScenesのbasemapは0.1 m/pixel）
 - インポート全体を1トランザクションで実行し、失敗時は全ロールバックする
 
-## Streamlit Rules
+### Streamlit Rules
 - **ウィジェットキーと正規キーを分離する**（`app/streamlit/state.py`）
   - Streamlitのマルチページでは、ウィジェットに紐づく `session_state` のキーは、そのウィジェットが描画されない実行で破棄される。ページ1のselectboxの値はページ2に移った時点で消え得る
   - ウィジェットは `_w_` 接頭辞、アプリが参照する正規キーは `sel_` 接頭辞。ウィジェットの `on_change` で正規キーへ書き写す
@@ -191,7 +192,7 @@ project-root/
 - 画像など重いリソースのキャッシュキーは、それが実際に対応する単位（basemap ならロケーション/パス）にする。呼び出し側の単位（scene_token）でキャッシュすると同じ実体が重複して載る
 - コンポーネントは「純粋な描画関数」と「取得込みの高レベル関数」を分ける。前者は data_access に依存させない
 
-## Testing
+### Testing
 - Streamlitのページは `streamlit.testing.v1.AppTest` でヘッドレスに実行して検証できる
   ```python
   at = AppTest.from_file("app/streamlit/pages/1_Scene_Selection.py")
@@ -199,3 +200,9 @@ project-root/
   at.run()
   assert not at.exception
   ```
+
+## inferenceコンテナ（FastAPI＋AIによる推論サーバー）
+
+### Docker Rules
+- 推論サーバーの requirements.txt には、ベースイメージに既にあるパッケージを書かない。無指定で書くと pip が最新版へ上げ、numpy が 2.x に置き換わってベースイメージの C 拡張（matplotlib 等）が壊れる。GroundingDINO は matplotlib を import するため直撃する
+- Dockerfile の末尾に import のスモークテストを置く。依存の壊れは最初の推論まで発覚せず、原因の切り分けに時間を取られる

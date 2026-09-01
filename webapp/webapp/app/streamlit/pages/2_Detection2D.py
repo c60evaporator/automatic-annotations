@@ -11,6 +11,11 @@
 パラメータ欄や画像グリッドを巻き込んで再描画せずに済む。
 （ページ全体を st.rerun でループさせると、そのたびに
   画像の再デコードとテーブルの再構築が走って重い）
+
+## ボックスの見せ方
+
+ラベル文字は画像に焼き込まない。1600x900 を2列で並べると潰れて読めない。
+右側の凡例に色見本を出し、チェックで表示・非表示を切り替える。
 """
 from __future__ import annotations
 
@@ -33,7 +38,13 @@ from app.services.label_service import (
 from app.services.sample_service import get_skipped_sample_indices
 from app.services.frame_image import get_keyframe_image
 from app.streamlit import state as S
-from app.streamlit.components.det2d_viewer import render_camera_grid
+from app.streamlit.components.det2d_viewer import (
+    TEXT_MODES,
+    count_by_label,
+    labels_in_items,
+    render_camera_grid,
+    render_label_legend,
+)
 from app.streamlit.components.waypoint_viewer import render_scene_waypoint_view
 from app.streamlit.data_access import (
     get_dataset,
@@ -93,7 +104,6 @@ with param_col:
             """,
             unsafe_allow_html=True,
         )
-        settings = get_settings()
         sample_interval_col, score_threshold_col, nms_threshold_col = st.columns(3)
 
         with sample_interval_col:
@@ -104,11 +114,10 @@ with param_col:
                 label_visibility="collapsed",
             )
             sample_indices = get_skipped_sample_indices(len(samples), sample_interval)
-            st.caption(f"{len(sample_indices)} samples: {sample_indices}")
             n_groups = len(label_groups())
+            st.caption(f"{len(sample_indices)} samples: {sample_indices}")
             st.caption(
-                f"推論回数 = {len(sample_indices)} sample "
-                f"× {n_cameras} camera × {n_groups} group "
+                f"推論回数 = {len(sample_indices)} × {n_cameras} cam × {n_groups} grp "
                 f"= {len(sample_indices) * n_cameras * n_groups}"
             )
 
@@ -121,7 +130,7 @@ with param_col:
             # 閾値はカテゴリグループ単位（config の
             # DET2D_DEFAULT_SCORE_THRESHOLDS がグループ名をキーに持つ）
             score_thresholds = scaled_score_thresholds(score_threshold_ratio)
-            st.table(score_thresholds)
+            st.table(score_thresholds, border="horizontal", width="content")
 
         with nms_threshold_col:
             st.markdown("**NMS Threshold**")
@@ -130,17 +139,19 @@ with param_col:
                 min_value=0.0, max_value=2.0, value=1.0, step=0.05,
             )
             nms_same = scaled_nms_same_class_ious(nms_threshold_ratio)
+            nms_cross = min(
+                settings.DET2D_NMS_CROSS_CLASS_IOU * nms_threshold_ratio, 1.0
+            )
             same_nms_col, cross_nms_col = st.columns([2, 1])
             with same_nms_col:
                 st.table(nms_same, border="horizontal", width="content")
             with cross_nms_col:
-                st.text("Cross-class NMS IOU: " + str(settings.DET2D_NMS_CROSS_CLASS_IOU * nms_threshold_ratio))
+                st.text(f"Cross-class NMS IOU: {nms_cross:.3f}")
 
 # ------------------------------------------------------------------
 # Sample selection & map
 # ------------------------------------------------------------------
 with map_col:
-    num_samples = len(samples)
     default_idx = sample_indices[len(sample_indices) // 2] if sample_indices else 0
     selected_sample_idx = st.select_slider(
         "Select Sample",
@@ -158,6 +169,8 @@ with map_col:
 # ------------------------------------------------------------------
 # Run / progress
 # ------------------------------------------------------------------
+
+
 def _build_payload() -> dict:
     """推論リクエストを組み立てる.
 
@@ -194,9 +207,7 @@ def _build_payload() -> dict:
         "dataroot": dataset["dataroot"],
         "frames": frames,
         "label_groups": groups,
-        "nms_cross_class_iou": min(
-            settings.DET2D_NMS_CROSS_CLASS_IOU * nms_threshold_ratio, 1.0
-        ),
+        "nms_cross_class_iou": nms_cross,
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
     }
 
@@ -280,11 +291,9 @@ with param_col:
 # ------------------------------------------------------------------
 st.divider()
 
-view_col, opt_col = st.columns([9, 1])
-with opt_col:
-    show_boxes = st.checkbox("Show boxes", value=True)
-    min_score = st.slider("Min score", 0.0, 1.0, 0.0, 0.05)
+view_col, opt_col = st.columns([8, 1])
 
+# 凡例に件数を出すため、画像とボックスの取得を先に済ませる
 selected_sample = samples[selected_sample_idx]
 results = st.session_state[RESULTS]
 
@@ -301,7 +310,38 @@ for sensor in cam_sensors:
         "pending": token not in results,
     })
 
+with opt_col:
+    show_boxes = st.checkbox("Show boxes", value=True)
+    min_score = st.slider("Min score", 0.0, 1.0, 0.0, 0.05)
+    # 画像に重ねる文字。既定は None（枠だけ）。
+    # 文字色は枠線と同じにするので、凡例の色と対応が付く
+    text_mode = st.radio("Box text", TEXT_MODES, index=0)
+
+    # ラベルは画像に焼き込まず、この凡例の色で判別する。
+    # 表示するのは「いま選んでいる sample の検出結果に出ているラベル」だけ。
+    # 全ラベルを常に並べると、実際には出ていないものまで場所を取る。
+    # 並び順は config の定義順に固定してあるので、sample を切り替えても
+    # 共通のラベルは同じ位置に来る
+    legend_labels = labels_in_items(items, min_score=min_score)
+    if legend_labels:
+        enabled_labels = render_label_legend(
+            legend_labels,
+            counts=count_by_label(items, min_score=min_score),
+        )
+    else:
+        # 凡例が空でも、他 sample の結果を消さないよう None にする
+        # （空集合を渡すと「全ラベル非表示」の意味になってしまう）
+        enabled_labels = None
+        st.caption("このサンプルには検出結果がありません")
+
 with view_col:
-    render_camera_grid(items, columns=2, min_score=min_score, show_boxes=show_boxes)
+    render_camera_grid(
+        items,
+        columns=2,
+        min_score=min_score,
+        enabled_labels=enabled_labels,
+        show_boxes=show_boxes,
+        text_mode=text_mode,
+    )
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])

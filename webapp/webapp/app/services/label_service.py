@@ -36,6 +36,17 @@ def group_names() -> list[str]:
     return list(label_groups().keys())
 
 
+@lru_cache(maxsize=1)
+def all_labels() -> list[str]:
+    """全ラベルをグループ順・ラベル順に並べて返す.
+
+    凡例の並びに使う。検出結果に現れたラベルだけを出すと、
+    推論のたびに並びとチェック状態が変わってしまうため、
+    設定側の定義を正とする。
+    """
+    return [label for labels in label_groups().values() for label in labels]
+
+
 def group_of(label: str) -> str | None:
     """ラベルが属するカテゴリグループ."""
     return get_settings().LABEL_TO_CATEGORY_GROUP.get(label)
@@ -123,3 +134,4 @@ def clear_caches() -> None:
     """設定を差し替えたときに呼ぶ（テスト用）."""
     label_groups.cache_clear()
     group_names.cache_clear()
+    all_labels.cache_clear()
