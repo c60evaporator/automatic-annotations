@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         "human.pedestrian.child": "pedestrian",
         "human.pedestrian.construction_worker": "pedestrian",
         "human.pedestrian.police_officer": "pedestrian",
-        "movable_object.trafficcone": "trafficcone",
+        "movable_object.trafficcone": "traffic_cone",
     }
     LABEL_TO_NUSC_CATEGORY: dict[str, str] = { # 2D Object DetectionのラベルをnuScenesのcategoryに変換するマッピング
         "car": "vehicle.car",
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         "motorcycle": "vehicle.motorcycle",
         "bicycle": "vehicle.bicycle",
         "pedestrian": "human.pedestrian.adult",
-        "trafficcone": "movable_object.trafficcone",
+        "traffic_cone": "movable_object.trafficcone",
     }
     LABEL_TO_CATEGORY_GROUP: dict[str, str] = { # 2D Object Detectionのラベル → カテゴリグループ（ラベルプロンプトをまとめて推論する単位）
         "car": "vehicle",
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
         "motorcycle": "two_wheeler",
         "bicycle": "two_wheeler",
         "pedestrian": "pedestrian",
-        "trafficcone": "road_object",
+        "traffic_cone": "road_object",
     }
 
     # --- 2D Object Detection ---------------------------------------------

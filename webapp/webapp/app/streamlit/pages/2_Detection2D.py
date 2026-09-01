@@ -291,7 +291,7 @@ with param_col:
 # ------------------------------------------------------------------
 st.divider()
 
-view_col, opt_col = st.columns([8, 1])
+view_col, opt_col = st.columns([7, 1])
 
 # 凡例に件数を出すため、画像とボックスの取得を先に済ませる
 selected_sample = samples[selected_sample_idx]
@@ -315,7 +315,7 @@ with opt_col:
     min_score = st.slider("Min score", 0.0, 1.0, 0.0, 0.05)
     # 画像に重ねる文字。既定は None（枠だけ）。
     # 文字色は枠線と同じにするので、凡例の色と対応が付く
-    text_mode = st.radio("Box text", TEXT_MODES, index=0)
+    text_mode = st.radio("Box text", TEXT_MODES, index=1)
 
     # ラベルは画像に焼き込まず、この凡例の色で判別する。
     # 表示するのは「いま選んでいる sample の検出結果に出ているラベル」だけ。

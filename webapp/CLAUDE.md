@@ -127,6 +127,10 @@ project-root/
 - 推論3ステップは `*Params` テーブルが「1回の実行」を表し、後段が前段の `*Params.id` を参照する（系譜: `DepthEstimationParams` → `InstanceTracking2DParams` → `Detection2DParams`）
 - 深度マップは絶対にDBに入れず `.npz` としてディスクに置き `DepthEstimation.depth_path` にパスのみ保持する。マスクはCOCO RLE（`InstanceTracking2D.mask_rle`）で保持し、肥大化したらファイル方式に切り替える
 
+#### 集計・性能計測
+- シーン横断の集計は相関 EXISTS を使う。JOIN + COUNT(DISTINCT) はアノテーション全行を走査するため、trainval 規模で 4〜5 倍遅くなる
+- 性能計測は min-of-N で行う。初回はページキャッシュが未温で桁が変わる
+
 ### DB / Alembic Rules
 - **同期 Session を使う（AsyncSessionは使わない）**。Streamlitは同期実行モデルであり、DBも単一ファイルのSQLiteなのでasyncの利点がなく複雑さだけが増す
 - `sessionmaker(expire_on_commit=False)` 必須。Trueだとcommit直後に属性が期限切れになり、UI描画時に `DetachedInstanceError` になる
@@ -189,6 +193,7 @@ project-root/
 - `canvas_edge` をコードに直書きしない。DBの `MapMeta` から取る
 - Figureの組み立て（`build_*_figure`）と描画（`render_*`）を分ける。テストしやすく、使い回しも効く
 - 軌跡表示はマップ全体ではなく軌跡の範囲 ± マージンにズームする（マップ全体だとシーンが点にしか見えない）
+- ファイル I/O は`services/`に置き、Streamlit にも DB にも依存させない。token → filename の解決は data_access の責務
 - 画像など重いリソースのキャッシュキーは、それが実際に対応する単位（basemap ならロケーション/パス）にする。呼び出し側の単位（scene_token）でキャッシュすると同じ実体が重複して載る
 - コンポーネントは「純粋な描画関数」と「取得込みの高レベル関数」を分ける。前者は data_access に依存させない
 

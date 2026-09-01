@@ -60,10 +60,10 @@ LEGEND_SWATCH_PX = 12
 #                         暗い縁を付けて可読性を確保する
 #   BOX_TEXT_MARGIN     : ボックス上端と文字の間隔（px）
 BOX_LINE_WIDTH = 5
-BOX_TEXT_SIZE = 26
+BOX_TEXT_SIZE = 36
 BOX_TEXT_STROKE = 1
-BOX_TEXT_STROKE_COLOR = "#000000"
-BOX_TEXT_MARGIN = 2
+BOX_TEXT_STROKE_COLOR = "#555555"
+BOX_TEXT_MARGIN = 16
 
 # 画像に重ねる文字の種類
 TEXT_MODE_NONE = "None"
