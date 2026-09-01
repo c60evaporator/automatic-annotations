@@ -39,6 +39,71 @@ class Settings(BaseSettings):
     INFERENCE_BASE_URL:    str   = "http://inference:8000"
     INFERENCE_TIMEOUT_SEC: float = 1800.0
 
+    # --- ラベル変換 -----------------------------------------------------
+    NUSC_CATEGORY_TO_LABEL: dict[str, str] = { # nuScenesのcategoryを2D Object Detectionのラベルに変換するマッピング
+        "vehicle.car": "car",
+        "vehicle.truck": "truck",
+        "vehicle.construction": "construction_vehicle",
+        "vehicle.bus.bendy": "bus",
+        "vehicle.bus.rigid": "bus",
+        "vehicle.trailer": "trailer",
+        "movable_object.barrier": "barrier",
+        "vehicle.motorcycle": "motorcycle",
+        "vehicle.bicycle": "bicycle",
+        "human.pedestrian.adult": "pedestrian",
+        "human.pedestrian.child": "pedestrian",
+        "human.pedestrian.construction_worker": "pedestrian",
+        "human.pedestrian.police_officer": "pedestrian",
+        "movable_object.trafficcone": "trafficcone",
+    }
+    LABEL_TO_NUSC_CATEGORY: dict[str, str] = { # 2D Object DetectionのラベルをnuScenesのcategoryに変換するマッピング
+        "car": "vehicle.car",
+        "truck": "vehicle.truck",
+        "construction_vehicle": "vehicle.construction",
+        "bus": "vehicle.bus.rigid",
+        "trailer": "vehicle.trailer",
+        "barrier": "movable_object.barrier",
+        "motorcycle": "vehicle.motorcycle",
+        "bicycle": "vehicle.bicycle",
+        "pedestrian": "human.pedestrian.adult",
+        "trafficcone": "movable_object.trafficcone",
+    }
+    LABEL_TO_CATEGORY_GROUP: dict[str, str] = { # 2D Object Detectionのラベル → カテゴリグループ（ラベルプロンプトをまとめて推論する単位）
+        "car": "vehicle",
+        "truck": "vehicle",
+        "construction_vehicle": "vehicle",
+        "bus": "vehicle",
+        "trailer": "vehicle",
+        "barrier": "road_object",
+        "motorcycle": "two_wheeler",
+        "bicycle": "two_wheeler",
+        "pedestrian": "pedestrian",
+        "trafficcone": "road_object",
+    }
+
+    # --- 2D Object Detection ---------------------------------------------
+    DET2D_CATEGORY_GROUPS: list[str] = ["car", "truck", "bus", "motorcycle", "bicycle", "pedestrian"]
+    DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
+    DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
+        "vehicle": 0.35,
+        "road_object": 0.25,
+        "two_wheeler": 0.3,
+        "pedestrian": 0.3,
+    }
+    # GT_MATCH_IOU_THRESHOLDS: dict[str, float] = {
+    #     "vehicle": 0.8,
+    #     "road_object": 0.8,
+    #     "two_wheeler": 0.8,
+    #     "pedestrian": 0.8,
+    # }
+    DET2D_NMS_SAME_CLASS_IOUS: dict[str, float] = {
+        "vehicle": 0.7,
+        "road_object": 0.6,
+        "two_wheeler": 0.6,
+        "pedestrian": 0.6,
+    }
+    DET2D_NMS_CROSS_CLASS_IOU: float = 0.85
+
     @property
     def database_url(self) -> str:
         """SQLAlchemy 用の同期 DSN.

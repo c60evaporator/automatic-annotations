@@ -15,6 +15,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image
 
+from app.services.basemap_service import DEFAULT_SCALE
+from app.streamlit.components.basemap import (
+    SceneBasemap,
+    get_scene_basemap,
+    render_basemap_notice,
+)
+from app.streamlit.data_access import list_waypoints
+
 
 def format_timestamp(ts_usec: int, *, with_date: bool = True) -> str:
     """nuScenes の UNIX マイクロ秒を読める形式にする."""
@@ -81,7 +89,7 @@ def build_waypoint_figure(
     basemap_img: Image.Image | None = None,
     canvas_edge: Sequence[float] | None = None,
     highlight_index: int | None = None,
-    height: int = 600,
+    height: int = 480,
     fit_to_trajectory: bool = True,
     margin_m: float = 100.0,
 ) -> go.Figure:
@@ -149,9 +157,10 @@ def render_scene_waypoint(
     basemap_img: Image.Image | None = None,
     canvas_edge: Sequence[float] | None = None,
     highlight_index: int | None = None,
+    height: int = 480,
     show_sample_info: bool = True,
 ) -> None:
-    """シーンの自車軌跡を描画する."""
+    """シーンの自車軌跡を描画する（データは呼び出し側が用意する）."""
     if not waypoints:
         st.info("このシーンには表示できる自車位置がありません。")
         return
@@ -162,6 +171,7 @@ def render_scene_waypoint(
         basemap_img=basemap_img,
         canvas_edge=canvas_edge,
         highlight_index=highlight_index,
+        height=height,
     )
     st.plotly_chart(fig, width="stretch")
 
@@ -172,3 +182,81 @@ def render_scene_waypoint(
             f"**Time:** {format_timestamp(wp['timestamp'])}  \n"
             f"**Sample token:** `{wp['sample_token']}`"
         )
+
+
+# ── 取得込みの高レベル部品 ────────────────────────────────────────────────────
+#
+# ここから下は data_access / basemap コンポーネントに依存し、
+# 「シーンを指定するだけで軌跡ビューが出る」ところまでを引き受ける。
+# 上の純粋な関数群（build_waypoint_figure など）は依存を持たないので、
+# 単体テストや別データ源からの描画にはそちらを使う。
+
+
+def build_scene_waypoint_figure(
+    dataset_id: str,
+    dataroot: str,
+    scene_token: str,
+    *,
+    title: str = "",
+    highlight_index: int | None = None,
+    height: int = 480,
+    scale: float = DEFAULT_SCALE,
+    **figure_kwargs: Any,
+) -> tuple[go.Figure, list[dict[str, Any]], SceneBasemap]:
+    """シーンの軌跡 Figure を組み立てて返す（描画はしない）.
+
+    Figure を返すのは、後段のページで検出ボックスやマスクの trace を
+    重ねてから描画したいケースがあるため。
+
+    Returns:
+        (figure, waypoints, basemap)
+    """
+    basemap = get_scene_basemap(dataset_id, dataroot, scene_token, scale)
+    waypoints = list_waypoints(dataset_id, scene_token)
+    fig = build_waypoint_figure(
+        waypoints,
+        title=title or f"{len(waypoints)} samples",
+        basemap_img=basemap.image,
+        canvas_edge=basemap.canvas_edge,
+        highlight_index=highlight_index,
+        height=height,
+        **figure_kwargs,
+    )
+    return fig, waypoints, basemap
+
+
+def render_scene_waypoint_view(
+    dataset_id: str,
+    dataroot: str,
+    scene_token: str,
+    *,
+    title: str = "",
+    highlight_index: int | None = None,
+    height: int = 480,
+    show_sample_info: bool = True,
+    show_notice: bool = True,
+    scale: float = DEFAULT_SCALE,
+) -> list[dict[str, Any]]:
+    """シーンを指定するだけで軌跡ビュー一式を描画する.
+
+    basemap の解決・waypoint の取得・描画・注意書きまでをまとめて行う。
+    複数ページで同じブロックを書き写さずに済ませるための入口。
+
+    Returns:
+        描画に使った waypoints（呼び出し側で sample 選択などに使える）
+    """
+    basemap = get_scene_basemap(dataset_id, dataroot, scene_token, scale)
+    if show_notice:
+        render_basemap_notice(basemap)
+
+    waypoints = list_waypoints(dataset_id, scene_token)
+    render_scene_waypoint(
+        waypoints,
+        title=title,
+        basemap_img=basemap.image,
+        canvas_edge=basemap.canvas_edge,
+        highlight_index=highlight_index,
+        height=height,
+        show_sample_info=show_sample_info,
+    )
+    return waypoints

@@ -6,17 +6,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.services.basemap_service import load_basemap
 from app.streamlit import state as S
 from app.streamlit.components.waypoint_viewer import (
     format_timestamp,
-    render_scene_waypoint,
+    render_scene_waypoint_view,
 )
 from app.streamlit.data_access import (
+    count_annotated_samples,
     get_dataset,
-    get_scene_map,
     list_scenes,
-    list_waypoints,
 )
 
 # データセット未選択ならここで描画を打ち切る（メッセージとリンクは state 側が出す）
@@ -31,22 +29,34 @@ if not scenes:
     st.warning("このデータセットにはシーンがありません。")
     st.stop()
 
+# アノテーション進捗（全シーン分を1クエリで取得）
+progress = count_annotated_samples(dataset_id)
 
-@st.cache_resource(show_spinner="basemap を準備中...")
-def _basemap(dataset_id: str, dataroot: str, basemap_path: str):
-    """basemap 画像は PIL オブジェクトなので cache_resource で保持する.
-
-    初回はリサイズしてディスクにキャッシュを作るため数秒かかる。
-    """
-    return load_basemap(dataset_id, dataroot, basemap_path)
+STATUS_LABEL = {
+    "complete": "✅ 完了",
+    "partial": "🟡 途中",
+    "none": "⬜ 未着手",
+    "empty": "— サンプル無し",
+}
 
 
 # --- シーン一覧 ---------------------------------------------------------------
 df = pd.DataFrame(scenes)
 df_view = pd.DataFrame({
     "name": df["name"],
+    "status": [STATUS_LABEL.get(progress.get(t, {}).get("status", "empty"), "")
+               for t in df["token"]],
+    "progress": [
+        (progress.get(t, {}).get("annotated_samples", 0)
+         / max(1, progress.get(t, {}).get("nbr_samples", 0)))
+        for t in df["token"]
+    ],
+    "annotated": [
+        f"{progress.get(t, {}).get('annotated_samples', 0)}"
+        f" / {progress.get(t, {}).get('nbr_samples', 0)}"
+        for t in df["token"]
+    ],
     "location": df["location"],
-    "nbr_samples": df["nbr_samples"],
     "start_time": [format_timestamp(t, with_date=True) if t else "" for t in df["start_time"]],
     "description": df["description"],
 })
@@ -61,8 +71,12 @@ event = st.dataframe(
     height=320,
     column_config={
         "name": st.column_config.TextColumn("シーン"),
+        "status": st.column_config.TextColumn("状態"),
+        "progress": st.column_config.ProgressColumn(
+            "進捗", min_value=0.0, max_value=1.0, format="%.0f%%"
+        ),
+        "annotated": st.column_config.TextColumn("アノテーション済"),
         "location": st.column_config.TextColumn("ロケーション"),
-        "nbr_samples": st.column_config.NumberColumn("サンプル数", format="%d"),
         "start_time": st.column_config.TextColumn("開始時刻"),
         "description": st.column_config.TextColumn("説明"),
     },
@@ -110,23 +124,11 @@ with info_col:
             st.info("2D Object Detection ページは未実装です。")
 
 with map_col:
-    map_meta = get_scene_map(dataset_id, scene["token"])
-    basemap_img = None
-    canvas_edge = None
-    if map_meta and map_meta["basemap_path"]:
-        basemap_img = _basemap(dataset_id, dataset["dataroot"], map_meta["basemap_path"])
-        canvas_edge = map_meta["canvas_edge"]
-        if basemap_img is None:
-            st.caption("basemap 画像が見つからないため、軌跡のみ表示しています。")
-    else:
-        st.caption("このシーンに対応するマップが登録されていません。")
-
-    waypoints = list_waypoints(dataset_id, scene["token"])
-    render_scene_waypoint(
-        waypoints,
-        title=f"{scene['name']} ({len(waypoints)} samples)",
-        basemap_img=basemap_img,
-        canvas_edge=canvas_edge,
+    render_scene_waypoint_view(
+        dataset_id,
+        dataset["dataroot"],
+        scene["token"],
+        title=scene["name"],
     )
 
 S.render_selection_sidebar(

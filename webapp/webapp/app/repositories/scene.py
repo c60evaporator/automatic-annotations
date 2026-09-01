@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, case, func, select
 from sqlalchemy.orm import Session
 
+from app.models.annotation import SampleAnnotation
 from app.models.map import MapMeta
 from app.models.scene import Log, Sample, Scene
 from app.models.sensor import CalibratedSensor, EgoPose, SampleData, Sensor
@@ -15,6 +16,23 @@ from app.models.sensor import CalibratedSensor, EgoPose, SampleData, Sensor
 # タイムスタンプで軌跡を描くかを決める必要がある。LiDAR がキーフレームの
 # 基準になっているので既定にする。
 DEFAULT_POSE_CHANNEL = "LIDAR_TOP"
+
+# アノテーション進捗のステータス
+STATUS_NONE = "none"          # 未アノテーション
+STATUS_PARTIAL = "partial"    # 途中
+STATUS_COMPLETE = "complete"  # 全 sample にアノテーションあり
+STATUS_EMPTY = "empty"        # sample が無い（異常系）
+
+
+def annotation_status(annotated: int, total: int) -> str:
+    """アノテーション済み sample 数から進捗ステータスを決める."""
+    if total <= 0:
+        return STATUS_EMPTY
+    if annotated <= 0:
+        return STATUS_NONE
+    if annotated >= total:
+        return STATUS_COMPLETE
+    return STATUS_PARTIAL
 
 
 class SceneRepository:
@@ -73,6 +91,72 @@ class SceneRepository:
         )
         row = self.session.execute(stmt).mappings().first()
         return dict(row) if row else None
+
+    def list_samples(self, scene_token: str) -> list[dict[str, Any]]:
+        """シーン内の sample をタイムスタンプ順で返す.
+
+        prev/next のチェーンを辿るより、timestamp でソートするほうが
+        1クエリで済み、チェーンが壊れていても順序が保たれる。
+        ix_samples_scene_timestamp が効くので index scan で返る。
+        """
+        stmt = (
+            select(Sample.token, Sample.timestamp, Sample.prev, Sample.next)
+            .where(Sample.scene_token == scene_token)
+            .order_by(Sample.timestamp)
+        )
+        return [
+            {"sample_idx": i, **dict(r)}
+            for i, r in enumerate(self.session.execute(stmt).mappings())
+        ]
+
+    def count_annotated_samples(
+        self, dataset_id: str, *, source: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """データセット内の全シーンについて、アノテーション済み sample 数を一括集計する.
+
+        戻り値は scene_token をキーにした dict:
+            {"nbr_samples": 40, "annotated_samples": 12, "status": "partial"}
+
+        実装の要点:
+        相関 EXISTS を使い、sample 1行につき sample_annotations の
+        インデックスを1回引くだけにしている。
+        `JOIN sample_annotations ... COUNT(DISTINCT sample_token)` にすると
+        アノテーション全行（trainval なら100万行超）を走査して
+        重複排除することになり、桁違いに遅くなる。
+
+        Args:
+            source: 'imported' / 'auto' / 'manual' で絞る（None なら全件）。
+                    自動アノテーションの進捗を見るなら 'auto' を指定する。
+        """
+        exists_cond = SampleAnnotation.sample_token == Sample.token
+        if source is not None:
+            exists_cond = and_(exists_cond, SampleAnnotation.source == source)
+        has_annotation = (
+            select(SampleAnnotation.token)
+            .where(exists_cond)
+            .exists()
+        )
+
+        stmt = (
+            select(
+                Sample.scene_token,
+                func.count().label("nbr_samples"),
+                func.sum(case((has_annotation, 1), else_=0)).label("annotated_samples"),
+            )
+            .where(Sample.dataset_id == dataset_id)
+            .group_by(Sample.scene_token)
+        )
+
+        result: dict[str, dict[str, Any]] = {}
+        for r in self.session.execute(stmt).mappings():
+            total = r["nbr_samples"] or 0
+            done = int(r["annotated_samples"] or 0)
+            result[r["scene_token"]] = {
+                "nbr_samples": total,
+                "annotated_samples": done,
+                "status": annotation_status(done, total),
+            }
+        return result
 
     def _waypoint_stmt(self, scene_token: str, channel: str) -> Select:
         return (

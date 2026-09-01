@@ -24,8 +24,10 @@ from typing import Any
 import streamlit as st
 
 from app.db.session import read_only_session
+from app.repositories.annotation import AnnotationRepository
 from app.repositories.dataset import DatasetRepository
 from app.repositories.scene import SceneRepository
+from app.repositories.sensor import SensorRepository
 
 # 推論結果は頻繁に更新されるため、参照系のキャッシュは短めにする
 CACHE_TTL_SEC = 300
@@ -66,6 +68,131 @@ def list_waypoints(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
 def get_scene_map(dataset_id: str, scene_token: str) -> dict[str, Any] | None:
     with read_only_session() as session:
         return SceneRepository(session).get_map(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="アノテーション進捗を集計中...")
+def count_annotated_samples(
+    dataset_id: str, *, source: str | None = None
+) -> dict[str, dict[str, Any]]:
+    """データセット内の全シーンのアノテーション進捗を一括集計する.
+
+    戻り値は scene_token をキーにした dict:
+        {"nbr_samples": 40, "annotated_samples": 12, "status": "partial"}
+
+    シーンごとにクエリを投げると N+1 になるため、1クエリで全シーン分を返す。
+    """
+    with read_only_session() as session:
+        return SceneRepository(session).count_annotated_samples(
+            dataset_id, source=source
+        )
+
+
+# ── sample ────────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_samples(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
+    """シーン内の sample をタイムスタンプ順で返す."""
+    with read_only_session() as session:
+        return SceneRepository(session).list_samples(scene_token)
+
+
+# ── センサーフレーム（sample_data + calibrated_sensor + ego_pose）─────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_frames_by_sample(
+    dataset_id: str,
+    sample_token: str,
+    *,
+    keyframe_only: bool = True,
+    sensor_token: str | None = None,
+) -> list[dict[str, Any]]:
+    """1 sample のセンサーフレームを、投影に必要な情報ごと返す."""
+    with read_only_session() as session:
+        return SensorRepository(session).list_frames_by_sample(
+            sample_token, keyframe_only=keyframe_only, sensor_token=sensor_token
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="センサーデータを読み込み中...")
+def list_frames_by_scene(
+    dataset_id: str,
+    scene_token: str,
+    *,
+    keyframe_only: bool = True,
+    sensor_token: str | None = None,
+) -> list[dict[str, Any]]:
+    """シーン内の全センサーフレームを1クエリでまとめて返す（バッチ処理用）."""
+    with read_only_session() as session:
+        return SensorRepository(session).list_frames_by_scene(
+            scene_token, keyframe_only=keyframe_only, sensor_token=sensor_token
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_sensors(dataset_id: str, *, modality: str | None = None) -> list[dict[str, Any]]:
+    """センサー（チャンネル）一覧。UI のチャンネル選択に使う.
+
+    modality に 'camera' / 'lidar' / 'radar' を渡すと種類で絞れる。
+    """
+    with read_only_session() as session:
+        return SensorRepository(session).list_sensors(dataset_id, modality=modality)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_categories(
+    dataset_id: str, *, include_counts: bool = False
+) -> list[dict[str, Any]]:
+    """カテゴリ一覧。ラベルマッピングの設定 UI に使う.
+
+    include_counts=True で instance 数・annotation 数を付与する。
+    """
+    with read_only_session() as session:
+        return AnnotationRepository(session).list_categories(
+            dataset_id, include_counts=include_counts
+        )
+
+
+# ── アノテーション ────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_annotations_by_sample(
+    dataset_id: str,
+    sample_token: str,
+    *,
+    source: str | None = None,
+    include_attributes: bool = True,
+) -> list[dict[str, Any]]:
+    """1 sample のアノテーションを instance 情報付きで返す."""
+    with read_only_session() as session:
+        return AnnotationRepository(session).list_by_sample(
+            sample_token, source=source, include_attributes=include_attributes
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="アノテーションを読み込み中...")
+def list_annotations_by_scene(
+    dataset_id: str,
+    scene_token: str,
+    *,
+    source: str | None = None,
+    include_attributes: bool = True,
+) -> list[dict[str, Any]]:
+    """シーン内の全アノテーションを1クエリでまとめて返す（バッチ処理用）."""
+    with read_only_session() as session:
+        return AnnotationRepository(session).list_by_scene(
+            scene_token, source=source, include_attributes=include_attributes
+        )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_instances_by_scene(
+    dataset_id: str, scene_token: str, *, source: str | None = None
+) -> list[dict[str, Any]]:
+    """シーンに登場する instance の一覧（トラック単位の表示用）."""
+    with read_only_session() as session:
+        return AnnotationRepository(session).list_instances_by_scene(
+            scene_token, source=source
+        )
 
 
 def clear_caches() -> None:
