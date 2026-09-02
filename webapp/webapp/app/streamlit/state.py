@@ -42,6 +42,13 @@ DET2D_PARTIAL_SINCE = "sel_det2d_since"    # 受け取り済みの部分結果�
 DET2D_SAVED_JOB_ID = "sel_det2d_saved_job" # 保存済みジョブ（二重保存の防止）
 DET2D_VIEW_RUN_ID = "sel_det2d_view_run"   # 表示に使っている run
 
+# Instance Tracking ページの状態（Detection2D と同じ構成）
+TRACKING_JOB_ID = "sel_tracking_job_id"
+TRACKING_RESULTS = "sel_tracking_results"        # {sample_data_token: [instance, ...]}
+TRACKING_PARTIAL_SINCE = "sel_tracking_since"
+TRACKING_SAVED_JOB_ID = "sel_tracking_saved_job"
+TRACKING_VIEW_RUN_ID = "sel_tracking_view_run"
+
 # 各推論ステップの実行単位（*Params.id）。ページ間で引き継ぐ
 DET2D_PARAMS_ID = "sel_det2d_params_id"
 TRACKING_PARAMS_ID = "sel_tracking_params_id"
@@ -59,10 +66,14 @@ _CASCADE: dict[str, tuple[str, ...]] = {
     DATASET_ID: (SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
                  DET2D_RESULTS, DET2D_PARTIAL_SINCE,
                  DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
+                 TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
+                 TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
                  DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     SCENE_TOKEN: (SAMPLE_IDX, DET2D_JOB_ID,
                   DET2D_RESULTS, DET2D_PARTIAL_SINCE,
                   DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
+                  TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
+                  TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
                   DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     DET2D_PARAMS_ID: (TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     TRACKING_PARAMS_ID: (DEPTH_PARAMS_ID,),
@@ -98,6 +109,8 @@ def clear_all() -> None:
     for key in (DATASET_ID, SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
                 DET2D_RESULTS, DET2D_PARTIAL_SINCE,
                 DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
+                TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
+                TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
                 DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID):
         st.session_state.pop(key, None)
 
@@ -150,7 +163,7 @@ def sticky_value(canonical_key: str, default: Any = None) -> Any:
 
 # ── ページガード ──────────────────────────────────────────────────────────────
 
-def _safe_page_link(path: str, label: str, icon: str) -> None:
+def safe_page_link(path: str, label: str, icon: str) -> None:
     """st.page_link を安全に呼ぶ.
 
     page_link は「アプリに登録済みのページ」しか解決できず、
@@ -173,7 +186,7 @@ def require_dataset() -> str:
     dataset_id = st.session_state.get(DATASET_ID)
     if not dataset_id:
         st.warning("先にデータセットを選択してください。")
-        _safe_page_link("main.py", "データセット選択へ", "📂")
+        safe_page_link("main.py", "データセット選択へ", "📂")
         st.stop()
     return dataset_id
 
@@ -184,7 +197,7 @@ def require_scene() -> tuple[str, str]:
     scene_token = st.session_state.get(SCENE_TOKEN)
     if not scene_token:
         st.warning("先にシーンを選択してください。")
-        _safe_page_link("pages/1_Scene_Selection.py", "シーン選択へ", "🎬")
+        safe_page_link("pages/1_Scene_Selection.py", "シーン選択へ", "🎬")
         st.stop()
     return dataset_id, scene_token
 
@@ -195,7 +208,7 @@ def require_detection2d() -> tuple[str, str, str]:
     params_id = st.session_state.get(DET2D_PARAMS_ID)
     if not params_id:
         st.warning("先に 2D Object Detection を実行してください。")
-        _safe_page_link("pages/2_Detection2D.py", "2D Object Detection へ", "🔍")
+        safe_page_link("pages/2_Detection2D.py", "2D Object Detection へ", "🔍")
         st.stop()
     return dataset_id, scene_token, params_id
 
@@ -206,7 +219,7 @@ def require_tracking() -> tuple[str, str, str]:
     params_id = st.session_state.get(TRACKING_PARAMS_ID)
     if not params_id:
         st.warning("先に Instance Tracking を実行してください。")
-        _safe_page_link("pages/3_Instance_Tracking.py", "Instance Tracking へ", "🎯")
+        safe_page_link("pages/3_Instance_Tracking.py", "Instance Tracking へ", "🎯")
         st.stop()
     return dataset_id, scene_token, params_id
 

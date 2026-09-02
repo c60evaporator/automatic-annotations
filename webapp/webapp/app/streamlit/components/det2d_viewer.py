@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import html
 from functools import lru_cache
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import streamlit as st
 from PIL import Image, ImageDraw
@@ -60,10 +60,10 @@ LEGEND_SWATCH_PX = 12
 #                         暗い縁を付けて可読性を確保する
 #   BOX_TEXT_MARGIN     : ボックス上端と文字の間隔（px）
 BOX_LINE_WIDTH = 5
-BOX_TEXT_SIZE = 36
+BOX_TEXT_SIZE = 26
 BOX_TEXT_STROKE = 1
-BOX_TEXT_STROKE_COLOR = "#555555"
-BOX_TEXT_MARGIN = 16
+BOX_TEXT_STROKE_COLOR = "#000000"
+BOX_TEXT_MARGIN = 2
 
 # 画像に重ねる文字の種類
 TEXT_MODE_NONE = "None"
@@ -217,7 +217,11 @@ def draw_boxes(
 
 # ── 凡例 ──────────────────────────────────────────────────────────────────────
 
-def _chip(label: str, count: int | None = None) -> str:
+def _chip(
+    label: str,
+    count: int | None = None,
+    color_fn: Callable[[str], str] = color_for,
+) -> str:
     """色見本つきのラベルチップ（HTML）.
 
     高さをチェックボックスと揃えることで、縦位置のずれを防ぐ。
@@ -339,8 +343,13 @@ def render_label_legend(
     counts: dict[str, int] | None = None,
     key_prefix: str = "det2d_legend",
     show_toggle_all: bool = True,
+    color_fn: Callable[[str], str] = color_for,
+    header: str = "Labels",
 ) -> set[str]:
-    """色見本つきのチェックボックス凡例を描画し、有効なラベルを返す.
+    """色見本つきのチェックボックス凡例を描画し、有効な項目を返す.
+
+    color_fn を差し替えることで、ラベル色分け以外（Track ID 色分けなど）
+    にも使い回せる。
 
     ラベルの一覧は config の定義から渡す想定。検出結果に含まれるものだけを
     出すと、推論のたびに凡例の並びとチェック状態が変わってしまう。
@@ -366,7 +375,7 @@ def render_label_legend(
     # key を付けると .st-key-<key> で CSS を絞れる。
     # 縦の間隔は CSS 側（LEGEND_ROW_GAP）で制御するので gap は 0 にする
     with st.container(key=key_prefix, gap=None):
-        st.markdown('<div class="legend-header">Labels</div>',
+        st.markdown(f'<div class="legend-header">{html.escape(header)}</div>',
                     unsafe_allow_html=True)
 
         if show_toggle_all:
