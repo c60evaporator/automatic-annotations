@@ -37,6 +37,26 @@ if TYPE_CHECKING:
     from app.models.sensor import SampleData
 
 
+# 推論実行の状態。3ステップの *Params で共通に使う。
+#   running   : 実行中（ended_at は NULL）
+#   succeeded : 正常終了。後段の入力として選ばれるのはこれだけ
+#   failed    : 例外で中断
+#   cancelled : ユーザーがキャンセル
+#
+# ended_at の NULL 判定だけでは「失敗」と「キャンセル」を区別できず、
+# 「最新の成功した run」を引く問合せも書けないため、明示的な列を持つ。
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_SUCCEEDED = "succeeded"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_CANCELLED = "cancelled"
+RUN_STATUSES = (
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_SUCCEEDED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_CANCELLED,
+)
+
+
 # =============================================================================
 # Step 1: 2D Object Detection (Grounding DINO)
 # =============================================================================
@@ -44,6 +64,14 @@ if TYPE_CHECKING:
 class Detection2DParams(Base):
     """2D物体検出の実行単位とパラメータ"""
     __tablename__ = "detection_2d_params"
+    __table_args__ = (
+        # 「このシーンで最後に成功した run」を引くための複合インデックス。
+        # ORDER BY started_at DESC LIMIT 1 を index scan で返せる
+        Index("ix_detection_2d_params_scene_started", "scene_token", "started_at"),
+        # status での絞り込みを伴う検索用
+        Index("ix_detection_2d_params_scene_status_started",
+              "scene_token", "status", "started_at"),
+    )
     # Columns
     id:         Mapped[str] = mapped_column(String, primary_key=True)
     dataset_id: Mapped[str] = mapped_column(
@@ -70,6 +98,10 @@ class Detection2DParams(Base):
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     # 純粋な推論時間（オーバーヘッドを除くため ended_at - started_at より短い）
     inference_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 実行状態（RUN_STATUS_* のいずれか）
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{RUN_STATUS_RUNNING}'")
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -144,6 +176,14 @@ class Detection2D(Base):
 class InstanceTracking2DParams(Base):
     """インスタンストラッキングの実行単位とパラメータ"""
     __tablename__ = "instance_tracking_2d_params"
+    __table_args__ = (
+        # 「このシーンで最後に成功した run」を引くための複合インデックス。
+        # ORDER BY started_at DESC LIMIT 1 を index scan で返せる
+        Index("ix_instance_tracking_2d_params_scene_started", "scene_token", "started_at"),
+        # status での絞り込みを伴う検索用
+        Index("ix_instance_tracking_2d_params_scene_status_started",
+              "scene_token", "status", "started_at"),
+    )
     # Columns
     id:         Mapped[str] = mapped_column(String, primary_key=True)
     dataset_id: Mapped[str] = mapped_column(
@@ -168,6 +208,10 @@ class InstanceTracking2DParams(Base):
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_tracks:     Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     inference_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 実行状態（RUN_STATUS_* のいずれか）
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{RUN_STATUS_RUNNING}'")
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -272,6 +316,14 @@ class InstanceTracking2D(Base):
 class DepthEstimationParams(Base):
     """深度推定＋3Dボックスフィッティングの実行単位とパラメータ"""
     __tablename__ = "depth_estimation_params"
+    __table_args__ = (
+        # 「このシーンで最後に成功した run」を引くための複合インデックス。
+        # ORDER BY started_at DESC LIMIT 1 を index scan で返せる
+        Index("ix_depth_estimation_params_scene_started", "scene_token", "started_at"),
+        # status での絞り込みを伴う検索用
+        Index("ix_depth_estimation_params_scene_status_started",
+              "scene_token", "status", "started_at"),
+    )
     # Columns
     id:         Mapped[str] = mapped_column(String, primary_key=True)
     dataset_id: Mapped[str] = mapped_column(
@@ -304,6 +356,10 @@ class DepthEstimationParams(Base):
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_boxes:      Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     inference_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 実行状態（RUN_STATUS_* のいずれか）
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{RUN_STATUS_RUNNING}'")
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

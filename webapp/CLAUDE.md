@@ -178,6 +178,7 @@ project-root/
 - インポート全体を1トランザクションで実行し、失敗時は全ロールバックする
 
 ### Streamlit Rules
+- 各ページのUI仕様は`webapp/app/streamlit/CLAUDE.md`参照
 - **ウィジェットキーと正規キーを分離する**（`app/streamlit/state.py`）
   - Streamlitのマルチページでは、ウィジェットに紐づく `session_state` のキーは、そのウィジェットが描画されない実行で破棄される。ページ1のselectboxの値はページ2に移った時点で消え得る
   - ウィジェットは `_w_` 接頭辞、アプリが参照する正規キーは `sel_` 接頭辞。ウィジェットの `on_change` で正規キーへ書き写す

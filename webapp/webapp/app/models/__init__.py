@@ -22,6 +22,11 @@ from app.models.annotation import (
 )
 from app.models.map import MapMeta
 from app.models.ann_intermediate import (
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_SUCCEEDED,
+    RUN_STATUSES,
     DepthEstimation,
     DepthEstimationParams,
     Detection2D,
@@ -62,4 +67,9 @@ __all__ = [
     "InstanceTracking2D",
     "DepthEstimationParams",
     "DepthEstimation",
+    "RUN_STATUS_RUNNING",
+    "RUN_STATUS_SUCCEEDED",
+    "RUN_STATUS_FAILED",
+    "RUN_STATUS_CANCELLED",
+    "RUN_STATUSES",
 ]
