@@ -105,6 +105,17 @@ def clear_color_cache() -> None:
     _label_index.cache_clear()
 
 
+def passes_score(box: dict[str, Any], min_score: float) -> bool:
+    """スコア閾値を満たすか.
+
+    Ground truth のボックスは score を持たない（None）。
+    None を 0 とみなすと閾値を上げた瞬間に GT が全部消えてしまうため、
+    スコアが無いボックスは閾値の対象外として常に通す。
+    """
+    score = box.get("score")
+    return score is None or score >= min_score
+
+
 def filter_boxes(
     boxes: Iterable[dict[str, Any]],
     *,
@@ -114,7 +125,7 @@ def filter_boxes(
     """スコアと表示ラベルでボックスを絞る."""
     out = []
     for box in boxes:
-        if box.get("score", 1.0) < min_score:
+        if not passes_score(box, min_score):
             continue
         if enabled_labels is not None and box["label"] not in enabled_labels:
             continue
@@ -414,7 +425,7 @@ def labels_in_items(
         box["label"]
         for item in items
         for box in (item.get("boxes") or [])
-        if box.get("score", 1.0) >= min_score
+        if passes_score(box, min_score)
     }
     order = _label_index()
     known = sorted((l for l in found if l in order), key=lambda l: order[l])
@@ -434,7 +445,7 @@ def count_by_label(
     counts: dict[str, int] = {}
     for item in items:
         for box in item.get("boxes") or []:
-            if box.get("score", 1.0) < min_score:
+            if not passes_score(box, min_score):
                 continue
             counts[box["label"]] = counts.get(box["label"], 0) + 1
     return counts
@@ -458,23 +469,73 @@ def render_camera_grid(
     cols = st.columns(columns)
     for i, item in enumerate(items):
         with cols[i % columns]:
-            image = item.get("image")
-            caption = item["channel"]
+            _render_one(
+                item, item.get("boxes"), item["channel"],
+                min_score=min_score, enabled_labels=enabled_labels,
+                show_boxes=show_boxes, text_mode=text_mode,
+                pending=item.get("pending", False),
+            )
 
-            if image is None:
-                st.warning(f"{item['channel']}: 画像が見つかりません")
-                continue
 
-            if show_boxes:
-                shown = filter_boxes(
-                    item.get("boxes") or [],
-                    min_score=min_score,
-                    enabled_labels=enabled_labels,
-                )
-                caption += "（推論待ち）" if item.get("pending") else f"  {len(shown)} boxes"
-                if shown:
-                    image = draw_boxes(image, shown, text_mode=text_mode)
-            elif item.get("pending"):
-                caption += "（推論待ち）"
+def render_camera_comparison_grid(
+    items: list[dict[str, Any]],
+    *,
+    min_score: float = 0.0,
+    enabled_labels: set[str] | None = None,
+    show_boxes: bool = True,
+    text_mode: str = TEXT_MODE_NONE,
+    left_label: str = "GT",
+    right_label: str = "Pred",
+) -> None:
+    """1カメラにつき1行、左に Ground truth・右に推論結果を並べる.
 
-            st.image(image, caption=caption, width="stretch")
+    items の各要素は render_camera_grid と同じ形に加えて "gt_boxes" を持つ。
+    左右で同じ画像を使うので、読み込みは1回で済ませている
+    （描画時に copy されるため、片方のボックスがもう片方に混ざることはない）。
+    """
+    for item in items:
+        left_col, right_col = st.columns(2)
+        with left_col:
+            _render_one(
+                item, item.get("gt_boxes"), f"{item['channel']} [{left_label}]",
+                min_score=0.0,  # GT にスコアは無いので閾値を適用しない
+                enabled_labels=enabled_labels,
+                show_boxes=show_boxes, text_mode=text_mode, pending=False,
+            )
+        with right_col:
+            _render_one(
+                item, item.get("boxes"), f"{item['channel']} [{right_label}]",
+                min_score=min_score, enabled_labels=enabled_labels,
+                show_boxes=show_boxes, text_mode=text_mode,
+                pending=item.get("pending", False),
+            )
+
+
+def _render_one(
+    item: dict[str, Any],
+    boxes: Sequence[dict[str, Any]] | None,
+    caption: str,
+    *,
+    min_score: float,
+    enabled_labels: set[str] | None,
+    show_boxes: bool,
+    text_mode: str,
+    pending: bool,
+) -> None:
+    """画像1枚を描画する（グリッド共通の処理）."""
+    image = item.get("image")
+    if image is None:
+        st.warning(f"{item['channel']}: 画像が見つかりません")
+        return
+
+    if show_boxes:
+        shown = filter_boxes(
+            boxes or [], min_score=min_score, enabled_labels=enabled_labels
+        )
+        caption += "（推論待ち）" if pending else f"  {len(shown)} boxes"
+        if shown:
+            image = draw_boxes(image, shown, text_mode=text_mode)
+    elif pending:
+        caption += "（推論待ち）"
+
+    st.image(image, caption=caption, width="stretch")

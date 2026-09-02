@@ -28,6 +28,7 @@ from app.repositories.annotation import AnnotationRepository
 from app.repositories.dataset import DatasetRepository
 from app.repositories.scene import SceneRepository
 from app.repositories.sensor import SensorRepository
+from app.services.annotation_2d import project_annotations_to_frame
 
 # 推論結果は頻繁に更新されるため、参照系のキャッシュは短めにする
 CACHE_TTL_SEC = 300
@@ -193,6 +194,33 @@ def list_instances_by_scene(
         return AnnotationRepository(session).list_instances_by_scene(
             scene_token, source=source
         )
+
+
+# ── Ground truth の 2D 投影 ──────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_gt_boxes_2d(
+    dataset_id: str,
+    sample_token: str,
+    sensor_token: str,
+    *,
+    source: str | None = None,
+) -> list[dict[str, Any]]:
+    """指定 sample / カメラに写るアノテーションを 2D BBox にして返す.
+
+    3D → 2D の投影は numpy の計算が入るので、
+    再実行のたびに走らないようキャッシュする。
+    """
+    with read_only_session() as session:
+        frames = SensorRepository(session).list_frames_by_sample(
+            sample_token, keyframe_only=True, sensor_token=sensor_token
+        )
+        if not frames:
+            return []
+        annotations = AnnotationRepository(session).list_by_sample(
+            sample_token, source=source, include_attributes=False
+        )
+    return project_annotations_to_frame(annotations, frames[0])
 
 
 def clear_caches() -> None:

@@ -42,6 +42,7 @@ from app.streamlit.components.det2d_viewer import (
     TEXT_MODES,
     count_by_label,
     labels_in_items,
+    render_camera_comparison_grid,
     render_camera_grid,
     render_label_legend,
 )
@@ -50,6 +51,7 @@ from app.streamlit.data_access import (
     get_dataset,
     get_scene,
     list_frames_by_scene,
+    list_gt_boxes_2d,
     list_samples,
     list_sensors,
 )
@@ -152,19 +154,27 @@ with param_col:
 # Sample selection & map
 # ------------------------------------------------------------------
 with map_col:
+    # 表示順は「地図 → スライダー」だが、地図はスライダーの値に依存する。
+    # Streamlit は上から順に描画するので、先に空のコンテナで場所だけ確保し、
+    # スライダーを読んでから、そのコンテナへ遡って描画する。
+    # （逆順に書くと、スライダーを動かした値が地図に1回遅れて反映される）
+    waypoint_container = st.container()
+
     default_idx = sample_indices[len(sample_indices) // 2] if sample_indices else 0
     selected_sample_idx = st.select_slider(
         "Select Sample",
         options=sample_indices or [0],
         value=default_idx,
     )
-    render_scene_waypoint_view(
-        dataset_id, dataset["dataroot"], scene["token"],
-        title=scene["name"],
-        highlight_index=selected_sample_idx,
-        height=320,
-        show_sample_info=False,
-    )
+
+    with waypoint_container:
+        render_scene_waypoint_view(
+            dataset_id, dataset["dataroot"], scene["token"],
+            title=scene["name"],
+            highlight_index=selected_sample_idx,
+            height=320,
+            show_sample_info=False,
+        )
 
 # ------------------------------------------------------------------
 # Run / progress
@@ -291,11 +301,22 @@ with param_col:
 # ------------------------------------------------------------------
 st.divider()
 
-view_col, opt_col = st.columns([7, 1])
+view_col, opt_col = st.columns([9, 1])
 
 # 凡例に件数を出すため、画像とボックスの取得を先に済ませる
 selected_sample = samples[selected_sample_idx]
 results = st.session_state[RESULTS]
+
+# 表示オプションは正規キーに保存しておく。
+# 「Run Inference」で st.rerun() が走ると、その下のウィジェットは
+# その実行で生成されず、Streamlit に状態を破棄されてしまうため
+OPT_SHOW_BOXES, W_SHOW_BOXES = "det2d_show_boxes", "_w_det2d_show_boxes"
+OPT_SHOW_GT,    W_SHOW_GT    = "det2d_show_gt",    "_w_det2d_show_gt"
+OPT_MIN_SCORE,  W_MIN_SCORE  = "det2d_min_score",  "_w_det2d_min_score"
+OPT_TEXT_MODE,  W_TEXT_MODE  = "det2d_text_mode",  "_w_det2d_text_mode"
+
+# GT との並列表示。チェックすると 1 カメラ 1 行で左右に並べる
+show_gt = S.sticky_value(OPT_SHOW_GT, False)
 
 items = []
 for sensor in cam_sensors:
@@ -303,45 +324,82 @@ for sensor in cam_sensors:
         dataset_id, dataset["dataroot"], selected_sample["token"], sensor["token"]
     )
     token = frame["token"] if frame else None
-    items.append({
+    item = {
         "channel": sensor["channel"],
         "image": image,
         "boxes": results.get(token, []),
         "pending": token not in results,
-    })
+    }
+    if show_gt:
+        # 3D→2D の投影はキャッシュされるので、再実行のたびには走らない
+        item["gt_boxes"] = list_gt_boxes_2d(
+            dataset_id, selected_sample["token"], sensor["token"]
+        )
+    items.append(item)
 
 with opt_col:
-    show_boxes = st.checkbox("Show boxes", value=True)
-    min_score = st.slider("Min score", 0.0, 1.0, 0.0, 0.05)
+    S.init_sticky(W_SHOW_BOXES, OPT_SHOW_BOXES, True)
+    show_boxes = st.checkbox(
+        "Show boxes", key=W_SHOW_BOXES,
+        on_change=S.sync_sticky, args=(W_SHOW_BOXES, OPT_SHOW_BOXES),
+    )
+    S.init_sticky(W_SHOW_GT, OPT_SHOW_GT, False)
+    st.checkbox(
+        "Compare with GT", key=W_SHOW_GT,
+        on_change=S.sync_sticky, args=(W_SHOW_GT, OPT_SHOW_GT),
+        help="1カメラ1行で、左に Ground truth・右に推論結果を並べる",
+    )
+    S.init_sticky(W_MIN_SCORE, OPT_MIN_SCORE, 0.0)
+    min_score = st.slider(
+        "Min score", 0.0, 1.0, step=0.05, key=W_MIN_SCORE,
+        on_change=S.sync_sticky, args=(W_MIN_SCORE, OPT_MIN_SCORE),
+    )
     # 画像に重ねる文字。既定は None（枠だけ）。
     # 文字色は枠線と同じにするので、凡例の色と対応が付く
-    text_mode = st.radio("Box text", TEXT_MODES, index=1)
+    S.init_sticky(W_TEXT_MODE, OPT_TEXT_MODE, TEXT_MODES[0])
+    text_mode = st.radio(
+        "Box text", TEXT_MODES, key=W_TEXT_MODE,
+        on_change=S.sync_sticky, args=(W_TEXT_MODE, OPT_TEXT_MODE),
+    )
 
     # ラベルは画像に焼き込まず、この凡例の色で判別する。
-    # 表示するのは「いま選んでいる sample の検出結果に出ているラベル」だけ。
-    # 全ラベルを常に並べると、実際には出ていないものまで場所を取る。
-    # 並び順は config の定義順に固定してあるので、sample を切り替えても
-    # 共通のラベルは同じ位置に来る
-    legend_labels = labels_in_items(items, min_score=min_score)
+    # 表示するのは「いま選んでいる sample に出ているラベル」だけ。
+    # GT を並べているときは GT 側のラベルも凡例に含める
+    legend_source = items
+    if show_gt:
+        legend_source = [
+            {**item, "boxes": (item.get("boxes") or []) + (item.get("gt_boxes") or [])}
+            for item in items
+        ]
+    legend_labels = labels_in_items(legend_source, min_score=0.0)
     if legend_labels:
         enabled_labels = render_label_legend(
             legend_labels,
-            counts=count_by_label(items, min_score=min_score),
+            counts=count_by_label(legend_source, min_score=0.0),
         )
     else:
         # 凡例が空でも、他 sample の結果を消さないよう None にする
         # （空集合を渡すと「全ラベル非表示」の意味になってしまう）
         enabled_labels = None
-        st.caption("このサンプルには検出結果がありません")
+        st.caption("このサンプルには表示できるボックスがありません")
 
 with view_col:
-    render_camera_grid(
-        items,
-        columns=2,
-        min_score=min_score,
-        enabled_labels=enabled_labels,
-        show_boxes=show_boxes,
-        text_mode=text_mode,
-    )
+    if show_gt:
+        render_camera_comparison_grid(
+            items,
+            min_score=min_score,
+            enabled_labels=enabled_labels,
+            show_boxes=show_boxes,
+            text_mode=text_mode,
+        )
+    else:
+        render_camera_grid(
+            items,
+            columns=2,
+            min_score=min_score,
+            enabled_labels=enabled_labels,
+            show_boxes=show_boxes,
+            text_mode=text_mode,
+        )
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])

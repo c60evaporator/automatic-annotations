@@ -104,6 +104,37 @@ def on_scene_change() -> None:
     sync_from_widget(W_SCENE, SCENE_TOKEN)
 
 
+# ── 表示オプションの永続化 ────────────────────────────────────────────────────
+#
+# ページ途中で st.rerun() や st.stop() が走ると、そこから先のウィジェットは
+# その実行では生成されない。Streamlit は生成されなかったウィジェットの状態を
+# 破棄するため、次の実行で既定値に戻ってしまう。
+# 例: 「Run Inference」で st.rerun() すると、その下にある表示オプションが
+#     すべてリセットされる。
+#
+# ウィジェットの key（_w_ 接頭辞）とは別に、破棄されない正規キーへ値を
+# 写しておくことで、中断があっても選択が残る。
+
+def init_sticky(widget_key: str, canonical_key: str, default: Any) -> None:
+    """ウィジェットの初期値を、保存済みの正規キーから復元する.
+
+    value= を使わず session_state で与えるのは、
+    on_change で session_state に書くのと併用したときの警告を避けるため。
+    """
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = st.session_state.get(canonical_key, default)
+
+
+def sync_sticky(widget_key: str, canonical_key: str) -> None:
+    """ウィジェットの値を正規キーへ写す（on_change コールバック）."""
+    st.session_state[canonical_key] = st.session_state.get(widget_key)
+
+
+def sticky_value(canonical_key: str, default: Any = None) -> Any:
+    """保存済みの表示オプションを読む（ウィジェット生成前でも使える）."""
+    return st.session_state.get(canonical_key, default)
+
+
 # ── ページガード ──────────────────────────────────────────────────────────────
 
 def _safe_page_link(path: str, label: str, icon: str) -> None:
