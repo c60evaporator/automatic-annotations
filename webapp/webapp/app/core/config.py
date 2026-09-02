@@ -109,6 +109,17 @@ class Settings(BaseSettings):
     # run の記録に残すモデル名（推論サーバー側の実体と合わせる）
     DET2D_MODEL_NAME: str = "groundingdino_swinb_cogcoor"
 
+    # --- Instance Tracking -----------------------------------------------
+    SWEEPS_PER_SAMPLE: int = 6
+    DEFAULT_TRACKING_NUM_SWEEPS: int = 2
+    DEFAULT_TRACKING_IOU_THRESHOLD: float = 0.5
+    DEFAULT_TRACKING_IOU_METHOD: str = "box"
+    DEFAULT_TRACKING_IOU_LABEL_MATCH: str = "label"
+    DEFAULT_TRACKING_MASK_SCORE_THRESHOLD: float = 0.5
+    TRACKING_MAX_RUNS_PER_SCENE: int = 10
+    TRACKING_MODEL_NAME: str = "sam2.1_hiera_large"
+    TRACKING_STUB_DELAY_SEC: float | None = 0.05
+
     # スタブ推論の1回あたりの待ち時間（本実装に差し替えたら None にする）
     DET2D_STUB_DELAY_SEC: float | None = 0.05
 

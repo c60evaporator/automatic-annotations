@@ -33,6 +33,12 @@ from app.services.detection2d_service import (
     list_runs as _list_runs,
     load_run_boxes as _load_run_boxes,
 )
+from app.services.instance_tracking_service import (
+    list_prompt_runs as _list_prompt_runs,
+    list_runs as _list_tracking_runs,
+    list_track_ids as _list_track_ids,
+    load_run_instances as _load_run_instances,
+)
 
 # 推論結果は頻繁に更新されるため、参照系のキャッシュは短めにする
 CACHE_TTL_SEC = 300
@@ -244,3 +250,37 @@ def list_detection_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any
 def load_detection_run_boxes(params_id: str) -> dict[str, list[dict[str, Any]]]:
     """run の検出結果を {sample_data_token: [box, ...]} で返す."""
     return _load_run_boxes(params_id)
+
+
+# ── Instance Tracking run ────────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_tracking_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
+    """シーンのトラッキング run 一覧（新しい順）."""
+    return _list_tracking_runs(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_prompt_detection_runs(
+    dataset_id: str, scene_token: str
+) -> list[dict[str, Any]]:
+    """Box Prompt に選べる Detection2D run（成功したもののみ）."""
+    return _list_prompt_runs(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="トラッキング結果を読み込み中...")
+def load_tracking_run_instances(
+    params_id: str, *, include_mask: bool = True
+) -> dict[str, list[dict[str, Any]]]:
+    """run の結果を {sample_data_token: [instance, ...]} で返す.
+
+    include_mask=False にすると mask_rle を読まない。
+    マスクは 1 件で数千要素になるので、外接矩形だけで足りる表示では効く。
+    """
+    return _load_run_instances(params_id, include_mask=include_mask)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_tracking_track_ids(params_id: str) -> list[dict[str, Any]]:
+    """run に含まれる track の一覧（凡例・色分け用）."""
+    return _list_track_ids(params_id)

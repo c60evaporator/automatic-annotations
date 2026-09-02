@@ -79,3 +79,23 @@ def get_detection2d_job(job_id: str, since: int = 0) -> dict[str, Any]:
 def cancel_detection2d_job(job_id: str) -> dict[str, Any]:
     return _request("DELETE", f"/detection2d/jobs/{job_id}",
                     timeout=POLL_TIMEOUT_SEC)
+
+
+# ── Instance Tracking ────────────────────────────────────────────────────────
+# Detection2D と同じジョブ方式なので、UI 側のポーリング処理を共通化できる
+
+def submit_instance_tracking(payload: dict[str, Any]) -> dict[str, Any]:
+    """Instance Tracking ジョブを登録し、job 情報を返す."""
+    return _request("POST", "/instance-tracking/jobs",
+                    timeout=SUBMIT_TIMEOUT_SEC, json=payload)
+
+
+def get_instance_tracking_job(job_id: str, since: int = 0) -> dict[str, Any]:
+    """ジョブの進捗と、since 以降の部分結果を取得する."""
+    return _request("GET", f"/instance-tracking/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC, params={"since": since})
+
+
+def cancel_instance_tracking_job(job_id: str) -> dict[str, Any]:
+    return _request("DELETE", f"/instance-tracking/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC)

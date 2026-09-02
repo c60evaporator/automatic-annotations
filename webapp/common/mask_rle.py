@@ -31,19 +31,20 @@ def encode_rle(mask: np.ndarray) -> dict[str, Any]:
     height, width = mask.shape
     # 列優先に並べ替えてから連長圧縮する（COCO の定義に合わせる）
     flat = mask.flatten(order="F")
+    if flat.size == 0:
+        return {"size": [height, width], "counts": []}
 
-    counts: list[int] = []
-    # 先頭が True の場合でも「0 の run が 0 個」から始める
-    current = False
-    run = 0
-    for value in flat:
-        if bool(value) == current:
-            run += 1
-        else:
-            counts.append(run)
-            current = bool(value)
-            run = 1
-    counts.append(run)
+    # NOTE: 画素ごとの Python ループにしないこと。
+    # 900x1600 で 144 万回まわり、1 マスクあたり数百 ms かかる。
+    # 値が変わる位置だけ求めて差分を取れば numpy 側で完結する
+    change_positions = np.flatnonzero(np.diff(flat)) + 1
+    boundaries = np.concatenate(([0], change_positions, [flat.size]))
+    runs = np.diff(boundaries)
+
+    counts = runs.tolist()
+    # counts は「0 の run」から始まる約束。先頭が True なら 0 を足して辻褄を合わせる
+    if flat[0]:
+        counts = [0] + counts
 
     return {"size": [height, width], "counts": counts}
 
