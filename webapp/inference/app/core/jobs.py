@@ -211,3 +211,14 @@ def get_job_manager() -> JobManager:
     if _manager is None:
         _manager = JobManager()
     return _manager
+
+
+def reset_job_manager() -> None:
+    """シングルトンを破棄する（lifespan の終了時に呼ぶ）.
+
+    shutdown 済みの ThreadPoolExecutor は新しいジョブを受け付けず、
+    "cannot schedule new futures after shutdown" になる。
+    同一プロセスでアプリを作り直す場合（テスト等）に備えて捨てておく。
+    """
+    global _manager
+    _manager = None

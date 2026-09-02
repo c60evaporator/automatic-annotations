@@ -7,7 +7,7 @@ WORKDIR /workspace
 
 # app.* を import できるようにする
 #（streamlit run はスクリプトのあるディレクトリをsys.pathに入れるだけでCWDは入れないため、PYTHONPATH の指定が必須）
-ENV PYTHONPATH=/workspace \
+ENV PYTHONPATH=/workspace:/opt/shared \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
@@ -28,8 +28,8 @@ RUN groupadd -g ${GID} ${USERNAME} \
     && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME}
 
 # 名前付きボリュームのマウント先をイメージ側に作り、所有者を非rootにする（root所有だと非rootユーザーがSQLiteを書けないため）
-RUN mkdir -p /db /derived /workspace \
-    && chown -R ${UID}:${GID} /db /derived /workspace
+RUN mkdir -p /db /derived /workspace /opt/shared \
+    && chown -R ${UID}:${GID} /db /derived /workspace /opt/shared
 COPY --chown=${UID}:${GID} ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

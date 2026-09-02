@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
-from app.core.jobs import get_job_manager
+from app.core.jobs import get_job_manager, reset_job_manager
 from app.core.logging import get_logger, setup_logging
 from app.core import models as model_registry
 from app.routers import depth_boxfitting, det2d, instance_tracking
@@ -51,6 +51,10 @@ def register_model_loaders() -> None:
         )
 
     def load_sam2():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.sam2_tracker_stub import Sam2TrackerStub
+            return Sam2TrackerStub()
+
         from app.models_impl.sam2_tracker import Sam2Tracker
         return Sam2Tracker(model_id=settings.SAM2_MODEL, device=settings.device)
 
@@ -77,6 +81,7 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("shutting down")
         get_job_manager().shutdown()
+        reset_job_manager()
         model_registry.unload_all()
 
 

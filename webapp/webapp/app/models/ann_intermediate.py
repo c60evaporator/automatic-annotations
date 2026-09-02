@@ -56,6 +56,21 @@ RUN_STATUSES = (
     RUN_STATUS_CANCELLED,
 )
 
+# トラッキングの track_id 引き継ぎ判定に使う IoU の計算方法
+IOU_METHOD_BOX = "box"     # マスクの外接矩形どうしの IoU
+IOU_METHOD_MASK = "mask"   # マスクどうしの IoU
+IOU_METHODS = (IOU_METHOD_BOX, IOU_METHOD_MASK)
+
+# 上記マッチング時に、ラベルの一致をどこまで要求するか
+IOU_LABEL_MATCH_LABEL = "label"                    # ラベル完全一致
+IOU_LABEL_MATCH_CATEGORY_GROUP = "category_group"  # カテゴリグループ一致
+IOU_LABEL_MATCH_NONE = "none"                      # ラベルを問わない
+IOU_LABEL_MATCHES = (
+    IOU_LABEL_MATCH_LABEL,
+    IOU_LABEL_MATCH_CATEGORY_GROUP,
+    IOU_LABEL_MATCH_NONE,
+)
+
 
 # =============================================================================
 # Step 1: 2D Object Detection (Grounding DINO)
@@ -197,11 +212,25 @@ class InstanceTracking2DParams(Base):
         ForeignKey("detection_2d_params.id", ondelete="CASCADE"), nullable=False, index=True
     )
     model_name: Mapped[str] = mapped_column(String, nullable=False)  # 'facebook/sam2.1-hiera-large' 等
+    # プロンプトを与える間隔。Detection2D の run から引き継ぐ
     sample_interval: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 1 sample あたり何フレーム使うか（1 ならキーフレームのみ）。
+    # 非キーフレームは伝播の精度を上げるために使い、結果自体は表示に使わない
+    num_sweeps: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     # マスク採用閾値・トラック管理
     mask_score_threshold: Mapped[float] = mapped_column(Float, nullable=False)
-    # 既存トラックと同一とみなす IoU 閾値（これ未満なら新規 track_id を発番）
+    # 既存トラックと同一とみなす IoU 閾値（これ未満なら新規 track_id を発番）。
+    # 前のプロンプト区間から伝播したインスタンスと、
+    # 次のプロンプトで得たインスタンスの照合に使う
     new_track_iou_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    # 上記照合の IoU 計算方法（IOU_METHOD_*）
+    iou_method: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{IOU_METHOD_BOX}'")
+    )
+    # 上記照合でラベル一致をどこまで要求するか（IOU_LABEL_MATCH_*）
+    iou_label_match: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{IOU_LABEL_MATCH_LABEL}'")
+    )
     # 連続で見失った際にトラックを打ち切るフレーム数
     max_lost_frames: Mapped[int] = mapped_column(Integer, nullable=False)
     # 実行結果メタ

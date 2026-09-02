@@ -107,14 +107,14 @@ ARG GID=1000
 RUN groupadd -g ${GID} ${USERNAME} \
     && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME}
 # Change the owner of /workspace dir
-RUN mkdir -p /workspace /derived \
-    && chown -R ${UID}:${GID} /workspace /derived ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
+RUN mkdir -p /workspace /derived /opt/shared \
+    && chown -R ${UID}:${GID} /workspace /derived /opt/shared ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
 
 USER ${USERNAME}
 WORKDIR /workspace
 
 # Set PYTHONPATH to ensure import from subprocesses
-ENV PYTHONPATH=/workspace \
+ENV PYTHONPATH=/workspace:/opt/shared \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000

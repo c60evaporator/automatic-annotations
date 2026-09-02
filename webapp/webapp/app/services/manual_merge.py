@@ -24,31 +24,15 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from common.box_ops import greedy_match
+
 BoxDict = dict[str, Any]
 
 
-def box_iou(a: BoxDict, b: BoxDict) -> float:
-    """2つの 2D ボックスの IoU."""
-    ix1 = max(a["xmin"], b["xmin"])
-    iy1 = max(a["ymin"], b["ymin"])
-    ix2 = min(a["xmax"], b["xmax"])
-    iy2 = min(a["ymax"], b["ymax"])
-    iw = max(0, ix2 - ix1)
-    ih = max(0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    area_a = max(0, a["xmax"] - a["xmin"]) * max(0, a["ymax"] - a["ymin"])
-    area_b = max(0, b["xmax"] - b["xmin"]) * max(0, b["ymax"] - b["ymin"])
-    union = area_a + area_b - inter
-    return inter / union if union > 0 else 0.0
-
-
 def _sort_key(box: BoxDict) -> tuple:
-    """マッチング順を決める.
+    """手修正ボックスの並び順.
 
-    スコアの高い手修正ボックスから処理する。
-    同点のときに結果がぶれないよう、座標も含めて完全に決定的にする。
+    出力の並びを安定させるために使う。座標まで含めて完全に決定的にする。
     """
     score = box.get("score")
     return (
@@ -76,23 +60,17 @@ def merge_manual_boxes(
     predicted_list = list(predicted)
     manual_list = sorted(manual, key=_sort_key)
 
-    used_indices: set[int] = set()
+    # 1 対 1 の貪欲マッチング（common と共有）。
+    # ラベルは見ない: 「car と誤検出された歩行者を pedestrian に直す」
+    # という修正はグループを跨ぐため、ラベル一致を条件にすると効かない
+    matched = greedy_match(
+        manual_list, predicted_list, iou_threshold=iou_threshold
+    )
+    used_indices = set(matched.values())
+
     kept_manual: list[BoxDict] = []
-
     for manual_box in manual_list:
-        best_index = -1
-        best_iou = 0.0
-        for index, pred_box in enumerate(predicted_list):
-            if index in used_indices:
-                continue
-            iou = box_iou(manual_box, pred_box)
-            if iou > best_iou:
-                best_iou, best_index = iou, index
-
-        if best_index >= 0 and best_iou >= iou_threshold:
-            # 置き換え: 対応する推論ボックスを捨て、手修正ボックスを残す
-            used_indices.add(best_index)
-        # 閾値未満でもマッチ相手なしでも、手修正ボックスは残す
+        # 置き換えでも追加でも、手修正ボックスは必ず残す
         kept = dict(manual_box)
         kept["manually_modified"] = True
         kept_manual.append(kept)

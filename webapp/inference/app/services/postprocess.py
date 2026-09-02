@@ -11,22 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
-def iou(a: dict[str, Any], b: dict[str, Any]) -> float:
-    """2つのボックスの IoU."""
-    ix1 = max(a["xmin"], b["xmin"])
-    iy1 = max(a["ymin"], b["ymin"])
-    ix2 = min(a["xmax"], b["xmax"])
-    iy2 = min(a["ymax"], b["ymax"])
-    iw = max(0, ix2 - ix1)
-    ih = max(0, iy2 - iy1)
-    inter = iw * ih
-    if inter == 0:
-        return 0.0
-    area_a = max(0, a["xmax"] - a["xmin"]) * max(0, a["ymax"] - a["ymin"])
-    area_b = max(0, b["xmax"] - b["xmin"]) * max(0, b["ymax"] - b["ymin"])
-    union = area_a + area_b - inter
-    return inter / union if union > 0 else 0.0
+from common.box_ops import box_iou as iou
 
 
 def cross_class_nms(

@@ -115,15 +115,16 @@ RUN groupadd -g ${GID} ${USERNAME} \
 
 # アプリのコード置き場。マウントされるので中身は空でよいが、
 # 所有者を先に合わせておく
-RUN mkdir -p /workspace /derived \
-    && chown -R ${UID}:${GID} /workspace /derived ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
+RUN mkdir -p /workspace /derived /opt/shared \
+    && chown -R ${UID}:${GID} /workspace /derived /opt/shared ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
 
 USER ${USERNAME}
 WORKDIR /workspace
 
 # uvicorn は CWD を sys.path に入れる（--app-dir の既定値が "."）が、
 # 明示しておくとサブプロセスからの import でも確実になる
-ENV PYTHONPATH=/workspace \
+# /opt/shared は共有モジュール（common）の親。compose がマウントする
+ENV PYTHONPATH=/workspace:/opt/shared \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
