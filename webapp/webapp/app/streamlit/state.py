@@ -35,6 +35,13 @@ SAMPLE_IDX = "sel_sample_idx"
 # シーンに紐づくので、シーンを変えたらクリアされる必要がある
 DET2D_JOB_ID = "sel_det2d_job_id"
 
+# 画面に出している検出結果まわり。いずれもシーンに紐づく。
+# DB を正とするので、これらは「今そこに表示している内容」のキャッシュに過ぎない
+DET2D_RESULTS = "sel_det2d_results"        # {sample_data_token: [box, ...]}
+DET2D_PARTIAL_SINCE = "sel_det2d_since"    # 受け取り済みの部分結果の件数
+DET2D_SAVED_JOB_ID = "sel_det2d_saved_job" # 保存済みジョブ（二重保存の防止）
+DET2D_VIEW_RUN_ID = "sel_det2d_view_run"   # 表示に使っている run
+
 # 各推論ステップの実行単位（*Params.id）。ページ間で引き継ぐ
 DET2D_PARAMS_ID = "sel_det2d_params_id"
 TRACKING_PARAMS_ID = "sel_tracking_params_id"
@@ -50,8 +57,12 @@ W_SAMPLE = "_w_sample"
 #     別データセットの scene_token を参照して空の結果になる。
 _CASCADE: dict[str, tuple[str, ...]] = {
     DATASET_ID: (SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
+                 DET2D_RESULTS, DET2D_PARTIAL_SINCE,
+                 DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                  DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     SCENE_TOKEN: (SAMPLE_IDX, DET2D_JOB_ID,
+                  DET2D_RESULTS, DET2D_PARTIAL_SINCE,
+                  DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                   DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     DET2D_PARAMS_ID: (TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     TRACKING_PARAMS_ID: (DEPTH_PARAMS_ID,),
@@ -85,6 +96,8 @@ def clear_downstream(key: str) -> None:
 def clear_all() -> None:
     """全ての選択状態をリセットする."""
     for key in (DATASET_ID, SCENE_TOKEN, SAMPLE_IDX, DET2D_JOB_ID,
+                DET2D_RESULTS, DET2D_PARTIAL_SINCE,
+                DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                 DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID):
         st.session_state.pop(key, None)
 

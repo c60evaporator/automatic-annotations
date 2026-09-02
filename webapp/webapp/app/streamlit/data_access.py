@@ -29,6 +29,10 @@ from app.repositories.dataset import DatasetRepository
 from app.repositories.scene import SceneRepository
 from app.repositories.sensor import SensorRepository
 from app.services.annotation_2d import project_annotations_to_frame
+from app.services.detection2d_service import (
+    list_runs as _list_runs,
+    load_run_boxes as _load_run_boxes,
+)
 
 # 推論結果は頻繁に更新されるため、参照系のキャッシュは短めにする
 CACHE_TTL_SEC = 300
@@ -226,3 +230,17 @@ def list_gt_boxes_2d(
 def clear_caches() -> None:
     """データを書き換えた後に呼ぶ（インポート・削除・推論実行後など）."""
     st.cache_data.clear()
+
+
+# ── 2D 検出 run ──────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_detection_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
+    """シーンの検出 run 一覧（新しい順）."""
+    return _list_runs(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="検出結果を読み込み中...")
+def load_detection_run_boxes(params_id: str) -> dict[str, list[dict[str, Any]]]:
+    """run の検出結果を {sample_data_token: [box, ...]} で返す."""
+    return _load_run_boxes(params_id)

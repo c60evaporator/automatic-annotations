@@ -35,6 +35,12 @@ from app.services.label_service import (
     scaled_score_thresholds,
     validate_label_config,
 )
+from app.services.detection2d_service import (
+    delete_run,
+    get_run,
+    resolve_display_run,
+    save_detection_run,
+)
 from app.services.sample_service import get_skipped_sample_indices
 from app.services.frame_image import get_keyframe_image
 from app.streamlit import state as S
@@ -48,12 +54,15 @@ from app.streamlit.components.det2d_viewer import (
 )
 from app.streamlit.components.waypoint_viewer import render_scene_waypoint_view
 from app.streamlit.data_access import (
+    clear_caches,
     get_dataset,
     get_scene,
+    list_detection_runs,
     list_frames_by_scene,
     list_gt_boxes_2d,
     list_samples,
     list_sensors,
+    load_detection_run_boxes,
 )
 
 # シーン未選択ならここで描画を打ち切る
@@ -78,11 +87,24 @@ if config_problems:
 # ジョブ状態は session_state に置く。
 # job_id はシーンに紐づくので、シーンを変えたら state 側でクリアされる
 JOB_ID = S.DET2D_JOB_ID
-RESULTS = "det2d_results"        # {sample_data_token: [box, ...]}
-PARTIAL_SINCE = "det2d_since"    # 受け取り済みの部分結果の件数
+RESULTS = S.DET2D_RESULTS
+PARTIAL_SINCE = S.DET2D_PARTIAL_SINCE
+SAVED_JOB_ID = S.DET2D_SAVED_JOB_ID
+VIEW_RUN_ID = S.DET2D_VIEW_RUN_ID
 
-st.session_state.setdefault(RESULTS, {})
 st.session_state.setdefault(PARTIAL_SINCE, 0)
+
+# --- 初期表示: DB に保存済みの run から読み込む -------------------------------
+# 優先順は detection2d_service 側に記述（トラッキングの参照先 → 最新の成功 run）。
+# 推論を実行した後は、その結果をそのまま表示し続ける
+if RESULTS not in st.session_state:
+    run_id, reason = resolve_display_run(dataset_id, scene_token)
+    if run_id:
+        st.session_state[RESULTS] = load_detection_run_boxes(run_id)
+        st.session_state[VIEW_RUN_ID] = run_id
+    else:
+        st.session_state[RESULTS] = {}
+        st.session_state[VIEW_RUN_ID] = None
 
 
 param_col, map_col = st.columns([2, 1])
@@ -229,6 +251,36 @@ def _merge_partial(items: list[dict]) -> None:
         store[item["sample_data_token"]] = item.get("boxes", [])
 
 
+def _save_completed_job(job: dict) -> None:
+    """完了したジョブを 1 run として DB に保存する.
+
+    キャンセル・失敗した run も status 付きで残す。
+    「実行したが失敗した」記録が消えると、同じ設定で何度も試すことになる。
+    """
+    try:
+        params_id = save_detection_run(
+            dataset_id, scene_token,
+            job=job,
+            boxes_by_frame=st.session_state[RESULTS],
+            sample_interval=sample_interval,
+            score_threshold=score_thresholds,
+            nms_same_class_ious=nms_same,
+            nms_cross_class_iou=nms_cross,
+            model_name=settings.DET2D_MODEL_NAME,
+            # 手修正は「いま表示している run」のものだけ引き継ぐ。
+            # 全 run から集めると、古いパラメータ時代の修正が混ざる
+            inherit_from_params_id=st.session_state.get(VIEW_RUN_ID),
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"検出結果の保存に失敗しました: {exc}")
+        return
+
+    # 保存した run を「表示中の run」にし、手修正の反映結果を読み直す
+    st.session_state[VIEW_RUN_ID] = params_id
+    clear_caches()
+    st.session_state[RESULTS] = load_detection_run_boxes(params_id)
+
+
 with param_col:
     with st.container(border=True):
         run_col, cancel_col, status_col = st.columns([1, 1, 3])
@@ -287,6 +339,12 @@ with param_col:
             )
 
             if job["status"] in ("succeeded", "failed", "cancelled"):
+                # 二重保存の防止。ポーリングは1秒ごとに走るため、
+                # 完了を複数回検知しうる
+                if st.session_state.get(SAVED_JOB_ID) != job_id:
+                    st.session_state[SAVED_JOB_ID] = job_id
+                    _save_completed_job(job)
+
                 st.session_state.pop(JOB_ID, None)
                 if job["status"] == "failed":
                     st.error(job.get("error") or "推論に失敗しました")
@@ -295,6 +353,55 @@ with param_col:
 
         with status_col:
             progress_area()
+
+# ------------------------------------------------------------------
+# Saved runs
+# ------------------------------------------------------------------
+with param_col:
+    runs = list_detection_runs(dataset_id, scene_token)
+    if runs:
+        with st.expander(f"保存済みの推論結果（{len(runs)} 件）", expanded=False):
+            current = st.session_state.get(VIEW_RUN_ID)
+
+            def _run_label(run: dict) -> str:
+                mark = "★ " if run["id"] == current else ""
+                started = run["started_at"].strftime("%m-%d %H:%M:%S")
+                refs = f" / tracking参照 {run['nbr_tracking_runs']}" if run["nbr_tracking_runs"] else ""
+                return (f"{mark}{started}  [{run['status']}]  "
+                        f"{run['nbr_boxes']} boxes  interval={run['sample_interval']}{refs}")
+
+            options = [r["id"] for r in runs]
+            labels = {r["id"]: _run_label(r) for r in runs}
+            selected_run = st.radio(
+                "表示する run", options,
+                index=options.index(current) if current in options else 0,
+                format_func=lambda rid: labels[rid],
+                key="_w_det2d_run_select",
+            )
+
+            show_col, delete_col = st.columns(2)
+            with show_col:
+                if st.button("この run を表示", width="content",
+                             disabled=selected_run == current):
+                    st.session_state[VIEW_RUN_ID] = selected_run
+                    st.session_state[RESULTS] = load_detection_run_boxes(selected_run)
+                    st.rerun()
+            with delete_col:
+                target = next(r for r in runs if r["id"] == selected_run)
+                if target["nbr_tracking_runs"]:
+                    # この run を消すと、参照している Instance Tracking の結果と
+                    # そこから作られた 3D ボックスまで CASCADE で消える
+                    st.warning(
+                        f"この run は Instance Tracking {target['nbr_tracking_runs']} 件から"
+                        "参照されています。削除すると連鎖して消えます。"
+                    )
+                if st.button("削除", width="content"):
+                    delete_run(selected_run)
+                    if current == selected_run:
+                        st.session_state.pop(RESULTS, None)
+                        st.session_state.pop(VIEW_RUN_ID, None)
+                    clear_caches()
+                    st.rerun()
 
 # ------------------------------------------------------------------
 # Predicted bounding boxes view

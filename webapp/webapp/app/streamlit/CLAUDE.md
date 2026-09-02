@@ -33,6 +33,10 @@
     - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なるDET2D_NMS_SAME_CLASS_IOUSにここで選択した倍率を掛けたもの、別クラス間のbox結合はDET2D_NMS_CROSS_CLASS_IOUにここで選択した倍率を掛けたものとなる
 - param_col下部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /detection2d/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /detection2d/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存します
+    - 推論が完了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。ただし保存前に以下処理を実行
+        - 過去の`detection_2ds`テーブルのレコード
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`detection_2d_params`レコードが` `件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
+    - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
     - 
 - map_col上部に各sampleの位置をwaypointとして地図上にPlotlyで表示し、以下のSelect Sampleスライダで選択中のsampleの位置を強調表示する
 - map_col下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。このスライダはSample Intervalパラメータの間隔に基づく選択したサンプルのリスト（推論もこのサンプルのみ実施される）をselect_sliderで表示する
