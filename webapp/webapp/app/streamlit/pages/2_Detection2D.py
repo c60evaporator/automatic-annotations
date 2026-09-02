@@ -113,21 +113,9 @@ param_col, map_col = st.columns([2, 1])
 # Parameters
 # ------------------------------------------------------------------
 with param_col:
-    with st.container(border=True):
-        st.markdown(
-            """
-            <div style="
-                font-size: 1.4rem;
-                font-weight: 600;
-                margin-top: 0;
-                margin-bottom: 4px;
-                line-height: 1.0;
-            ">
-            Inference Parameters
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    # 既定は畳んでおく。カメラ画像を見るためのスクロール量を減らすのが目的。
+    # 畳んでいてもウィジェットは生成されるので、値は保持される
+    with st.expander("Inference Parameters", expanded=False):
         sample_interval_col, score_threshold_col, nms_threshold_col = st.columns(3)
 
         with sample_interval_col:
@@ -171,32 +159,6 @@ with param_col:
                 st.table(nms_same, border="horizontal", width="content")
             with cross_nms_col:
                 st.text(f"Cross-class NMS IOU: {nms_cross:.3f}")
-
-# ------------------------------------------------------------------
-# Sample selection & map
-# ------------------------------------------------------------------
-with map_col:
-    # 表示順は「地図 → スライダー」だが、地図はスライダーの値に依存する。
-    # Streamlit は上から順に描画するので、先に空のコンテナで場所だけ確保し、
-    # スライダーを読んでから、そのコンテナへ遡って描画する。
-    # （逆順に書くと、スライダーを動かした値が地図に1回遅れて反映される）
-    waypoint_container = st.container()
-
-    default_idx = sample_indices[len(sample_indices) // 2] if sample_indices else 0
-    selected_sample_idx = st.select_slider(
-        "Select Sample",
-        options=sample_indices or [0],
-        value=default_idx,
-    )
-
-    with waypoint_container:
-        render_scene_waypoint_view(
-            dataset_id, dataset["dataroot"], scene["token"],
-            title=scene["name"],
-            highlight_index=selected_sample_idx,
-            height=320,
-            show_sample_info=False,
-        )
 
 # ------------------------------------------------------------------
 # Run / progress
@@ -283,6 +245,12 @@ def _save_completed_job(job: dict) -> None:
 
 with param_col:
     with st.container(border=True):
+        # パラメータ欄を畳んでいても現在値が分かるようにしておく
+        st.caption(
+            f"interval={sample_interval} / "
+            f"score×{score_threshold_ratio:g} / nms×{nms_threshold_ratio:g} / "
+            f"{len(sample_indices)} samples × {n_cameras} cam × {n_groups} grp"
+        )
         run_col, cancel_col, status_col = st.columns([1, 1, 3])
 
         with run_col:
@@ -402,6 +370,31 @@ with param_col:
                         st.session_state.pop(VIEW_RUN_ID, None)
                     clear_caches()
                     st.rerun()
+
+# ------------------------------------------------------------------
+# Sample selection (param_col の一番下)
+# ------------------------------------------------------------------
+with param_col:
+    default_idx = sample_indices[len(sample_indices) // 2] if sample_indices else 0
+    selected_sample_idx = st.select_slider(
+        "Select Sample",
+        options=sample_indices or [0],
+        value=default_idx,
+    )
+
+# ------------------------------------------------------------------
+# Scene map (map_col)
+# ------------------------------------------------------------------
+# 地図はスライダーの値だけに依存する。スライダーを先に読んでから描くので、
+# プレースホルダを挟む必要がない（map_col は表示位置を決めるだけ）
+with map_col:
+    render_scene_waypoint_view(
+        dataset_id, dataset["dataroot"], scene["token"],
+        title=scene["name"],
+        highlight_index=selected_sample_idx,
+        height=320,
+        show_sample_info=False,
+    )
 
 # ------------------------------------------------------------------
 # Predicted bounding boxes view
