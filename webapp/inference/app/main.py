@@ -56,7 +56,11 @@ def register_model_loaders() -> None:
             return Sam2TrackerStub()
 
         from app.models_impl.sam2_tracker import Sam2Tracker
-        return Sam2Tracker(model_id=settings.SAM2_MODEL, device=settings.device)
+        return Sam2Tracker(
+            config_path=settings.SAM2_CONFIG_PATH,
+            checkpoint_path=settings.SAM2_CHECKPOINT_PATH,
+            device=settings.device,
+        )
 
     def load_depth_anything():
         from app.models_impl.depth_anything import DepthAnythingEstimator

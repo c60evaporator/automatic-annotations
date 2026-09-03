@@ -36,8 +36,13 @@ class Settings(BaseSettings):
         "/opt/checkpoints/groundingdino_swinb_cogcoor.pth"
     )
 
-    # --- SAM2 / Depth-Anything-3（未実装）---------------------------------
-    SAM2_MODEL:           str = "facebook/sam2.1-hiera-large"
+    # --- SAM2（公式リポジトリ版）------------------------------------------
+    # config は Hydra の設定名（SAM2 パッケージ内の configs/ から解決される）。
+    # ファイルパスではない点に注意
+    SAM2_CONFIG_PATH: str = "configs/sam2.1/sam2.1_hiera_l.yaml"
+    SAM2_CHECKPOINT_PATH: Path = Path("/opt/checkpoints/sam2.1_hiera_large.pt")
+
+    # --- Depth-Anything-3（未実装）----------------------------------------
     DEPTH_ANYTHING_MODEL: str = "depth-anything/DA3-large"
 
     # GPU や重みが無い環境で UI を動かすためのスタブ切り替え
