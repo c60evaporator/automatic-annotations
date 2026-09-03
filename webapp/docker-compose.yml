@@ -25,6 +25,9 @@ services:
       DERIVED_ROOT: /derived
       SQLITE_PATH: /db/app.db
       INFERENCE_BASE_URL: http://inference:8000
+      # No proxy for connections to local services (inference and webapp containers)
+      NO_PROXY: "localhost,127.0.0.1,inference,webapp"
+      no_proxy: "localhost,127.0.0.1,inference,webapp"
       # /workspace はアプリ本体、/opt/shared は common パッケージの親
       PYTHONPATH: /workspace:/opt/shared
     volumes:
@@ -72,6 +75,17 @@ services:
       DERIVED_ROOT: /derived
       CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
       PYTHONPATH: /workspace:/opt/shared
+      # 実行時プロキシ（Hugging Face の重みや GroundingDINO の config ダウンロード用）。
+      # イメージに焼き込むとURLが永続化されキャッシュも飛ぶため、ここで渡す。
+      # 小文字版は curl/wget など小文字しか見ないツール向け（ビルド時は
+      # BuildKit が両方セットするが、実行時は自動注入されない）。
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      http_proxy: "${HTTP_PROXY:-}"
+      https_proxy: "${HTTPS_PROXY:-}"
+      # No proxy for connections to local services (inference and webapp containers)
+      NO_PROXY: "localhost,127.0.0.1,inference,webapp"
+      no_proxy: "localhost,127.0.0.1,inference,webapp"
     volumes:
       - ./inference:/workspace
       # 共有モジュール（webapp と同じ実体をマウントする）

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         "human.pedestrian.child": "pedestrian",
         "human.pedestrian.construction_worker": "pedestrian",
         "human.pedestrian.police_officer": "pedestrian",
-        "movable_object.trafficcone": "trafficcone",
+        "movable_object.trafficcone": "traffic_cone",
     }
     LABEL_TO_NUSC_CATEGORY: dict[str, str] = {  # 検出ラベル -> nuScenes category
         "car": "vehicle.car",
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         "motorcycle": "vehicle.motorcycle",
         "bicycle": "vehicle.bicycle",
         "pedestrian": "human.pedestrian.adult",
-        "trafficcone": "movable_object.trafficcone",
+        "traffic_cone": "movable_object.trafficcone",
     }
     LABEL_TO_CATEGORY_GROUP: dict[str, str] = {  # 検出ラベル -> カテゴリグループ
         "car": "vehicle",
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
         "bus": "vehicle",
         "trailer": "vehicle",
         "barrier": "road_object",
-        "trafficcone": "road_object",
+        "traffic_cone": "road_object",
         "motorcycle": "two_wheeler",
         "bicycle": "two_wheeler",
         "pedestrian": "pedestrian",
