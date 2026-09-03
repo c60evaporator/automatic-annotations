@@ -73,7 +73,6 @@ services:
     environment:
       DATA_ROOT: /data
       DERIVED_ROOT: /derived
-      CUDA_VISIBLE_DEVICES: "${CUDA_VISIBLE_DEVICES:-0}"
       PYTHONPATH: /workspace:/opt/shared
       # 実行時プロキシ（Hugging Face の重みや GroundingDINO の config ダウンロード用）。
       # イメージに焼き込むとURLが永続化されキャッシュも飛ぶため、ここで渡す。
@@ -111,7 +110,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              # Explicitly specify the device IDs to use to prevent conflicts with other users
+              device_ids: ["${GPU_DEVICE_ID:-0}"]
               capabilities: [gpu]
 
 volumes:
