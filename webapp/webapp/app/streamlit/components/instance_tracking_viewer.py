@@ -46,6 +46,37 @@ INSTANCE_TEXT_MODES = (TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_TRACK)
 # マスクの重ね合わせの濃さ
 MASK_ALPHA = 0.45
 
+# インスタンスの由来（DB の models と同じ値）
+ORIGIN_PROMPT = "prompt"
+ORIGIN_PROPAGATED = "propagated"
+
+
+def split_by_origin(
+    instances: Iterable[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """インスタンスを (prompt 由来, propagated 由来) に分ける."""
+    prompt: list[dict[str, Any]] = []
+    propagated: list[dict[str, Any]] = []
+    for inst in instances:
+        if inst.get("origin") == ORIGIN_PROPAGATED:
+            propagated.append(inst)
+        else:
+            prompt.append(inst)
+    return prompt, propagated
+
+
+def preferred_instances(
+    instances: Iterable[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """通常表示に使うインスタンスを選ぶ.
+
+    区間境界の sample には prompt と propagated の両方があるので、
+    検出器の出力そのものである prompt を優先する。
+    それ以外の sample は propagated しかないのでそのまま返る。
+    """
+    prompt, propagated = split_by_origin(instances)
+    return prompt if prompt else propagated
+
 
 # ── 色 ────────────────────────────────────────────────────────────────────────
 
@@ -226,6 +257,81 @@ def draw_instances(
     return canvas
 
 
+def render_instance_comparison_grid(
+    items: list[dict[str, Any]],
+    *,
+    color_mode: str = COLOR_MODE_LABEL,
+    box_mode: str = BOX_MODE_INSTANCE,
+    text_mode: str = TEXT_MODE_TRACK,
+    enabled_keys: set[str] | None = None,
+    mask_alpha: float = MASK_ALPHA,
+    left_label: str = "Propagated",
+    right_label: str = "Prompt",
+) -> None:
+    """1 カメラにつき 1 行、左に伝播マスク・右に推論マスクを並べる.
+
+    items の各要素は render_instance_grid と同じ形に加えて
+    "propagated_instances" / "prompt_instances" を持つ。
+
+    左（伝播）にはプロンプトボックスを描かない。
+    プロンプトは右側の入力であり、左に重ねると
+    「伝播がどれだけずれたか」が読み取れなくなる。
+    """
+    for item in items:
+        left_col, right_col = st.columns(2)
+        with left_col:
+            _render_one(
+                item, item.get("propagated_instances") or [],
+                f"{item['channel']} [{left_label}]",
+                color_mode=color_mode,
+                # 伝播側にプロンプト枠は出さない
+                box_mode=(BOX_MODE_NONE if box_mode == BOX_MODE_PROMPT else box_mode),
+                text_mode=text_mode, enabled_keys=enabled_keys,
+                prompt_boxes=None, mask_alpha=mask_alpha, pending=False,
+            )
+        with right_col:
+            _render_one(
+                item, item.get("prompt_instances") or [],
+                f"{item['channel']} [{right_label}]",
+                color_mode=color_mode, box_mode=box_mode,
+                text_mode=text_mode, enabled_keys=enabled_keys,
+                prompt_boxes=item.get("prompt_boxes"),
+                mask_alpha=mask_alpha, pending=item.get("pending", False),
+            )
+
+
+def _render_one(
+    item: dict[str, Any],
+    instances: Sequence[dict[str, Any]],
+    caption: str,
+    *,
+    color_mode: str,
+    box_mode: str,
+    text_mode: str,
+    enabled_keys: set[str] | None,
+    prompt_boxes: Sequence[dict[str, Any]] | None,
+    mask_alpha: float,
+    pending: bool,
+) -> None:
+    """画像 1 枚を描画する（グリッド共通）."""
+    image = item.get("image")
+    if image is None:
+        st.warning(f"{item['channel']}: 画像が見つかりません")
+        return
+
+    shown = filter_instances(
+        instances, color_mode=color_mode, enabled_keys=enabled_keys
+    )
+    caption += "（推論待ち）" if pending else f"  {len(shown)} instances"
+
+    rendered = draw_instances(
+        image, shown,
+        color_mode=color_mode, box_mode=box_mode, text_mode=text_mode,
+        prompt_boxes=prompt_boxes, mask_alpha=mask_alpha,
+    )
+    st.image(rendered, caption=caption, width="stretch")
+
+
 def render_instance_grid(
     items: list[dict[str, Any]],
     *,
@@ -245,28 +351,10 @@ def render_instance_grid(
     cols = st.columns(columns)
     for i, item in enumerate(items):
         with cols[i % columns]:
-            image = item.get("image")
-            if image is None:
-                st.warning(f"{item['channel']}: 画像が見つかりません")
-                continue
-
-            shown = filter_instances(
-                item.get("instances") or [],
-                color_mode=color_mode,
+            _render_one(
+                item, item.get("instances") or [], item["channel"],
+                color_mode=color_mode, box_mode=box_mode, text_mode=text_mode,
                 enabled_keys=enabled_keys,
-            )
-            caption = item["channel"]
-            if item.get("pending"):
-                caption += "（推論待ち）"
-            else:
-                caption += f"  {len(shown)} instances"
-
-            rendered = draw_instances(
-                image, shown,
-                color_mode=color_mode,
-                box_mode=box_mode,
-                text_mode=text_mode,
                 prompt_boxes=item.get("prompt_boxes"),
-                mask_alpha=mask_alpha,
+                mask_alpha=mask_alpha, pending=item.get("pending", False),
             )
-            st.image(rendered, caption=caption, width="stretch")

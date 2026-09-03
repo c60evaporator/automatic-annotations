@@ -33,6 +33,8 @@ from app.core.config import get_settings
 from app.core.jobs import Job, JobManager, get_job_manager
 from app.core.logging import get_logger
 from app.schemas.instance_tracking import (
+    ORIGIN_PROMPT,
+    ORIGIN_PROPAGATED,
     InstanceTrackingRequest,
     JobResponse,
     TrackedInstance,
@@ -110,8 +112,10 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
     total_time = 0.0
     next_track_id = 0
     all_frames: list[TrackingFrameResult] = []
-    # キーフレームの結果だけを保持する（sweep は伝播にのみ使う）
-    results_by_frame: dict[str, TrackingFrameResult] = {}
+    # キーフレームの結果だけを保持する（sweep は伝播にのみ使う）。
+    # キーは (sample_data_token, origin)。区間境界の sample には
+    # propagated（前区間からの伝播）と prompt（今回の推論）の両方が入る
+    results_by_frame: dict[tuple[str, str], TrackingFrameResult] = {}
 
     with model_registry.use_gpu("sam2") as tracker:
         for channel, channel_segments in segments.items():
@@ -173,7 +177,13 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
                     for i, inst in enumerate(head_instances)
                 }
 
-                for frame, instances in zip(seg_frames, per_frame):
+                for frame_position, (frame, instances) in enumerate(
+                    zip(seg_frames, per_frame)
+                ):
+                    # 区間の先頭はプロンプト由来、それ以降は伝播由来。
+                    # 次の区間の先頭が同じ sample を prompt として上書きせず、
+                    # 別レコードとして併存する
+                    origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
                     resolved: list[TrackedInstance] = []
                     for inst in instances:
                         track_id = local_to_track.get(inst["local_id"])
@@ -196,6 +206,7 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
                         continue
 
                     result = TrackingFrameResult(
+                        origin=origin,
                         sample_data_token=frame.sample_data_token,
                         sample_token=frame.sample_token,
                         sample_idx=frame.sample_idx,
@@ -205,8 +216,7 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
                         inference_time=round(elapsed, 3),
                         error=error,
                     )
-                    # 区間境界は次の区間のプロンプト側で上書きする
-                    results_by_frame[frame.sample_data_token] = result
+                    results_by_frame[(frame.sample_data_token, origin)] = result
 
                 # 次の区間へ渡す境界インスタンス（この区間の最後のキーフレーム）
                 previous_boundary = []
@@ -221,13 +231,17 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
                     break
 
                 # 完了した区間ぶんを UI へ流す
-                for frame in seg_frames:
-                    result = results_by_frame.get(frame.sample_data_token)
-                    if result is not None and frame.is_key_frame:
+                for frame_position, frame in enumerate(seg_frames):
+                    if not frame.is_key_frame:
+                        continue
+                    origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
+                    result = results_by_frame.get((frame.sample_data_token, origin))
+                    if result is not None:
                         job.append_partial(result.model_dump())
 
     all_frames = sorted(
-        results_by_frame.values(), key=lambda r: (r.channel, r.sample_idx)
+        results_by_frame.values(),
+        key=lambda r: (r.channel, r.sample_idx, r.origin),
     )
     num_instances = sum(len(f.instances) for f in all_frames)
     track_ids_all = {

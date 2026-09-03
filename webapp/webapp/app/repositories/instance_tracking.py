@@ -17,6 +17,7 @@ from sqlalchemy import delete, desc, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from app.models.ann_intermediate import (
+    INSTANCE_ORIGIN_PROMPT,
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
     DepthEstimationParams,
@@ -128,6 +129,7 @@ class InstanceTrackingRepository:
                     "instance_tracking_2d_params_id": params_id,
                     "detection_2d_id": inst.get("detection_2d_id"),
                     "track_id": str(inst["track_id"]),
+                    "origin": inst.get("origin", INSTANCE_ORIGIN_PROMPT),
                     "label": inst["label"],
                     "mask_rle": inst["mask_rle"],
                     "mask_area": int(inst.get("mask_area", 0)),
@@ -306,6 +308,7 @@ class InstanceTrackingRepository:
             InstanceTracking2D.xmax, InstanceTracking2D.ymax,
             InstanceTracking2D.detection_2d_id,
             InstanceTracking2D.manually_modified,
+            InstanceTracking2D.origin,
         ]
         if include_mask:
             columns.append(InstanceTracking2D.mask_rle)
@@ -326,6 +329,7 @@ class InstanceTrackingRepository:
                 "xmax": r["xmax"], "ymax": r["ymax"],
                 "detection_2d_id": r["detection_2d_id"],
                 "manually_modified": r["manually_modified"],
+                "origin": r["origin"],
             }
             if include_mask:
                 item["mask_rle"] = r["mask_rle"]

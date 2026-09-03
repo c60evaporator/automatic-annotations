@@ -29,6 +29,7 @@ from app.services.instance_tracking_service import (
     resolve_display_run,
     save_tracking_run,
 )
+from app.services.sample_service import get_skipped_sample_indices
 from app.services.sweep_service import MAX_SWEEPS_PER_SAMPLE
 from app.streamlit import state as S
 from app.streamlit.components.det2d_viewer import render_label_legend
@@ -36,6 +37,10 @@ from app.streamlit.components.instance_tracking_viewer import (
     BOX_MODE_INSTANCE,
     BOX_MODE_PROMPT,
     BOX_MODES,
+    ORIGIN_PROMPT,
+    preferred_instances,
+    render_instance_comparison_grid,
+    split_by_origin,
     COLOR_MODE_LABEL,
     COLOR_MODE_TRACK,
     COLOR_MODES,
@@ -80,6 +85,8 @@ st.session_state.setdefault(PARTIAL_SINCE, 0)
 # 表示オプションは正規キーに退避する。
 # 「Run Inference」の st.rerun() で、その下のウィジェットは生成されず
 # 状態が破棄されるため
+OPT_COMPARE, W_COMPARE = "tracking_compare", "_w_tracking_compare"
+W_SAMPLE = "_w_tracking_sample"
 OPT_BOX, W_BOX = "tracking_box_mode", "_w_tracking_box_mode"
 OPT_COLOR, W_COLOR = "tracking_color_mode", "_w_tracking_color_mode"
 OPT_TEXT, W_TEXT = "tracking_text_mode", "_w_tracking_text_mode"
@@ -176,9 +183,21 @@ with param_col:
 
 
 def _merge_partial(items: list[dict]) -> None:
+    """部分結果を取り込む.
+
+    区間境界の sample は prompt と propagated の 2 件が別々に届く。
+    フレーム単位で代入すると後から来たほうで上書きされてしまうので、
+    由来をインスタンスに焼き込み、同じ由来のぶんだけ差し替える。
+    """
     store = st.session_state[RESULTS]
     for item in items:
-        store[item["sample_data_token"]] = item.get("instances", [])
+        token = item["sample_data_token"]
+        origin = item.get("origin", ORIGIN_PROMPT)
+        tagged = [
+            {**inst, "origin": origin} for inst in item.get("instances", [])
+        ]
+        kept = [i for i in store.get(token, []) if i.get("origin") != origin]
+        store[token] = kept + tagged
 
 
 def _save_completed_job(job: dict) -> None:
@@ -347,14 +366,42 @@ with param_col:
 # ------------------------------------------------------------------
 # Sample selection (param_col の一番下)
 # ------------------------------------------------------------------
+# 表示中の run の sample_interval。プロンプトを与えた sample を復元するのに使う
+view_run_info = next(
+    (r for r in list_tracking_runs(dataset_id, scene_token)
+     if r["id"] == st.session_state.get(VIEW_RUN_ID)),
+    None,
+)
+display_interval = (
+    view_run_info["sample_interval"] if view_run_info
+    else selected_prompt["sample_interval"]
+)
+# プロンプトを与えた sample（＝伝播と推論の両方が存在する sample）
+interval_sample_indices = get_skipped_sample_indices(len(samples), display_interval)
+
+# 比較表示のときは interval 対象の sample しか選べない。
+# それ以外の sample には伝播結果しか無く、左右に並べる意味がないため
+compare_propagation = S.sticky_value(OPT_COMPARE, False)
+
 with param_col:
-    # Detection2D と違い、全 sample を選べる。
+    # Detection2D と違い、既定では全 sample を選べる。
     # トラッキングは interval の間の sample にも結果が出るため
+    sample_options = (
+        interval_sample_indices if compare_propagation
+        else list(range(len(samples)))
+    ) or [0]
+    # NOTE: key を付けずに毎回変わる value= を渡すと、Streamlit が
+    # ウィジェットを別物とみなして選択が失われる。
+    # key で同一性を固定し、初期値・範囲外の補正は session_state 側で行う
+    if (W_SAMPLE not in st.session_state
+            or st.session_state[W_SAMPLE] not in sample_options):
+        # 比較表示の ON/OFF で選択肢が入れ替わるため、範囲外なら中央へ寄せる
+        st.session_state[W_SAMPLE] = sample_options[len(sample_options) // 2]
     selected_sample_idx = st.select_slider(
-        "Select Sample",
-        options=list(range(len(samples))) or [0],
-        value=len(samples) // 2 if samples else 0,
+        "Select Sample", options=sample_options, key=W_SAMPLE,
     )
+    if compare_propagation:
+        st.caption("比較表示中のため、プロンプトを与えた sample のみ選択できます")
 
 # ------------------------------------------------------------------
 # Scene map (map_col)
@@ -394,15 +441,42 @@ for sensor in cam_sensors:
         dataset_id, dataset["dataroot"], selected_sample["token"], sensor["token"]
     )
     token = frame["token"] if frame else None
+    all_instances = results.get(token, [])
+    # 区間境界の sample には prompt / propagated の両方が入っている
+    prompt_instances, propagated_instances = split_by_origin(all_instances)
     items.append({
         "channel": sensor["channel"],
         "image": image,
-        "instances": results.get(token, []),
+        # 通常表示は prompt を優先（検出器の出力そのものなので伝播より信頼できる）
+        "instances": preferred_instances(all_instances),
+        "prompt_instances": prompt_instances,
+        "propagated_instances": propagated_instances,
         "prompt_boxes": prompt_boxes_by_frame.get(token, []),
         "pending": token not in results,
     })
 
+# 比較できるのは、伝播と推論の両方が存在する sample のみ
+can_compare = selected_sample_idx in interval_sample_indices
+
 with opt_col:
+    # 前の区間からの伝播マスクと、今回の区間の推論マスクを左右に並べる。
+    # 両方が存在するのはプロンプトを与えた sample だけなので、
+    # それ以外を選んでいる間は操作できないようにする
+    S.init_sticky(W_COMPARE, OPT_COMPARE, False)
+    checked = st.checkbox(
+        "Compare propagation", key=W_COMPARE, disabled=not can_compare,
+        on_change=S.sync_sticky, args=(W_COMPARE, OPT_COMPARE),
+        help=("前の区間から伝播したマスク（左）と、今回の区間の推論マスク（右）"
+              "を並べて比較する。プロンプトを与えた sample でのみ有効"),
+    )
+    # NOTE: 比較できない sample に移ったときに、ウィジェットの key へ
+    # False を書き込んで自動解除してはいけない。
+    # 書き込みとウィジェット状態が競合し、その後のチェック操作が
+    # 反映されなくなる。使う側で can_compare と AND を取れば足りる。
+    compare_propagation = checked and can_compare
+    if not can_compare:
+        st.caption("プロンプトを与えた sample を選ぶと比較できます")
+
     S.init_sticky(W_BOX, OPT_BOX, BOX_MODE_PROMPT)
     box_mode = st.radio(
         "Show boxes", BOX_MODES, key=W_BOX,
@@ -421,7 +495,15 @@ with opt_col:
 
     # 凡例は Color の選択に合わせて、ラベル別か Track ID 別かが切り替わる。
     # キーの体系が変わるのでチェック状態も別管理にする（key_prefix を分ける）
-    keys, counts = legend_entries(items, color_mode)
+    # 凡例は実際に描くインスタンスから作る。
+    # 比較表示では左右の両方を対象にする
+    legend_items = (
+        [{**item, "instances": (item["prompt_instances"]
+                                + item["propagated_instances"])}
+         for item in items]
+        if compare_propagation else items
+    )
+    keys, counts = legend_entries(legend_items, color_mode)
     if keys:
         enabled_keys = render_label_legend(
             keys,
@@ -441,13 +523,22 @@ with opt_col:
         st.caption("このサンプルには表示できるインスタンスがありません")
 
 with view_col:
-    render_instance_grid(
-        items,
-        columns=2,
-        color_mode=color_mode,
-        box_mode=box_mode,
-        text_mode=text_mode,
-        enabled_keys=enabled_keys,
-    )
+    if compare_propagation:
+        render_instance_comparison_grid(
+            items,
+            color_mode=color_mode,
+            box_mode=box_mode,
+            text_mode=text_mode,
+            enabled_keys=enabled_keys,
+        )
+    else:
+        render_instance_grid(
+            items,
+            columns=2,
+            color_mode=color_mode,
+            box_mode=box_mode,
+            text_mode=text_mode,
+            enabled_keys=enabled_keys,
+        )
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])

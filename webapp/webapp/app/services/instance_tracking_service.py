@@ -132,8 +132,8 @@ def save_tracking_run(
     status = _JOB_STATUS_MAP.get(job.get("status", ""), RUN_STATUS_FAILED)
 
     num_tracks = len({
-        (token, inst["track_id"])
-        for token, insts in instances_by_frame.items()
+        inst["track_id"]
+        for insts in instances_by_frame.values()
         for inst in insts
     })
 

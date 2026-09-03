@@ -99,7 +99,19 @@ class TrackedInstance(BaseModel):
     is_prompt_frame: bool = False
 
 
+# インスタンスの由来（webapp の models と同じ値を使う）
+ORIGIN_PROMPT = "prompt"            # その sample のプロンプトから得た結果
+ORIGIN_PROPAGATED = "propagated"    # 前の区間から伝播してきた結果
+
+
 class TrackingFrameResult(BaseModel):
+    """1 フレーム × 1 由来 の結果.
+
+    区間境界の sample は、前の区間からの伝播（propagated）と
+    今回のプロンプト（prompt）の 2 件が返る。
+    比較表示で「伝播がどれだけずれたか」を見るために両方残す。
+    """
+    origin: str = ORIGIN_PROMPT
     sample_data_token: str
     sample_token: str
     sample_idx: int

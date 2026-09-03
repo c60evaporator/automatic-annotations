@@ -56,6 +56,15 @@ RUN_STATUSES = (
     RUN_STATUS_CANCELLED,
 )
 
+# インスタンスの由来。区間境界の sample には両方が存在する:
+#   prompt     … その sample のプロンプト（Detection2D のボックス）から得た結果
+#   propagated … 前の区間から伝播してきた結果
+# 通常表示では prompt を優先し、比較表示では左右に並べる。
+# 両方を残さないと「伝播がどれだけずれたか」を後から確認できない。
+INSTANCE_ORIGIN_PROMPT = "prompt"
+INSTANCE_ORIGIN_PROPAGATED = "propagated"
+INSTANCE_ORIGINS = (INSTANCE_ORIGIN_PROMPT, INSTANCE_ORIGIN_PROPAGATED)
+
 # トラッキングの track_id 引き継ぎ判定に使う IoU の計算方法
 IOU_METHOD_BOX = "box"     # マスクの外接矩形どうしの IoU
 IOU_METHOD_MASK = "mask"   # マスクどうしの IoU
@@ -282,6 +291,13 @@ class InstanceTracking2D(Base):
             "instance_tracking_2d_params_id",
             "track_id",
         ),
+        # 由来で絞った取得（比較表示・通常表示の切り替え）
+        Index(
+            "ix_instance_tracking_2ds_params_origin",
+            "instance_tracking_2d_params_id",
+            "sample_data_token",
+            "origin",
+        ),
     )
     # Columns
     id:         Mapped[str] = mapped_column(String, primary_key=True)
@@ -302,6 +318,12 @@ class InstanceTracking2D(Base):
     )
     # 実行単位内で一意なトラック識別子（カメラ channel を跨がない前提）
     track_id: Mapped[str] = mapped_column(String, nullable=False)
+    # インスタンスの由来（INSTANCE_ORIGIN_*）。
+    # 区間境界の sample には prompt と propagated の両方の行が入る
+    origin: Mapped[str] = mapped_column(
+        String, nullable=False,
+        server_default=text(f"'{INSTANCE_ORIGIN_PROMPT}'"),
+    )
     label:    Mapped[str] = mapped_column(String, nullable=False)
     # マスク本体は COCO RLE 形式で保持: {"size": [h, w], "counts": "..."}
     # NOTE: 生の bool 配列は SQLite に載せないこと。RLE でもシーン全体で数十MB規模に
