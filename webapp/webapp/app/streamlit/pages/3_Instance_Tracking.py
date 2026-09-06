@@ -15,6 +15,7 @@ import streamlit as st
 
 from app.core.config import get_settings
 from app.models.ann_intermediate import IOU_LABEL_MATCHES, IOU_METHODS
+from app.services.camera_service import order_cameras
 from app.services.inference_client import (
     InferenceServerError,
     cancel_instance_tracking_job,
@@ -68,7 +69,9 @@ dataset_id, scene_token = S.require_scene()
 dataset = get_dataset(dataset_id)
 scene = get_scene(dataset_id, scene_token)
 samples = list_samples(dataset_id, scene_token)
-cam_sensors = list_sensors(dataset_id, modality="camera")
+# 表示順は Settings.CAM_DISPLAY_ORDER で決める。
+# DB からは channel 名の昇順（CAM_BACK が先頭）で返るため
+cam_sensors = order_cameras(list_sensors(dataset_id, modality="camera"))
 n_cameras = len(cam_sensors)
 settings = get_settings()
 

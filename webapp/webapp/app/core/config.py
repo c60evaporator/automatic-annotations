@@ -81,6 +81,21 @@ class Settings(BaseSettings):
         "pedestrian": "pedestrian",
     }
 
+    # --- 表示 -------------------------------------------------------------
+    # カメラ画像の表示順（channel 名）。
+    # DB から取る順序は channel 名の昇順（CAM_BACK が先頭）になるため、
+    # 確認頻度の高い CAM_FRONT を先頭に置く。
+    # 画像は 2 列グリッドに並ぶので、先頭 2 つが 1 行目になる。
+    # ここに無い channel は末尾へ回る（channel 名順）
+    CAM_DISPLAY_ORDER: list[str] = [
+        "CAM_FRONT",
+        "CAM_FRONT_LEFT",
+        "CAM_FRONT_RIGHT",
+        "CAM_BACK_LEFT",
+        "CAM_BACK_RIGHT",
+        "CAM_BACK",
+    ]
+
     # --- 2D Object Detection ---------------------------------------------
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
