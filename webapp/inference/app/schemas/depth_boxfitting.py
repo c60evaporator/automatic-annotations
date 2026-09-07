@@ -31,6 +31,8 @@ class SensorFrame(BaseModel):
     channel: str
     sample_idx: int = 0
     timestamp: int = 0
+    # LiDAR の sweep 統合で、キーフレーム（座標系の基準）を見分けるのに使う
+    is_key_frame: bool = True
     width: int | None = None
     height: int | None = None
     # 座標変換に使う。webapp が DB から解決したものをそのまま渡す
@@ -55,7 +57,11 @@ class BoxFittingRequest(BaseModel):
     output_dir: str
 
     camera_frames: list[SensorFrame] = Field(min_length=1)
+    # sample ごとのキーフレーム（座標系の基準）
     lidar_frames: list[SensorFrame] = Field(default_factory=list)
+    # 統合対象の LiDAR フレーム（sweep 含む）。
+    # webapp 側が num_lidar_sweeps に応じて選び、時刻順で渡す
+    lidar_sweeps: list[SensorFrame] = Field(default_factory=list)
     instances: list[InstanceRef] = Field(default_factory=list)
 
     # LiDAR をフィッティングに使うか（読み込みと地面除去は常に行う）

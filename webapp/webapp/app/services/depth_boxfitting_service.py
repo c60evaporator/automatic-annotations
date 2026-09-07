@@ -40,6 +40,7 @@ from app.services.geometry.transform import (
     yaw_to_quaternion,
 )
 from app.services.label_service import label_to_nusc_category
+from app.services.sweep_service import select_lidar_sweeps
 
 logger = get_logger(__name__)
 
@@ -95,9 +96,13 @@ def build_boxfitting_payload(
         )
         sensor_repo = SensorRepository(session)
         frames = sensor_repo.list_frames_by_scene(scene_token, keyframe_only=True)
+        # LiDAR は sweep も要る（キーフレームだけでは統合できない）
+        all_frames = sensor_repo.list_frames_by_scene(scene_token, keyframe_only=False)
 
     camera_frames = [f for f in frames if f["modality"] == "camera"]
     lidar_frames = [f for f in frames if f["modality"] == "lidar"]
+    # sample ごとに直近 num_lidar_sweeps 件（末尾がキーフレーム）
+    sweeps_by_sample = select_lidar_sweeps(all_frames, num_lidar_sweeps)
 
     def frame_payload(frame: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -107,6 +112,7 @@ def build_boxfitting_payload(
             "channel": frame["channel"],
             "sample_idx": frame.get("sample_idx", 0),
             "timestamp": frame["timestamp"],
+            "is_key_frame": frame.get("is_key_frame", True),
             "width": frame["width"],
             "height": frame["height"],
             "ego_pose": frame["ego_pose"],
@@ -133,6 +139,10 @@ def build_boxfitting_payload(
         "dataroot": dataroot,
         "camera_frames": [frame_payload(f) for f in camera_frames],
         "lidar_frames": [frame_payload(f) for f in lidar_frames],
+        "lidar_sweeps": [
+            frame_payload(f)
+            for group in sweeps_by_sample.values() for f in group
+        ],
         "instances": instances_payload,
         "use_lidar": use_lidar,
         "num_lidar_sweeps": num_lidar_sweeps,

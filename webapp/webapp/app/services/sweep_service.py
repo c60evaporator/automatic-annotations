@@ -48,6 +48,48 @@ def select_uniform_sweep_indices(num_frames: int, num_sweeps: int) -> list[int]:
     return sorted(i for i in indices if 0 <= i < num_frames)
 
 
+def select_recent_sweep_indices(num_frames: int, num_sweeps: int) -> list[int]:
+    """LiDAR 用の sweep 選択（"recent" 方式）.
+
+    キーフレームで終わる直近 num_sweeps フレームを取る。
+    カメラの "uniform" と違い等間隔にしないのは、LiDAR は
+    「キーフレーム時点の点群を密にする」のが目的で、
+    古い sweep ほど自車が動いて位置がずれるため。
+
+    例: num_frames=5, num_sweeps=3 -> [2, 3, 4]
+    """
+    if num_frames <= 0:
+        return []
+    if num_sweeps < 1:
+        raise ValueError("num_sweeps must be at least 1")
+    return list(range(max(0, num_frames - num_sweeps), num_frames))
+
+
+def select_lidar_sweeps(
+    frames: list[dict[str, Any]], num_sweeps: int
+) -> dict[str, list[dict[str, Any]]]:
+    """sample ごとに、統合対象の LiDAR フレームを古い順で返す.
+
+    Args:
+        frames: list_frames_by_scene(keyframe_only=False) の結果
+
+    Returns:
+        {sample_token: [フレーム, ...]}（末尾がキーフレーム）
+    """
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for frame in frames:
+        if frame.get("modality") != "lidar":
+            continue
+        grouped[frame["sample_token"]].append(frame)
+
+    selected: dict[str, list[dict[str, Any]]] = {}
+    for sample_token, group in grouped.items():
+        group.sort(key=lambda f: f["timestamp"])
+        indices = select_recent_sweep_indices(len(group), num_sweeps)
+        selected[sample_token] = [group[i] for i in indices]
+    return selected
+
+
 def select_tracking_frames(
     frames: list[dict[str, Any]], num_sweeps: int
 ) -> list[dict[str, Any]]:

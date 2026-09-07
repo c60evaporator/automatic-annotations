@@ -117,17 +117,61 @@ class BoxFittingPipeline:
     # ── 2. LiDAR ──────────────────────────────────────────────────────────
 
     def load_lidar(
-        self, frame: dict[str, Any], output_dir: Path, **kwargs: Any
+        self,
+        frame: dict[str, Any],
+        output_dir: Path,
+        *,
+        dataroot: Path | str = "",
+        sweeps: list[dict[str, Any]] | None = None,
+        num_sweeps: int = 1,
+        **_: Any,
     ) -> dict[str, Any]:
-        """LiDAR の統合と地面除去（未実装）.
+        """sweep を統合し、地面判定を付けて .npz として保存する.
 
-        UI の「Show Raw LiDAR / Show Ground」は、この結果が無いと
-        表示できない。実装するまでは空の結果を返し、
-        呼び出し側が「ファイル無し」として扱えるようにする。
+        Args:
+            frame: キーフレームの LiDAR sample_data（座標系の基準）
+            sweeps: 統合対象のフレーム（古い順、末尾がキーフレーム）。
+                省略時はキーフレームのみ
+
+        use_lidar に関係なく常に呼ぶ。UI が比較用に生 LiDAR と
+        地面を表示できるようにするため。
+
+        保存は **ego 座標**。深度由来の点群と同じ座標系に揃えておかないと、
+        UI で重ねたときに位置が合わない。
         """
-        raise NotImplementedError(
-            "LiDAR の統合と地面除去は未実装です（Use LiDAR=False で実行してください）"
+        from app.services.lidar_ops import (
+            lidar_to_ego,
+            merge_sweeps_with_ground,
         )
+
+        target_sweeps = sweeps or [frame]
+        calib = frame["calibrated_sensor"]
+        # Patchwork++ は sensor_height を基準に地面を探すので、
+        # 実際の取り付け高さを渡す（既定値のままだと車種差で外れる）
+        sensor_height = float(calib["translation"][2])
+
+        points_lidar, ground_mask = merge_sweeps_with_ground(
+            target_sweeps, Path(dataroot), sensor_height=sensor_height
+        )
+        points_ego = lidar_to_ego(points_lidar, calib)
+
+        path = output_dir / "lidar" / f"{frame['sample_token']}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            path,
+            points=points_ego.astype(np.float32),
+            ground_mask=ground_mask,
+        )
+
+        return {
+            "sample_token": frame["sample_token"],
+            "sample_data_token": frame["sample_data_token"],
+            "pointcloud_path": str(path.relative_to(output_dir.parent.parent)),
+            "coordinate_frame": "ego",
+            "num_sweeps": len(target_sweeps),
+            "num_points": int(points_ego.shape[0]),
+            "num_ground_points": int(ground_mask.sum()),
+        }
 
     # ── 3. インスタンスごとの点群 ────────────────────────────────────────
 

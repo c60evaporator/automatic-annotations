@@ -25,7 +25,11 @@ def resolve_derived_path(relative_path: str) -> Path:
     """DERIVED_ROOT 相対のパスを実パスへ解決する.
 
     DB 由来の値をそのまま結合するため、範囲外を指していないか検証する。
+    失敗した推論の行はパスが空文字なので、それも弾く
+    （空のまま結合すると DERIVED_ROOT 自体を指してしまう）。
     """
+    if not relative_path:
+        raise DerivedPathError("パスが空です（推論が失敗した行の可能性）")
     root = get_settings().DERIVED_ROOT.resolve()
     path = (root / relative_path).resolve()
     if not path.is_relative_to(root):
@@ -39,7 +43,11 @@ def load_depth_map(relative_path: str) -> np.ndarray | None:
     保存は元画像の 1/2 解像度なので、内部パラメータを使う側で
     同じ倍率にスケールする必要がある（DepthEstimation.depth_width 参照）。
     """
-    path = resolve_derived_path(relative_path)
+    try:
+        path = resolve_derived_path(relative_path)
+    except DerivedPathError as exc:
+        logger.warning("invalid derived path: %s", exc)
+        return None
     if not path.exists():
         logger.warning("depth map not found: %s", path)
         return None
@@ -58,7 +66,11 @@ def load_lidar_pointcloud(
     地面マスクを一緒に保存しているのは、webapp に Patchwork++ が無く
     地面判定を再現できないため。
     """
-    path = resolve_derived_path(relative_path)
+    try:
+        path = resolve_derived_path(relative_path)
+    except DerivedPathError as exc:
+        logger.warning("invalid derived path: %s", exc)
+        return None
     if not path.exists():
         logger.warning("lidar pointcloud not found: %s", path)
         return None

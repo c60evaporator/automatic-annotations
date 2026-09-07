@@ -93,13 +93,22 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                 job.set_progress(done, message=f"深度推定 {channel}")
 
         # --- 2. LiDAR の統合と地面除去 ----------------------------------
+        # sweep は sample ごとにまとめ、時刻順（末尾がキーフレーム）にする
+        sweeps_by_sample: dict[str, list[Any]] = defaultdict(list)
+        for sweep in req.lidar_sweeps:
+            sweeps_by_sample[sweep.sample_token].append(sweep)
+        for group in sweeps_by_sample.values():
+            group.sort(key=lambda f: f.timestamp)
+
         for frame in sorted(req.lidar_frames, key=lambda f: f.timestamp):
             if job.cancel_requested():
                 break
             try:
+                group = sweeps_by_sample.get(frame.sample_token) or [frame]
                 result = pipeline.load_lidar(
                     frame.model_dump(), output_dir,
                     dataroot=dataroot,
+                    sweeps=[f.model_dump() for f in group],
                     num_sweeps=req.num_lidar_sweeps,
                     stub_delay_sec=req.stub_delay_sec,
                 )

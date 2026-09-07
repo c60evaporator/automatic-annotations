@@ -51,8 +51,10 @@ class BoxFittingStub:
         frame: dict[str, Any],
         output_dir: Path,
         *,
+        dataroot: Path | str = "",
         downscale: float = 0.5,
         stub_delay_sec: float | None = None,
+        **_: Any,
     ) -> dict[str, Any]:
         """1 カメラフレームの深度を推定し、.npz として保存する.
 
@@ -95,8 +97,11 @@ class BoxFittingStub:
         frame: dict[str, Any],
         output_dir: Path,
         *,
+        dataroot: Path | str = "",
+        sweeps: list[dict[str, Any]] | None = None,
         num_sweeps: int = 1,
         stub_delay_sec: float | None = None,
+        **_: Any,
     ) -> dict[str, Any]:
         """sweep を統合し、地面判定を付けて .npz として保存する.
 
@@ -108,7 +113,9 @@ class BoxFittingStub:
         rng = np.random.default_rng(
             int(hashlib.md5(frame["sample_token"].encode()).hexdigest()[:8], 16)
         )
-        count = STUB_LIDAR_POINTS_PER_SWEEP * max(1, num_sweeps)
+        # 実際に渡された sweep 数に合わせる（本実装と件数の意味を揃える）
+        effective_sweeps = len(sweeps) if sweeps else max(1, num_sweeps)
+        count = STUB_LIDAR_POINTS_PER_SWEEP * effective_sweeps
         points = np.column_stack([
             rng.uniform(-40, 60, count),
             rng.uniform(-30, 30, count),
@@ -126,7 +133,7 @@ class BoxFittingStub:
             "sample_data_token": frame["sample_data_token"],
             "pointcloud_path": str(path.relative_to(output_dir.parent.parent)),
             "coordinate_frame": "ego",
-            "num_sweeps": num_sweeps,
+            "num_sweeps": effective_sweeps,
             "num_points": int(count),
             "num_ground_points": int(ground_mask.sum()),
         }

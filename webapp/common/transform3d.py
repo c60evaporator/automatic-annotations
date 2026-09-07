@@ -37,6 +37,20 @@ def make_transform(quaternion, translation) -> np.ndarray:
     return transform
 
 
+def invert_transform(transform: np.ndarray) -> np.ndarray:
+    """4x4 同次変換行列の逆変換を返す.
+
+    回転部が直交行列であることを利用するため、
+    一般の逆行列計算より安定かつ高速。
+    """
+    transform = np.asarray(transform, dtype=np.float64)
+    rotation = transform[:3, :3]
+    inverted = np.eye(4, dtype=np.float64)
+    inverted[:3, :3] = rotation.T
+    inverted[:3, 3] = -rotation.T @ transform[:3, 3]
+    return inverted
+
+
 def transform_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
     """点群に 4x4 同次変換を適用する（先頭 3 列のみ）."""
     points = np.asarray(points, dtype=np.float64)
