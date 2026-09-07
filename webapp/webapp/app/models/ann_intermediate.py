@@ -65,6 +65,20 @@ INSTANCE_ORIGIN_PROMPT = "prompt"
 INSTANCE_ORIGIN_PROPAGATED = "propagated"
 INSTANCE_ORIGINS = (INSTANCE_ORIGIN_PROMPT, INSTANCE_ORIGIN_PROPAGATED)
 
+# Box Fitting の結果状態。
+# 「行が無い」と「実行したが作れなかった」を区別するために持つ。
+# 点数不足なのか画角外なのかが分かれば、閾値を下げれば拾えるか判断できる
+BOXFIT_STATUS_FITTED = "fitted"                  # 3D ボックスを生成した
+BOXFIT_STATUS_TOO_FEW_POINTS = "too_few_points"  # 点数が閾値に満たない
+BOXFIT_STATUS_NO_POINTS = "no_points"            # マスク内に点が無い
+BOXFIT_STATUS_FAILED = "failed"                  # フィッティングが例外・破綻
+BOXFIT_STATUSES = (
+    BOXFIT_STATUS_FITTED,
+    BOXFIT_STATUS_TOO_FEW_POINTS,
+    BOXFIT_STATUS_NO_POINTS,
+    BOXFIT_STATUS_FAILED,
+)
+
 # トラッキングの track_id 引き継ぎ判定に使う IoU の計算方法
 IOU_METHOD_BOX = "box"     # マスクの外接矩形どうしの IoU
 IOU_METHOD_MASK = "mask"   # マスクどうしの IoU
@@ -358,6 +372,11 @@ class InstanceTracking2D(Base):
     detection_2d: Mapped["Detection2D | None"] = relationship(
         back_populates="instance_tracking_2ds"
     )
+    box_fittings: Mapped[list["BoxFitting3D"]] = relationship(
+        back_populates="instance_tracking_2d",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 # =============================================================================
@@ -390,19 +409,39 @@ class DepthEstimationParams(Base):
         index=True,
     )
     model_name: Mapped[str] = mapped_column(String, nullable=False)  # 'depth-anything-3-*' 等
-    sample_interval: Mapped[int] = mapped_column(Integer, nullable=False)
-    # 深度のスケール合わせ方式: 'lidar_lstsq' | 'lidar_median' | 'none'
-    depth_alignment_method: Mapped[str] = mapped_column(String, nullable=False)
-    # LiDAR 点群と推定点群の混合方式: 'lidar_only' | 'depth_only' | 'mixed'
-    point_fusion_mode: Mapped[str] = mapped_column(String, nullable=False)
-    # ボックス当てはめ方式: 'pca' | 'l_shape' | 'min_area_rect'
-    box_fitting_method: Mapped[str] = mapped_column(String, nullable=False)
-    # マスク内点群のフィルタ設定
-    min_points_per_box:  Mapped[int]   = mapped_column(Integer, nullable=False)
-    outlier_percentile:  Mapped[float] = mapped_column(Float, nullable=False)
-    max_depth:           Mapped[float] = mapped_column(Float, nullable=False)  # [m] これ以遠は棄却
-    # カテゴリごとの寸法事前分布など、方式依存の追加設定
-    extra_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 処理する sample の間隔。Box Fitting は全 sample を対象にするので通常 1。
+    # プロンプト間隔（4 等）は instance_tracking_2d_params 側を辿れば分かる
+    sample_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+    # LiDAR 点群を「フィッティングに使うか」。
+    # 読み込みと地面除去は use_lidar に関係なく常に実施する
+    # （UI が比較用に生 LiDAR と地面を表示できるようにするため）
+    use_lidar: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+    # 1 sample あたりに統合する LiDAR sweep 数（1 ならキーフレームのみ）
+    num_lidar_sweeps: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+
+    # 以降は UI のタブに対応した設定群。
+    # アルゴリズムが固まりきっていないため、個別カラムではなく JSON で持つ。
+    # Detection2DParams が閾値を dict で持っているのと同じ流儀で、
+    # パラメータが増減してもマイグレーションが要らない
+    # NOTE: server_default を付けること。付けないと NOT NULL の列を
+    # 既存行のあるテーブルへ追加できず、マイグレーションが失敗する
+    mask_params: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    depth_params: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    lidar_params: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    box_fitting_params: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
     # 実行結果メタ
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_boxes:      Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -422,6 +461,16 @@ class DepthEstimationParams(Base):
         back_populates="depth_estimation_params"
     )
     depth_estimations: Mapped[list["DepthEstimation"]] = relationship(
+        back_populates="depth_estimation_params",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    lidar_pointclouds: Mapped[list["LidarPointcloud"]] = relationship(
+        back_populates="depth_estimation_params",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    box_fittings: Mapped[list["BoxFitting3D"]] = relationship(
         back_populates="depth_estimation_params",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -460,8 +509,13 @@ class DepthEstimation(Base):
     depth_estimation_params_id: Mapped[str] = mapped_column(
         ForeignKey("depth_estimation_params.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # 深度マップ .npz のパス（settings.DATA_ROOT からの相対パス）
+    # 深度マップ .npz のパス（settings.DERIVED_ROOT からの相対パス）
     depth_path: Mapped[str] = mapped_column(String, nullable=False)
+    # 保存した深度マップの解像度。容量を抑えるため元画像の 1/2 で保存する。
+    # 読み出し側が内部パラメータをスケールし直すのに必要（記録しないと
+    # 保存倍率を変えたときに過去 run の点群がずれる）
+    depth_width:  Mapped[int | None] = mapped_column(Integer, nullable=True)
+    depth_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # LiDAR に合わせたスケール補正係数（depth_metric = raw * scale + shift）
     scale: Mapped[float | None] = mapped_column(Float, nullable=True)
     shift: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -478,4 +532,153 @@ class DepthEstimation(Base):
     sample_data: Mapped["SampleData"] = relationship(back_populates="depth_estimations")
     depth_estimation_params: Mapped["DepthEstimationParams"] = relationship(
         back_populates="depth_estimations"
+    )
+
+
+class LidarPointcloud(Base):
+    """LiDAR 点群の統合結果（1行 = 1 sample）.
+
+    キーフレームと直近 sweep を統合し、キーフレームの ego 座標へ揃えたもの。
+    点群本体と地面マスクは .npz でディスクに保存し、パスのみ保持する
+    （10 sweep で 34 万点あり、DB に入れるサイズではない）。
+
+    webapp 側に Patchwork++ が無く、地面判定を再現できないため、
+    表示用に判定結果ごと保存しておく必要がある。
+    """
+    __tablename__ = "lidar_pointclouds"
+    __table_args__ = (
+        Index(
+            "ix_lidar_pointclouds_params_sample",
+            "depth_estimation_params_id",
+            "sample_token",
+        ),
+    )
+    # Columns
+    id:         Mapped[str] = mapped_column(String, primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sample_token: Mapped[str] = mapped_column(
+        ForeignKey("samples.token", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 統合の基準にしたキーフレームの LiDAR sample_data（座標系の基準）
+    sample_data_token: Mapped[str] = mapped_column(
+        ForeignKey("sample_data.token", ondelete="CASCADE"), nullable=False, index=True
+    )
+    depth_estimation_params_id: Mapped[str] = mapped_column(
+        ForeignKey("depth_estimation_params.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # .npz のパス（settings.DERIVED_ROOT からの相対パス）。
+    # points: (N, 3) float32、ground_mask: (N,) bool を含む
+    pointcloud_path: Mapped[str] = mapped_column(String, nullable=False)
+    # 保存した点群の座標系。'ego' 固定だが、後から LiDAR 座標へ変えたときに
+    # 過去 run を誤って解釈しないよう明示的に持つ
+    coordinate_frame: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'ego'")
+    )
+    num_sweeps:       Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    num_points:       Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    num_ground_points: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # Relationships
+    dataset: Mapped["Dataset"] = relationship()
+    depth_estimation_params: Mapped["DepthEstimationParams"] = relationship(
+        back_populates="lidar_pointclouds"
+    )
+
+
+class BoxFitting3D(Base):
+    """3D ボックスフィッティングの結果（1行 = 1インスタンス）.
+
+    最終成果物である 3D ボックスは SampleAnnotation（global 座標、source='auto'）
+    に入る。こちらはその中間出力と来歴を持つ:
+      - フィッティングに使った点群（間引き済み）
+      - クロージング後のマスク
+      - 生成できなかった場合の理由
+
+    ボックスを作れなかったインスタンスも行として残す。
+    そうしないと「なぜ 3D ボックスが無いのか」を UI で説明できない。
+    """
+    __tablename__ = "box_fittings"
+    __table_args__ = (
+        # フレーム単位の取得（画像に重ねる表示）
+        Index("ix_box_fittings_params_sample_data",
+              "depth_estimation_params_id", "sample_data_token"),
+        # トラック単位の取得（時系列の確認）
+        Index("ix_box_fittings_params_track",
+              "depth_estimation_params_id", "track_id"),
+    )
+    # Columns
+    id:         Mapped[str] = mapped_column(String, primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    depth_estimation_params_id: Mapped[str] = mapped_column(
+        ForeignKey("depth_estimation_params.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # 由来となったトラッキングのインスタンス（マスクと track_id の供給元）
+    instance_tracking_2d_id: Mapped[str] = mapped_column(
+        ForeignKey("instance_tracking_2ds.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # フレーム単位で引くための冗長キー（トラッキング行を辿らずに済む）
+    sample_data_token: Mapped[str] = mapped_column(
+        ForeignKey("sample_data.token", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # 生成した 3D ボックス。作れなかった場合は NULL
+    sample_annotation_token: Mapped[str | None] = mapped_column(
+        ForeignKey("sample_annotations.token", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    track_id: Mapped[str] = mapped_column(String, nullable=False)
+    label:    Mapped[str] = mapped_column(String, nullable=False)
+
+    # クロージング処理後のマスク（COCO 非圧縮 RLE）。
+    # webapp に OpenCV も scipy も無く再計算できないため保存する
+    mask_rle_closed: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # --- 点群（ego 座標、ボクセル間引き済み）-------------------------------
+    # {"points": [[x, y, z], ...]} の形。表示用に上限を設けて保存する。
+    # 元のファイルを消しても過去 run を可視化できるよう、座標を直接持つ
+    points_depth_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    points_lidar_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 間引き前の実点数。信頼度の判断にはこちらを使う
+    # （間引き後の点数を使うと、上限で頭打ちになって判断できない）
+    num_points_depth: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    num_points_lidar: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # DA3 点群を LiDAR に合わせる際の補正（points_metric = raw * scale + shift）
+    depth_align_scale: Mapped[float | None] = mapped_column(Float, nullable=True)
+    depth_align_shift: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # --- フィッティング結果（ego 座標）------------------------------------
+    # SampleAnnotation は global 座標なので、デバッグのたびに ego へ戻すのを避ける
+    center_ego: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [x, y, z]
+    size_wlh:   Mapped[list | None] = mapped_column(JSON, nullable=True)  # [w, l, h]
+    yaw_ego:    Mapped[float | None] = mapped_column(Float, nullable=True)  # [rad]
+    fitting_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 結果状態（BOXFIT_STATUS_* のいずれか）
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text(f"'{BOXFIT_STATUS_FITTED}'")
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    manually_modified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    # Relationships
+    dataset: Mapped["Dataset"] = relationship()
+    depth_estimation_params: Mapped["DepthEstimationParams"] = relationship(
+        back_populates="box_fittings"
+    )
+    instance_tracking_2d: Mapped["InstanceTracking2D"] = relationship(
+        back_populates="box_fittings"
     )

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         "human.pedestrian.child": "pedestrian",
         "human.pedestrian.construction_worker": "pedestrian",
         "human.pedestrian.police_officer": "pedestrian",
-        "movable_object.trafficcone": "traffic_cone",
+        "movable_object.trafficcone": "trafficcone",
     }
     LABEL_TO_NUSC_CATEGORY: dict[str, str] = {  # 検出ラベル -> nuScenes category
         "car": "vehicle.car",
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
         "motorcycle": "vehicle.motorcycle",
         "bicycle": "vehicle.bicycle",
         "pedestrian": "human.pedestrian.adult",
-        "traffic_cone": "movable_object.trafficcone",
+        "trafficcone": "movable_object.trafficcone",
     }
     LABEL_TO_CATEGORY_GROUP: dict[str, str] = {  # 検出ラベル -> カテゴリグループ
         "car": "vehicle",
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
         "bus": "vehicle",
         "trailer": "vehicle",
         "barrier": "road_object",
-        "traffic_cone": "road_object",
+        "trafficcone": "road_object",
         "motorcycle": "two_wheeler",
         "bicycle": "two_wheeler",
         "pedestrian": "pedestrian",
@@ -134,6 +134,53 @@ class Settings(BaseSettings):
     TRACKING_MAX_RUNS_PER_SCENE: int = 10
     TRACKING_MODEL_NAME: str = "sam2.1_hiera_large"
     TRACKING_STUB_DELAY_SEC: float | None = 0.05
+
+    # --- Depth Estimation & Box Fitting ------------------------------------
+    DEPTH_MODEL_NAME: str = "depth-anything-3-large"
+    # 深度マップの保存倍率。1/2 にすると容量は 1/4（1 run 約 565MB → 141MB）
+    DEPTH_MAP_DOWNSCALE: float = 0.5
+    # 保持する run 数。派生ファイルが 1 run 約 280MB あるため少なめにする
+    DEPTH_MAX_RUNS_PER_SCENE: int = 3
+    # DB に保存するインスタンス点群の上限（ボクセル間引き後）
+    BOXFIT_STORED_POINTS_MAX: int = 500
+    # Plotly へ渡す点数の上限。超えると転送量と描画が重くなる
+    POINTCLOUD_DISPLAY_MAX_POINTS: int = 50_000
+
+    # マスクのクロージング（General タブ）
+    MASK_DILATION_DEFAULT: int = 5
+    MASK_DILATION_MAX: int = 31
+    MASK_EROSION_DEFAULT: int = 5
+    MASK_EROSION_MAX: int = 31
+
+    # 深度点群のフィルタ（Depth Estimation タブ）
+    DEPTH_ROR_NB_POINTS_DEFAULT: int = 8
+    DEPTH_ROR_NB_POINTS_MAX: int = 50
+    DEPTH_ROR_RADIUS_DEFAULT: float = 0.5
+    DEPTH_ROR_RADIUS_MAX: float = 5.0
+    DEPTH_DBSCAN_EPS_DEFAULT: float = 0.5
+    DEPTH_DBSCAN_EPS_MAX: float = 5.0
+    DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 10
+    DEPTH_DBSCAN_MIN_SAMPLES_MAX: int = 100
+
+    # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）
+    LIDAR_NUM_SWEEPS_DEFAULT: int = 5
+    LIDAR_MIN_POINTS_DEFAULT: int = 10
+    LIDAR_MIN_POINTS_MAX: int = 200
+    LIDAR_ROR_NB_POINTS_DEFAULT: int = 4
+    LIDAR_ROR_NB_POINTS_MAX: int = 50
+    LIDAR_ROR_RADIUS_DEFAULT: float = 0.8
+    LIDAR_ROR_RADIUS_MAX: float = 5.0
+    LIDAR_DBSCAN_EPS_DEFAULT: float = 0.8
+    LIDAR_DBSCAN_EPS_MAX: float = 5.0
+    LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
+    LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
+
+    # 点群ビューの既定表示
+    SHOW_RAW_LIDAR: bool = False
+    SHOW_RAW_LIDAR_GROUND: bool = False
+    SHOW_RAW_DEPTH_POINTCLOUD: bool = False
+
+    BOXFIT_STUB_DELAY_SEC: float | None = 0.02
 
     # スタブ推論の1回あたりの待ち時間（本実装に差し替えたら None にする）
     DET2D_STUB_DELAY_SEC: float | None = 0.05

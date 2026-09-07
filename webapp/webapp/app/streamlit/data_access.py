@@ -33,6 +33,13 @@ from app.services.detection2d_service import (
     list_runs as _list_runs,
     load_run_boxes as _load_run_boxes,
 )
+from app.services.depth_boxfitting_service import (
+    list_input_tracking_runs as _list_input_tracking_runs,
+    list_runs as _list_boxfit_runs,
+    load_box_fittings as _load_box_fittings,
+    load_depth_estimations as _load_depth_estimations,
+    load_lidar_pointclouds as _load_lidar_pointclouds,
+)
 from app.services.instance_tracking_service import (
     list_prompt_runs as _list_prompt_runs,
     list_runs as _list_tracking_runs,
@@ -284,3 +291,53 @@ def load_tracking_run_instances(
 def list_tracking_track_ids(params_id: str) -> list[dict[str, Any]]:
     """run に含まれる track の一覧（凡例・色分け用）."""
     return _list_track_ids(params_id)
+
+
+# ── Depth / Box Fitting run ─────────────────────────────────────────────────
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_boxfitting_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
+    """シーンの Box Fitting run 一覧（新しい順）."""
+    return _list_boxfit_runs(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_input_tracking_runs(
+    dataset_id: str, scene_token: str
+) -> list[dict[str, Any]]:
+    """入力に選べる Instance Tracking run（成功したもののみ）."""
+    return _list_input_tracking_runs(dataset_id, scene_token)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def load_depth_estimations(params_id: str) -> dict[str, dict[str, Any]]:
+    """{sample_data_token: 深度推定の情報}."""
+    return _load_depth_estimations(params_id)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def load_lidar_pointclouds(params_id: str) -> dict[str, dict[str, Any]]:
+    """{sample_token: LiDAR 統合点群の情報}."""
+    return _load_lidar_pointclouds(params_id)
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="Box Fitting の結果を読み込み中...")
+def load_box_fittings(
+    params_id: str,
+    sample_data_tokens: tuple[str, ...] | None = None,
+    *,
+    include_points: bool = False,
+    include_mask: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """{sample_data_token: [Box Fitting 結果, ...]}.
+
+    点群は既定で読まない。1 run で数十 MB になるため、
+    点群ビュー以外では include_points=False のままにする。
+    キャッシュキーにするため、対象は tuple で受け取る。
+    """
+    return _load_box_fittings(
+        params_id,
+        sample_data_tokens=list(sample_data_tokens) if sample_data_tokens else None,
+        include_points=include_points,
+        include_mask=include_mask,
+    )
