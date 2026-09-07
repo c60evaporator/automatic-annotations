@@ -49,6 +49,14 @@ TRACKING_PARTIAL_SINCE = "sel_tracking_since"
 TRACKING_SAVED_JOB_ID = "sel_tracking_saved_job"
 TRACKING_VIEW_RUN_ID = "sel_tracking_view_run"
 
+# Depth Estimation & Box Fitting ページの状態
+BOXFIT_JOB_ID = "sel_boxfit_job_id"
+BOXFIT_PENDING_RUN_ID = "sel_boxfit_pending_run"  # 推論前に作成した run
+BOXFIT_RESULTS = "sel_boxfit_results"             # {"depth":[], "lidar":[], "box":[]}
+BOXFIT_PARTIAL_SINCE = "sel_boxfit_since"
+BOXFIT_SAVED_JOB_ID = "sel_boxfit_saved_job"
+BOXFIT_VIEW_RUN_ID = "sel_boxfit_view_run"
+
 # 各推論ステップの実行単位（*Params.id）。ページ間で引き継ぐ
 DET2D_PARAMS_ID = "sel_det2d_params_id"
 TRACKING_PARAMS_ID = "sel_tracking_params_id"
@@ -68,12 +76,16 @@ _CASCADE: dict[str, tuple[str, ...]] = {
                  DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                  TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
                  TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
+                 BOXFIT_JOB_ID, BOXFIT_PENDING_RUN_ID, BOXFIT_RESULTS,
+                 BOXFIT_PARTIAL_SINCE, BOXFIT_SAVED_JOB_ID, BOXFIT_VIEW_RUN_ID,
                  DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     SCENE_TOKEN: (SAMPLE_IDX, DET2D_JOB_ID,
                   DET2D_RESULTS, DET2D_PARTIAL_SINCE,
                   DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                   TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
                   TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
+                  BOXFIT_JOB_ID, BOXFIT_PENDING_RUN_ID, BOXFIT_RESULTS,
+                  BOXFIT_PARTIAL_SINCE, BOXFIT_SAVED_JOB_ID, BOXFIT_VIEW_RUN_ID,
                   DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     DET2D_PARAMS_ID: (TRACKING_PARAMS_ID, DEPTH_PARAMS_ID),
     TRACKING_PARAMS_ID: (DEPTH_PARAMS_ID,),
@@ -111,6 +123,8 @@ def clear_all() -> None:
                 DET2D_SAVED_JOB_ID, DET2D_VIEW_RUN_ID,
                 TRACKING_JOB_ID, TRACKING_RESULTS, TRACKING_PARTIAL_SINCE,
                 TRACKING_SAVED_JOB_ID, TRACKING_VIEW_RUN_ID,
+                BOXFIT_JOB_ID, BOXFIT_PENDING_RUN_ID, BOXFIT_RESULTS,
+                BOXFIT_PARTIAL_SINCE, BOXFIT_SAVED_JOB_ID, BOXFIT_VIEW_RUN_ID,
                 DET2D_PARAMS_ID, TRACKING_PARAMS_ID, DEPTH_PARAMS_ID):
         st.session_state.pop(key, None)
 

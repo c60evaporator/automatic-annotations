@@ -7,7 +7,8 @@
 |main.py|データセットを選択する（DATASET_IDをセッションに保持）|
 |pages/1_Scene_Selection.py|シーンを選択する（SCENE_TOKENをセッションに保持）|
 |pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出|
-|pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出|
+|pages/3_Instance_Tracking.py|2_Detection2D.pyで検出したボックスをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得|
+|pages/4_Depth_Boxfitting.py|Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionして3D bounding boxを割り当てる|
 
 ## 各ページの仕様
 ### main.py
@@ -32,22 +33,24 @@
     - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なるDET2D_DEFAULT_SCORE_THRESHOLDSにここで選択した倍率を掛けたものとなる
     - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`Settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`Settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /detection2d/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /detection2d/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
-- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存します
+- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存する
     - 推論が完了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。ただし過去に手作業で修正したバウンディングボックスがあれば優先して使用するため、保存前に以下処理をsample_data_tokenごと（Sample＆カメラごと）に実行
         - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
         - マッチングしたIoUが閾値（`Settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
         - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
         - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`detection_2d_params`レコードが`Settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`instance_tracking_2d_params`から参照されていない`detection_2d_params`レコードが`Settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `detection_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、「このrunを表示」ボタンを押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える。
+- `detection_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。選択中のレコードが参照している`instance_tracking_2d_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
+    - 「削除」ボタン: 押すと選択した`detection_2d_params`テーブルのレコードと、CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される。CASCADEで紐づくInstance Tracking、Depth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。このスライダはSample Intervalパラメータの間隔に基づく選択したサンプルのリスト（推論もこのサンプルのみ実施される）をselect_sliderで表示する
 - map_colに各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する（選択中sample強調表示以外は1_Scene_Selection.py画面で使用したコンポーネントと同じものを使用する）
 - 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像と「推論バウンディングボックス」（定義は後述）を表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
     - Show boxesチェックボックス: チェックすると画像にバウンディングボックスを重ねて表示し、チェックしていないと画像のみを表示する
     - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
-        - チェックしている場合: チェックしていないと2列3行で6カメラを表示し推論バウンディングボックスを重ねる
-        - チェックしていない場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthのバウンディングボックスを、右側の画像には推論バウンディングボックスを重ねて表示
+        - チェックしていない場合: 2列3行で6カメラを表示し推論バウンディングボックスを重ねる
+        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthのバウンディングボックスを、右側の画像には推論バウンディングボックスを重ねて表示
     - Min scoreスライダ: 選択したscoreを超えたバウンディングボックスのみを表示
     - チェックボックス付きlabel凡例: チェックしているlabelのバウンディングボックスのみを表示。この凡例は選択中のsampleのバウンディングボックスに存在するlabelのみ表示。一括チェックする「全て」ボタンと、一括チェック解除する「解除」ボタンも設置
     - Box textラジオボタン: 画像上でバウンディングボックスの上に表示する文字の種類を指定する。以下の選択肢を持つ
@@ -60,3 +63,44 @@
     - 表示対象の変更方法: 手動操作を行わなければ上記のように表示対象が決まるが、前述のparam_col中央下部のexpanderで「このrunを表示」ボタンを押すと、ラジオボタンで選択した`detection_2d_params`テーブルのレコードのものに切り替わる
 
 ### 3_Instance_Tracking.py
+- SAM2を用いて、与えたラベルの2Dバウンディングボックスを検出する画面
+- 画面上部はparam_col, map_colで左右に分割
+- param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
+    - Box Prompt: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブル内の`status='succeeded'`のレコードをラジオボタン付きでリスト表示すれば良さそう。デフォルトでは`started_at`が最新のものを選択
+   - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`Settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`Settings.SWEEPS_PER_SAMPLE`を上限としたnumber_inputで良さそう
+   - IoU Threshold: トラッキングはDetection2DのSample Intervalごとにプロンプトを与えて実行するが、前のプロンプトから伝播したインスタンスと、次のプロンプトで推論されたインスタンス同士で貪欲マッチングを実施し、IoUがこのIoU Threshold以上の伝播インスタンスが存在すればこの伝播インスタンスのtrack_idを引き継ぎ、存在しなければ新たなtrack_idを割り当てる。デフォルト値`Settings.DEFAULT_TRACKING_IOU_THRESHOLD`
+   - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択。”Box”, “Mask”のselectboxで良さそう。デフォルトは”Box”
+   - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するか。”Label”, “Category Group”, “None”のselectboxで良さそう
+- 推論container: Detection2D画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
+- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
+- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
+    - 推論が完了したら、即時に自動保存
+        - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
+        - マッチングしたIoUが閾値（`Settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
+        - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
+        - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`Settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
+    - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
+- `instance_tracking_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
+    - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。CASCADEで紐づくDepth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
+- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。Detection2D画面と異なり、全てのSampleを選択できるようにする（トラッキングはIntervalの間のフレームにも実行されるため）。Sample選択だとキーフレーム以外は選択できなくなるが、これで特に問題ない（キーフレーム以外のフレームは推論のトラッキング伝播には使用するが、結果自体は使用しないため表示できなくとも良い）
+- map_colにはDetection2D画面と同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
+- 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
+    - Compare propagation: 前のSample Intervalからの伝播インスタンスマスクと、今回のSample Intervalの推論インスタンスマスクを比較して表示するためのモード。チェックの有無により以下のように表示が変わる
+        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる
+        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合、ボックスは表示しない）。右側の画像には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
+    - Show boxesラジオボタン: 画像上でのバウンディングボックスの表示方法を指定する。以下の選択肢を持つ（デフォルトはPrompt）
+        - Prompt: プロンプトとして与えたbox（Sample Intervalで選ばれたSampleでしか表示されないことになる）
+        - Instance: インスタンスマスクの外接矩形（全Sampleにおいて表示される）
+        - None: バウンディングボックスを表示しない
+    - Colorラジオボタン: マスクとバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+        - Label: ラベルで色分け
+        - Track ID: Track IDで色分け
+    - Instance textラジオボタン: 画像上でインスタンスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
+        - None: 何も表示しない
+        - Label: ラベル文字を表示（文字色はマスクの色と一致）
+        - Track ID: Track IDを表示（文字色はマスクの色と一致）
+    - 凡例のリスト表示: Colorで選択した色に応じてチェックボックス付き凡例をリスト表示（レイアウトはDetection2D画面のものを踏襲）
+
+### 4_Depth_Boxfitting.py

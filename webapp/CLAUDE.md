@@ -7,7 +7,7 @@ NuScenes datasetをDBに読み込み、推論サーバーでAIモデルによる
 - DB: SQLite（`webapp/app/models`フォルダにあるSQL Alchemy形式スキーマを使用する）
 - Data: ホスト側のフォルダ（環境変数`HOST_DATA_ROOT`で指定）にnuscenesデータセットを格納してコンテナにマウント。メタデータを初期化時にDatabaseに読み込み、画像、点群データはローカルフォルダから直接読込
 - 推論サーバー: 以下3種類の推論をパイプライン的に実施。FastAPIでトリガーと結果を返すREST APIを提供
-  1. 2D Object Detection: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出
+  1. Detection2D: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出
   2. Instance-Tracking: 1で検出したbounding boxesをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得
   3. Depth Estimation & Box Fitting: Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionして3D bounding boxを割り当て
 - 以下サービスをDockerコンテナで構成
