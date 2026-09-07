@@ -66,6 +66,7 @@ def build_boxfitting_payload(
     scene_token: str,
     dataroot: str,
     *,
+    params_id: str,
     tracking_run_id: str,
     use_lidar: bool,
     num_lidar_sweeps: int,
@@ -141,8 +142,11 @@ def build_boxfitting_payload(
         "box_fitting_params": box_fitting_params or {},
         # 保存する点群の上限（間引き後）。推論サーバー側で間引いて返す
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
-        # 派生ファイルの出力先（推論サーバーも /derived を共有マウントしている）
-        "output_dir": str(Path("boxfitting")),
+        # 派生ファイルの出力先（推論サーバーも /derived を共有マウントしている）。
+        # run を先に作って id を確定させてから投げるので、
+        # 推論サーバーは run 専用のディレクトリへ直接書ける
+        "params_id": params_id,
+        "output_dir": f"boxfitting/{params_id}",
         "depth_downscale": settings.DEPTH_MAP_DOWNSCALE,
         "stub_delay_sec": stub_delay_sec,
     }
@@ -150,14 +154,10 @@ def build_boxfitting_payload(
 
 # ── 保存 ──────────────────────────────────────────────────────────────────────
 
-def save_boxfitting_run(
+def create_pending_run(
     dataset_id: str,
     scene_token: str,
     *,
-    job: dict[str, Any],
-    depth_estimations: list[dict[str, Any]],
-    lidar_pointclouds: list[dict[str, Any]],
-    box_fittings: list[dict[str, Any]],
     tracking_run_id: str,
     use_lidar: bool,
     num_lidar_sweeps: int,
@@ -167,13 +167,15 @@ def save_boxfitting_run(
     box_fitting_params: dict[str, Any] | None = None,
     model_name: str = "",
 ) -> str:
-    """完了したジョブの結果を 1 run として保存する."""
-    settings = get_settings()
-    status = _JOB_STATUS_MAP.get(job.get("status", ""), RUN_STATUS_FAILED)
+    """推論を投げる前に run を作成して id を返す（status='running'）.
 
+    深度マップと LiDAR 点群は推論サーバーが DERIVED_ROOT へ直接書くため、
+    書き込み先ディレクトリ名になる params_id を先に確定させる必要がある。
+    完了後に finalize_run() で結果と最終状態を書き込む。
+    """
+    settings = get_settings()
     with session_scope() as session:
-        repo = DepthBoxFittingRepository(session)
-        params_id = repo.create_run(
+        return DepthBoxFittingRepository(session).create_run(
             dataset_id, scene_token,
             instance_tracking_2d_params_id=tracking_run_id,
             model_name=model_name or settings.DEPTH_MODEL_NAME,
@@ -183,8 +185,28 @@ def save_boxfitting_run(
             depth_params=depth_params,
             lidar_params=lidar_params,
             box_fitting_params=box_fitting_params,
-            status=status,
         )
+
+
+def finalize_run(
+    dataset_id: str,
+    scene_token: str,
+    params_id: str,
+    *,
+    job: dict[str, Any],
+    depth_estimations: list[dict[str, Any]],
+    lidar_pointclouds: list[dict[str, Any]],
+    box_fittings: list[dict[str, Any]],
+) -> int:
+    """完了したジョブの結果を、作成済みの run へ書き込む.
+
+    Returns:
+        生成した SampleAnnotation の件数。
+    """
+    status = _JOB_STATUS_MAP.get(job.get("status", ""), RUN_STATUS_FAILED)
+
+    with session_scope() as session:
+        repo = DepthBoxFittingRepository(session)
         n_depth = repo.save_depth_estimations(params_id, dataset_id, depth_estimations)
         n_lidar = repo.save_lidar_pointclouds(params_id, dataset_id, lidar_pointclouds)
         n_box = repo.save_box_fittings(params_id, dataset_id, box_fittings)
@@ -199,20 +221,19 @@ def save_boxfitting_run(
         )
 
     logger.info(
-        "saved boxfitting run %s: depth=%d lidar=%d box=%d status=%s",
+        "finalized boxfitting run %s: depth=%d lidar=%d box=%d status=%s",
         params_id, n_depth, n_lidar, n_box, status,
     )
 
+    created = 0
     if status == RUN_STATUS_SUCCEEDED:
         created = materialize_annotations(dataset_id, params_id)
         logger.info("materialized %d annotations for run %s", created, params_id)
 
-    # 上限を超えた古い run を削除（派生ファイルも消す）
     pruned = prune_runs(dataset_id, scene_token)
     if pruned:
         logger.info("pruned %d old runs", len(pruned))
-
-    return params_id
+    return created
 
 
 # ── SampleAnnotation の生成 ───────────────────────────────────────────────────

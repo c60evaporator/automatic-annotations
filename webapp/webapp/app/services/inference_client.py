@@ -99,3 +99,21 @@ def get_instance_tracking_job(job_id: str, since: int = 0) -> dict[str, Any]:
 def cancel_instance_tracking_job(job_id: str) -> dict[str, Any]:
     return _request("DELETE", f"/instance-tracking/jobs/{job_id}",
                     timeout=POLL_TIMEOUT_SEC)
+
+
+# ── Depth Estimation & Box Fitting ───────────────────────────────────────────
+
+def submit_boxfitting(payload: dict[str, Any]) -> dict[str, Any]:
+    """Depth Estimation & Box Fitting ジョブを登録する."""
+    return _request("POST", "/depth-boxfitting/jobs",
+                    timeout=SUBMIT_TIMEOUT_SEC, json=payload)
+
+
+def get_boxfitting_job(job_id: str, since: int = 0) -> dict[str, Any]:
+    return _request("GET", f"/depth-boxfitting/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC, params={"since": since})
+
+
+def cancel_boxfitting_job(job_id: str) -> dict[str, Any]:
+    return _request("DELETE", f"/depth-boxfitting/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC)

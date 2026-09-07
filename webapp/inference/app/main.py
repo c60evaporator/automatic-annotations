@@ -63,6 +63,10 @@ def register_model_loaders() -> None:
         )
 
     def load_depth_anything():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.boxfitting_stub import BoxFittingStub
+            return BoxFittingStub()
+
         from app.models_impl.depth_anything import DepthAnythingEstimator
         return DepthAnythingEstimator(
             model_id=settings.DEPTH_ANYTHING_MODEL, device=settings.device
