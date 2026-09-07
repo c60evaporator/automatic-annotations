@@ -72,11 +72,15 @@ BOXFIT_STATUS_FITTED = "fitted"                  # 3D ボックスを生成し�
 BOXFIT_STATUS_TOO_FEW_POINTS = "too_few_points"  # 点数が閾値に満たない
 BOXFIT_STATUS_NO_POINTS = "no_points"            # マスク内に点が無い
 BOXFIT_STATUS_FAILED = "failed"                  # フィッティングが例外・破綻
+# 点群は作れたが、ボックス当てはめを行っていない
+# （Box Fitting のアルゴリズム未実装の間はこれになる）
+BOXFIT_STATUS_NOT_FITTED = "not_fitted"
 BOXFIT_STATUSES = (
     BOXFIT_STATUS_FITTED,
     BOXFIT_STATUS_TOO_FEW_POINTS,
     BOXFIT_STATUS_NO_POINTS,
     BOXFIT_STATUS_FAILED,
+    BOXFIT_STATUS_NOT_FITTED,
 )
 
 # トラッキングの track_id 引き継ぎ判定に使う IoU の計算方法

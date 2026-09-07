@@ -133,26 +133,21 @@ class BoxFittingStub:
 
     # ── 3. マスク処理と Box Fitting ──────────────────────────────────────
 
-    def close_mask(
-        self, mask_rle: dict[str, Any], dilation: int, erosion: int
-    ) -> dict[str, Any]:
-        """マスクのクロージング（本実装では膨張→収縮）.
-
-        スタブでは形を変えず、そのまま返す。
-        webapp 側は再計算できないので、実装時もここで返した結果を保存する。
-        """
-        return mask_rle
-
-    def fit_box(
+    def process_frame_instances(
         self,
-        instance: dict[str, Any],
+        instances: list[dict[str, Any]],
+        depth_result: dict[str, Any],
+        output_dir: Path,
         *,
-        use_lidar: bool,
-        min_lidar_points: int,
-        stored_points_max: int,
+        frame: dict[str, Any] | None = None,
+        mask_params: dict[str, Any] | None = None,
+        depth_params: dict[str, Any] | None = None,
+        use_lidar: bool = False,
+        stored_points_max: int = 500,
         stub_delay_sec: float | None = None,
-    ) -> dict[str, Any]:
-        """1 インスタンスの点群を作り、3D ボックスを当てはめる.
+        **_: Any,
+    ) -> list[dict[str, Any]]:
+        """1 フレーム分のインスタンスを処理する（本実装と同じ入口）.
 
         スタブではマスクの大きさから距離を作り、それらしい点群を散らす。
         マスクが小さいものは「点が少なすぎる」として失敗させ、
@@ -160,62 +155,58 @@ class BoxFittingStub:
         """
         time.sleep(DEFAULT_STUB_DELAY_SEC if stub_delay_sec is None else stub_delay_sec)
 
-        mask_rle = instance["mask_rle"]
-        xmin, ymin, xmax, ymax = rle_bbox(mask_rle)
-        area = max(0, (xmax - xmin) * (ymax - ymin))
+        results: list[dict[str, Any]] = []
+        for instance in instances:
+            mask_rle = instance["mask_rle"]
+            xmin, ymin, xmax, ymax = rle_bbox(mask_rle)
+            area = max(0, (xmax - xmin) * (ymax - ymin))
 
-        base = {
-            "instance_tracking_2d_id": instance["instance_tracking_2d_id"],
-            "sample_data_token": instance["sample_data_token"],
-            "track_id": str(instance["track_id"]),
-            "label": instance["label"],
-            "mask_rle_closed": mask_rle,
-        }
+            base = {
+                "instance_tracking_2d_id": instance["instance_tracking_2d_id"],
+                "sample_data_token": instance["sample_data_token"],
+                "track_id": str(instance["track_id"]),
+                "label": instance["label"],
+                "mask_rle_closed": mask_rle,
+            }
+            if area == 0:
+                results.append({**base, "status": "no_points",
+                                "num_points_depth": 0, "num_points_lidar": 0})
+                continue
 
-        if area == 0:
-            return {**base, "status": "no_points",
-                    "num_points_depth": 0, "num_points_lidar": 0}
-
-        rng = np.random.default_rng(
-            int(hashlib.md5(
+            rng = np.random.default_rng(int(hashlib.md5(
                 f"{instance['sample_data_token']}:{instance['track_id']}".encode()
-            ).hexdigest()[:8], 16)
-        )
-        # マスクが大きいほど手前にあるとみなす
-        distance = float(np.clip(20000.0 / max(area, 1), 3.0, 60.0))
-        num_depth = int(np.clip(area // 20, 0, 8000))
-        num_lidar = int(np.clip(area // 400, 0, 600)) if use_lidar else 0
+            ).hexdigest()[:8], 16))
+            distance = float(np.clip(20000.0 / max(area, 1), 3.0, 60.0))
+            num_depth = int(np.clip(area // 20, 0, 8000))
+            num_lidar = int(np.clip(area // 400, 0, 600)) if use_lidar else 0
 
-        if num_depth < 10:
-            return {**base, "status": "too_few_points",
-                    "num_points_depth": num_depth, "num_points_lidar": num_lidar}
+            if num_depth < 10:
+                results.append({**base, "status": "too_few_points",
+                                "num_points_depth": num_depth,
+                                "num_points_lidar": num_lidar})
+                continue
 
-        center = np.array([distance, rng.uniform(-6, 6), rng.uniform(0.3, 1.5)])
-        size = np.array([1.9, 4.6, 1.7])
-        depth_points = center + rng.normal(0, size / 4.0, size=(num_depth, 3))
-        lidar_points = (
-            center + rng.normal(0, size / 5.0, size=(num_lidar, 3))
-            if num_lidar else np.empty((0, 3))
-        )
-
-        # LiDAR が閾値に届かない場合は深度点群だけで当てはめる
-        use_lidar_here = use_lidar and num_lidar >= min_lidar_points
-
-        return {
-            **base,
-            "status": "fitted",
-            "points_depth_ego": points_to_json(
-                downsample_to_max(depth_points, stored_points_max)
-            ),
-            "points_lidar_ego": points_to_json(
-                downsample_to_max(lidar_points, stored_points_max)
-            ) if num_lidar else None,
-            "num_points_depth": num_depth,
-            "num_points_lidar": num_lidar,
-            "depth_align_scale": 1.0 if use_lidar_here else None,
-            "depth_align_shift": 0.0 if use_lidar_here else None,
-            "center_ego": [round(float(v), 3) for v in center],
-            "size_wlh": [float(v) for v in size],
-            "yaw_ego": float(rng.uniform(-np.pi, np.pi)),
-            "fitting_score": round(float(rng.uniform(0.4, 0.95)), 3),
-        }
+            center = np.array([distance, rng.uniform(-6, 6), rng.uniform(0.3, 1.5)])
+            size = np.array([1.9, 4.6, 1.7])
+            depth_points = center + rng.normal(0, size / 4.0, size=(num_depth, 3))
+            lidar_points = (
+                center + rng.normal(0, size / 5.0, size=(num_lidar, 3))
+                if num_lidar else np.empty((0, 3))
+            )
+            results.append({
+                **base,
+                "status": "fitted",
+                "points_depth_ego": points_to_json(
+                    downsample_to_max(depth_points, stored_points_max)
+                ),
+                "points_lidar_ego": points_to_json(
+                    downsample_to_max(lidar_points, stored_points_max)
+                ) if num_lidar else None,
+                "num_points_depth": num_depth,
+                "num_points_lidar": num_lidar,
+                "center_ego": [round(float(v), 3) for v in center],
+                "size_wlh": [float(v) for v in size],
+                "yaw_ego": float(rng.uniform(-np.pi, np.pi)),
+                "fitting_score": round(float(rng.uniform(0.4, 0.95)), 3),
+            })
+        return results

@@ -42,8 +42,13 @@ class Settings(BaseSettings):
     SAM2_CONFIG_PATH: str = "configs/sam2.1/sam2.1_hiera_l.yaml"
     SAM2_CHECKPOINT_PATH: Path = Path("/opt/checkpoints/sam2.1_hiera_large.pt")
 
-    # --- Depth-Anything-3（未実装）----------------------------------------
-    DEPTH_ANYTHING_MODEL: str = "depth-anything/DA3-large"
+    # --- Depth-Anything-3（公式リポジトリ版）-------------------------------
+    # 重みは HuggingFace から自動ダウンロードされる（手動配置は不要）。
+    # compose が ~/.cache/huggingface をマウントしてホストと共有する
+    DEPTH_ANYTHING_MODEL: str = "DA3METRIC-LARGE"
+    # これ以遠の点は点群にしない [m]。遠方は誤差が大きく、
+    # 入れるとクラスタリングが引きずられる
+    DEPTH_MAX_DISTANCE: float = 60.0
 
     # GPU や重みが無い環境で UI を動かすためのスタブ切り替え
     USE_STUB_MODELS: bool = False

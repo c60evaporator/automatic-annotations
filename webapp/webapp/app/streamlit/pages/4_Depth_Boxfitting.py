@@ -140,10 +140,11 @@ with param_col:
         )
 
         with general_tab:
+            # LiDAR の統合・地面除去・混合は未実装。
+            # 実装するまでチェックできないようにしておく
             use_lidar = st.checkbox(
-                "Use LiDAR", value=True,
-                help=("LiDAR 点群をフィッティングに使う。"
-                      "読み込みと地面除去は、比較表示のためチェックに関係なく実行される"),
+                "Use LiDAR", value=False, disabled=True,
+                help="LiDAR を使った点群の混合は未実装です（深度推定のみで動作します）",
             )
             st.markdown("**Mask Closing**")
             mask_dilation = st.slider(
@@ -667,10 +668,15 @@ with fitting_tab_view:
     else:
         fittings = load_box_fittings(view_run_id, frame_tokens)
         flat = [fit for items_ in fittings.values() for fit in items_]
+        from collections import Counter
+        counts = Counter(f["status"] for f in flat)
         st.caption(
             f"このサンプルのインスタンス: {len(flat)} 件 / "
-            f"fitted {sum(1 for f in flat if f['status'] == 'fitted')} 件"
+            + " / ".join(f"{k} {v}" for k, v in sorted(counts.items()))
         )
-        st.info("3D ボックスの可視化はアルゴリズム確定後に実装します。")
+        st.info(
+            "点群までを生成しています（status=not_fitted）。"
+            "3D ボックスの当てはめはアルゴリズム確定後に実装します。"
+        )
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])
