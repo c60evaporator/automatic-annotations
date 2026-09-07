@@ -423,7 +423,7 @@ with map_col:
 # ------------------------------------------------------------------
 st.divider()
 
-view_col, opt_col = st.columns([9, 1])
+view_col, opt_col = st.columns([8, 1])
 
 selected_sample = samples[selected_sample_idx]
 results = st.session_state[RESULTS]

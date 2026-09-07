@@ -106,6 +106,34 @@ def mask_iou(rle_a: dict[str, Any], rle_b: dict[str, Any]) -> float:
     return intersection / union if union else 0.0
 
 
+def resize_mask_nearest(mask: np.ndarray, height: int, width: int) -> np.ndarray:
+    """bool マスクを最近傍補間でリサイズする.
+
+    面積が変わるため IoU の計算には向かないが、表示や投影の前処理としては
+    十分。補間すると縁に中間値が生まれ、マスクの意味が壊れる。
+    """
+    if mask.ndim != 2:
+        raise ValueError(f"expected a 2-D mask, got shape {mask.shape}")
+    if height < 1 or width < 1:
+        raise ValueError(f"size must be >= 1, got {width}x{height}")
+    src_height, src_width = mask.shape
+    rows = ((np.arange(height) + 0.5) * src_height / height).astype(np.int64)
+    cols = ((np.arange(width) + 0.5) * src_width / width).astype(np.int64)
+    rows = rows.clip(0, src_height - 1)
+    cols = cols.clip(0, src_width - 1)
+    return np.ascontiguousarray(mask[rows][:, cols], dtype=np.bool_)
+
+
+def resize_rle(rle: dict[str, Any], height: int, width: int) -> dict[str, Any]:
+    """RLE を別解像度へ合わせる（最近傍）.
+
+    サイズが同じならそのまま返す。
+    """
+    if tuple(rle["size"]) == (height, width):
+        return rle
+    return encode_rle(resize_mask_nearest(decode_rle(rle), height, width))
+
+
 def rle_from_box(
     xmin: int, ymin: int, xmax: int, ymax: int, height: int, width: int
 ) -> dict[str, Any]:

@@ -67,7 +67,7 @@ from app.streamlit.data_access import (
     load_lidar_pointclouds,
     load_tracking_run_instances,
 )
-from common.mask_rle import rle_bbox
+from common.mask_rle import rle_bbox, resize_rle
 
 dataset_id, scene_token = S.require_scene()
 dataset = get_dataset(dataset_id)
@@ -447,7 +447,7 @@ depth_tab_view, pointcloud_tab_view, fitting_tab_view = st.tabs(
 # Depth Estimation タブ
 # ------------------------------------------------------------------
 with depth_tab_view:
-    view_col, opt_col = st.columns([9, 1])
+    view_col, opt_col = st.columns([8, 1])
 
     with opt_col:
         S.init_sticky(W_SHOW_MASKS, OPT_SHOW_MASKS, MASK_MODES[0])
@@ -466,7 +466,37 @@ with depth_tab_view:
             on_change=S.sync_sticky, args=(W_INST_TEXT, OPT_INST_TEXT),
         )
 
-    # マスクの供給元。Original はトラッキング結果、Closed は Box Fitting の保存値
+    # マスクの供給元。Original はトラッキング結果、Closed は Box Fitting の保存値。
+    #
+    # NOTE: トラッキングのマスクは**元画像の解像度**（1600x900）だが、
+    # 深度画像は DA3 の出力解像度（例 800x450）。
+    # そのまま重ねると draw_instances が解像度不一致でスキップし、
+    # 何も表示されない。深度側の解像度へ合わせてから渡すこと。
+    depth_size_by_frame = {
+        token: (info["depth_height"], info["depth_width"])
+        for token, info in depth_info.items()
+        if info.get("depth_height") and info.get("depth_width")
+    }
+
+    def _fit_to_depth(token: str, instances: list[dict]) -> list[dict]:
+        """マスクと外接矩形を深度画像の解像度へ合わせる."""
+        size = depth_size_by_frame.get(token)
+        if size is None:
+            return []
+        height, width = size
+        resolved = []
+        for inst in instances:
+            rle = inst.get("mask_rle")
+            if not rle:
+                continue
+            resized = resize_rle(rle, height, width)
+            xmin, ymin, xmax, ymax = rle_bbox(resized)
+            resolved.append({
+                **inst, "mask_rle": resized,
+                "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+            })
+        return resolved
+
     instances_by_frame: dict[str, list[dict]] = {}
     if show_masks == "Original":
         run = next((r for r in runs if r["id"] == view_run_id), None) if view_run_id else None
@@ -474,25 +504,20 @@ with depth_tab_view:
         if tracking_id:
             raw = load_tracking_run_instances(tracking_id)
             instances_by_frame = {
-                token: preferred_instances(insts) for token, insts in raw.items()
+                token: _fit_to_depth(token, preferred_instances(insts))
+                for token in frame_tokens
+                if (insts := raw.get(token))
             }
     elif show_masks == "Closed" and view_run_id:
         fittings = load_box_fittings(
             view_run_id, frame_tokens, include_mask=True
         )
         for token, items in fittings.items():
-            resolved = []
-            for fit in items:
-                rle = fit.get("mask_rle_closed")
-                if not rle:
-                    continue
-                xmin, ymin, xmax, ymax = rle_bbox(rle)
-                resolved.append({
-                    "mask_rle": rle, "track_id": fit["track_id"],
-                    "label": fit["label"],
-                    "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
-                })
-            instances_by_frame[token] = resolved
+            # クロージング後のマスクは深度解像度で保存されているが、
+            # 保存倍率を変えた過去 run もありうるので同じ経路で合わせる
+            instances_by_frame[token] = _fit_to_depth(token, [
+                {**fit, "mask_rle": fit.get("mask_rle_closed")} for fit in items
+            ])
 
     items = []
     for sensor in cam_sensors:
@@ -558,31 +583,31 @@ with depth_tab_view:
 # PointCloud タブ
 # ------------------------------------------------------------------
 with pointcloud_tab_view:
-    view_col, opt_col = st.columns([9, 1])
+    view_col, opt_col = st.columns([8, 1])
 
     with opt_col:
         show_raw_lidar = st.checkbox(
-            "Show Raw LiDAR", value=settings.SHOW_RAW_LIDAR,
+            "Raw LiDAR", value=settings.SHOW_RAW_LIDAR,
             key="_w_pc_raw_lidar",
         )
         show_ground = st.checkbox(
-            "Show Ground", value=settings.SHOW_RAW_LIDAR_GROUND,
+            "LiDAR Ground", value=settings.SHOW_RAW_LIDAR_GROUND,
             key="_w_pc_ground", disabled=not show_raw_lidar,
         )
         run_info = next((r for r in runs if r["id"] == view_run_id), None) if view_run_id else None
         # use_lidar=False の run にはインスタンスごとの LiDAR 点群が無い
         has_lidar_instances = bool(run_info and run_info["use_lidar"])
         show_lidar_instances = st.checkbox(
-            "Show LiDAR Instances", value=has_lidar_instances,
+            "LiDAR Instances", value=has_lidar_instances,
             key="_w_pc_lidar_inst", disabled=not has_lidar_instances,
             help=None if has_lidar_instances else "この run は Use LiDAR=False で実行されています",
         )
         show_raw_depth = st.checkbox(
-            "Show Raw Depth", value=settings.SHOW_RAW_DEPTH_POINTCLOUD,
+            "Raw Depth", value=settings.SHOW_RAW_DEPTH_POINTCLOUD,
             key="_w_pc_raw_depth",
         )
         show_depth_instances = st.checkbox(
-            "Show Depth Instances", value=True, key="_w_pc_depth_inst",
+            "Depth Instances", value=True, key="_w_pc_depth_inst",
         )
 
         st.markdown("**Cameras**")

@@ -404,7 +404,7 @@ with map_col:
 # ------------------------------------------------------------------
 st.divider()
 
-view_col, opt_col = st.columns([9, 1])
+view_col, opt_col = st.columns([8, 1])
 
 # 凡例に件数を出すため、画像とボックスの取得を先に済ませる
 selected_sample = samples[selected_sample_idx]
