@@ -18,6 +18,9 @@ logger = get_logger(__name__)
 
 # 状態取得は軽いので短く。ジョブ登録も即座に返る（202）ので長くしない
 POLL_TIMEOUT_SEC = 10.0
+# 再フィルタは同期で返る。ROR / DBSCAN はインスタンス数に比例して
+# 伸びるため、ポーリング用より長めに取る
+REFILTER_TIMEOUT_SEC = 120.0
 SUBMIT_TIMEOUT_SEC = 30.0
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
@@ -117,3 +120,13 @@ def get_boxfitting_job(job_id: str, since: int = 0) -> dict[str, Any]:
 def cancel_boxfitting_job(job_id: str) -> dict[str, Any]:
     return _request("DELETE", f"/depth-boxfitting/jobs/{job_id}",
                     timeout=POLL_TIMEOUT_SEC)
+
+
+def refilter_boxfitting(payload: dict[str, Any]) -> dict[str, Any]:
+    """保存済みの深度マップから点群を作り直し、再フィルタする（同期）.
+
+    ジョブではなく即時応答。1 sample・数カメラで数秒に収まるため、
+    ポーリングを挟むより待つほうが UI が簡単になる。
+    """
+    return _request("POST", "/depth-boxfitting/refilter",
+                    timeout=REFILTER_TIMEOUT_SEC, json=payload)

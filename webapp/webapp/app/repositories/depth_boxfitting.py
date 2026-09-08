@@ -176,8 +176,6 @@ class DepthBoxFittingRepository:
             "mask_rle_closed": item.get("mask_rle_closed"),
             "points_depth_ego": item.get("points_depth_ego"),
             "points_lidar_ego": item.get("points_lidar_ego"),
-            "points_depth_raw_ego": item.get("points_depth_raw_ego"),
-            "points_lidar_raw_ego": item.get("points_lidar_raw_ego"),
             "num_points_depth": int(item.get("num_points_depth", 0)),
             "num_points_lidar": int(item.get("num_points_lidar", 0)),
             "num_points_depth_kept": int(item.get("num_points_depth_kept", 0)),
@@ -379,10 +377,7 @@ class DepthBoxFittingRepository:
             BoxFitting3D.fitting_score, BoxFitting3D.manually_modified,
         ]
         if include_points:
-            columns += [
-                BoxFitting3D.points_depth_ego, BoxFitting3D.points_lidar_ego,
-                BoxFitting3D.points_depth_raw_ego, BoxFitting3D.points_lidar_raw_ego,
-            ]
+            columns += [BoxFitting3D.points_depth_ego, BoxFitting3D.points_lidar_ego]
         if include_mask:
             columns.append(BoxFitting3D.mask_rle_closed)
 

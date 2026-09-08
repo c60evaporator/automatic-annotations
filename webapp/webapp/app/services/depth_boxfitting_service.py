@@ -475,6 +475,97 @@ def load_box_fittings(
         )
 
 
+# ── 再フィルタ（パラメータ調整用）────────────────────────────────────────────
+
+def refilter_sample(
+    dataset_id: str,
+    scene_token: str,
+    params_id: str,
+    sample_token: str,
+    *,
+    depth_params: dict[str, Any],
+    lidar_params: dict[str, Any] | None = None,
+    channels: list[str] | None = None,
+) -> dict[str, Any]:
+    """1 sample のインスタンス点群を、新しいパラメータで作り直す.
+
+    保存済みの深度マップとクロージング後マスクから再生成するため、
+    パイプライン全体を回し直す必要がない。
+
+    Args:
+        channels: 対象カメラ。None なら全カメラ。
+            表示中のカメラだけに絞ると応答が速くなる
+
+    Returns:
+        {instance_tracking_2d_id ではなく BoxFitting3D.id: 結果} の dict。
+        結果は num_points_raw / num_points_kept / points_raw_ego /
+        points_filtered_ego を持つ。
+
+    NOTE: 結果は DB に書かない。run の記録は「実行時のパラメータで得た点群」
+    であるべきで、調整中の値で上書きすると来歴が壊れる。
+    調整後の値で本番 run を回せば、その値が depth_params として記録される。
+    """
+    from app.services.inference_client import refilter_boxfitting
+
+    settings = get_settings()
+
+    with read_only_session() as session:
+        repo = DepthBoxFittingRepository(session)
+        depth_info = repo.list_depth_estimations_by_run(params_id)
+        frames = SensorRepository(session).list_frames_by_sample(
+            sample_token, keyframe_only=True
+        )
+        tokens = [
+            f["token"] for f in frames
+            if f["modality"] == "camera"
+            and (channels is None or f["channel"] in channels)
+        ]
+        fittings = repo.list_box_fittings_by_run(
+            params_id, sample_data_tokens=tokens, include_mask=True
+        )
+
+    frame_by_token = {f["token"]: f for f in frames}
+    payload_frames = []
+    for token, items in fittings.items():
+        info = depth_info.get(token)
+        frame = frame_by_token.get(token)
+        if not info or not info.get("depth_path") or frame is None:
+            continue
+        instances = [
+            {
+                "id": fit["id"],
+                "track_id": fit.get("track_id"),
+                "label": fit.get("label"),
+                "mask_rle_closed": fit["mask_rle_closed"],
+            }
+            for fit in items if fit.get("mask_rle_closed")
+        ]
+        if not instances:
+            continue
+        payload_frames.append({
+            "depth_path": info["depth_path"],
+            "calibrated_sensor": frame["calibrated_sensor"],
+            "width": frame["width"],
+            "height": frame["height"],
+            "instances": instances,
+        })
+
+    if not payload_frames:
+        return {}
+
+    response = refilter_boxfitting({
+        "frames": payload_frames,
+        "depth_params": depth_params,
+        "lidar_params": lidar_params or {},
+        "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
+    })
+    logger.info(
+        "refiltered %d instances in %.2fs",
+        len(response.get("instances", [])), response.get("elapsed_sec", 0.0),
+    )
+    return {item["id"]: item for item in response.get("instances", [])}
+
+
 # ── 削除 ──────────────────────────────────────────────────────────────────────
 
 def delete_run(params_id: str) -> None:

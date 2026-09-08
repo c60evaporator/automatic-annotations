@@ -29,7 +29,12 @@ from app.core import models as model_registry
 from app.core.config import get_settings
 from app.core.jobs import Job, JobManager, get_job_manager
 from app.core.logging import get_logger
-from app.schemas.depth_boxfitting import BoxFittingRequest, JobResponse
+from app.schemas.depth_boxfitting import (
+    BoxFittingRequest,
+    JobResponse,
+    RefilterRequest,
+    RefilterResponse,
+)
 
 logger = get_logger(__name__)
 
@@ -236,6 +241,37 @@ def list_boxfitting_jobs(
     jobs: JobManager = Depends(get_job_manager),
 ) -> list[JobResponse]:
     return [JobResponse(**j.to_dict()) for j in jobs.list(KIND)]
+
+
+@router.post("/refilter", response_model=RefilterResponse)
+def refilter_instances(req: RefilterRequest) -> RefilterResponse:
+    """保存済みの深度マップから点群を作り直し、新しいパラメータで再フィルタする.
+
+    ジョブにせず同期で返す。1 sample・6 カメラで 1 秒弱に収まるため、
+    ポーリングを挟むと UI が煩雑になるだけになる。
+
+    **モデルはロードしない。** ROR / DBSCAN に DA3 は不要で、
+    model_registry を経由すると調整のたびに VRAM を占有してしまう。
+    """
+    from app.services.refilter import refilter
+
+    settings = get_settings()
+    frames = [f.model_dump() for f in req.frames]
+    try:
+        results, elapsed = refilter(
+            settings.DERIVED_ROOT, frames,
+            depth_params=req.depth_params,
+            stored_points_max=req.stored_points_max,
+            max_depth=(
+                req.max_depth if req.max_depth is not None
+                else settings.DEPTH_MAX_DISTANCE
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("refilter failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return RefilterResponse(instances=results, elapsed_sec=round(elapsed, 3))
 
 
 @router.get("/status")

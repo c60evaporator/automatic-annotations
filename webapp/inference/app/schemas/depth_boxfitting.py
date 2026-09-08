@@ -136,6 +136,58 @@ class BoxFittingResult(BaseModel):
     error: str | None = None
 
 
+class RefilterInstance(BaseModel):
+    """再フィルタ対象のインスタンス."""
+    id: str
+    track_id: str | None = None
+    label: str | None = None
+    # クロージング後のマスク（DB に保存済みのものをそのまま渡す）
+    mask_rle_closed: dict[str, Any]
+
+
+class RefilterFrame(BaseModel):
+    """再フィルタ対象のフレーム."""
+    # DERIVED_ROOT からの相対パス（DepthEstimation.depth_path）
+    depth_path: str
+    calibrated_sensor: dict[str, Any]
+    instances: list[RefilterInstance] = Field(default_factory=list)
+    # .npz に内部パラメータが無い run 向けのフォールバック
+    width: int | None = None
+    height: int | None = None
+
+
+class RefilterRequest(BaseModel):
+    """保存済みの深度マップから点群を作り直す.
+
+    パラメータ調整のたびにパイプライン全体を回さずに済ませるためのもの。
+    点群そのものは送らず、**保存済みファイルのパスとマスクだけ**を渡す
+    （/derived は webapp と共有マウントされている）。
+    """
+    frames: list[RefilterFrame] = Field(min_length=1)
+    depth_params: dict[str, Any] = Field(default_factory=dict)
+    # LiDAR 側は未実装（use_lidar の混合を入れるときに使う）
+    lidar_params: dict[str, Any] = Field(default_factory=dict)
+    stored_points_max: int = 500
+    max_depth: float | None = None
+
+
+class RefilterInstanceResult(BaseModel):
+    id: str
+    track_id: str | None = None
+    label: str | None = None
+    # 間引き前の点数（フィルタ前 / フィルタ後）
+    num_points_raw: int = 0
+    num_points_kept: int = 0
+    # 間引き後の座標。前後で同じボクセルサイズを使う
+    points_raw_ego: dict[str, Any] | None = None
+    points_filtered_ego: dict[str, Any] | None = None
+
+
+class RefilterResponse(BaseModel):
+    instances: list[RefilterInstanceResult]
+    elapsed_sec: float
+
+
 class BoxFittingPartial(BaseModel):
     """ポーリングで逐次返す部分結果.
 

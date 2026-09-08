@@ -28,8 +28,8 @@ COLOR_GROUND = "#8b6b4a"       # 茶色
 COLOR_RAW_DEPTH = "#9fd8e8"    # 薄い水色
 
 # 点の大きさ
-MARKER_SIZE_BACKGROUND = 1
-MARKER_SIZE_INSTANCE = 2
+MARKER_SIZE_BACKGROUND = 0.6
+MARKER_SIZE_INSTANCE = 1
 
 # 視点プリセット。点群は ego 座標（x=前方 / y=左方 / z=上方）。
 #

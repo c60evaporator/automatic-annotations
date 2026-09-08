@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import streamlit as st
 
@@ -59,6 +61,7 @@ from app.streamlit.components.pointcloud_viewer import (
 from app.streamlit.components.waypoint_viewer import render_scene_waypoint_view
 from app.streamlit.data_access import (
     clear_caches,
+    refilter_instance_points,
     get_dataset,
     get_scene,
     list_boxfitting_runs,
@@ -102,17 +105,22 @@ OPT_PC_POINTS, W_PC_POINTS = "boxfit_pc_points", "_w_boxfit_pc_points"
 # Plotly 側の uirevision を変える（同じ値のままだと視点が更新されない）
 PC_VIEW = "boxfit_pc_view"
 PC_VIEW_REVISION = "boxfit_pc_view_rev"
+# Apply で確定した再フィルタのパラメータ。None なら run 保存時の点群を使う
+PC_REFILTER_PARAMS = "boxfit_refilter_params"
 W_SAMPLE = "_w_boxfit_sample"
 
 MASK_MODES = ("None", "Original", "Closed")
 
-# インスタンス点群を、外れ値除去の前後どちらで見るか
+# インスタンス点群を、外れ値除去の前後どちらで見るか。
+#
+# NOTE: フィルタ前の点群は DB に保存していない（深度マップと
+# クロージング後マスクから再生成できるため）。再フィルタ用の
+# エンドポイントを実装するまで Raw は選べない。
 POINTS_MODE_RAW = "Raw"
 POINTS_MODE_FILTERED = "ROR/DBSCAN"
 POINTS_MODES = (POINTS_MODE_RAW, POINTS_MODE_FILTERED)
 # 表示モード → BoxFitting3D のカラム名
 POINTS_COLUMNS = {
-    POINTS_MODE_RAW: ("points_depth_raw_ego", "points_lidar_raw_ego"),
     POINTS_MODE_FILTERED: ("points_depth_ego", "points_lidar_ego"),
 }
 
@@ -629,18 +637,14 @@ with pointcloud_tab_view:
             "Depth Instances", value=True, key="_w_pc_depth_inst",
         )
 
-        st.markdown("**Cameras**")
-        enabled_channels = {
-            sensor["channel"] for sensor in cam_sensors
-            if st.checkbox(sensor["channel"], value=True,
-                           key=f"_w_pc_cam_{sensor['channel']}")
-        }
-
-        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_FILTERED)
+        # 保存済みの点群はフィルタ後のみ。Raw を見るには再フィルタが要る
+        has_refilter = st.session_state.get(PC_REFILTER_PARAMS) is not None
         points_mode = st.radio(
             "Instance Points", POINTS_MODES, key=W_PC_POINTS,
             on_change=S.sync_sticky, args=(W_PC_POINTS, OPT_PC_POINTS),
-            help="外れ値除去（ROR / DBSCAN）の適用前後を切り替える",
+            disabled=not has_refilter,
+            help=("外れ値除去（ROR / DBSCAN）の適用前後を切り替える。"
+                  "下の Filter Params で Apply すると選べるようになる"),
         )
 
         S.init_sticky(W_PC_COLOR, OPT_PC_COLOR, COLOR_MODE_LABEL)
@@ -649,8 +653,18 @@ with pointcloud_tab_view:
             on_change=S.sync_sticky, args=(W_PC_COLOR, OPT_PC_COLOR),
         )
 
+        st.markdown("**Cameras**")
+        enabled_channels = {
+            sensor["channel"] for sensor in cam_sensors
+            if st.checkbox(sensor["channel"], value=True,
+                           key=f"_w_pc_cam_{sensor['channel']}")
+        }
+
+        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_FILTERED)
+
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
+    refilter_summary: tuple[int, int, int] | None = None
 
     if view_run_id:
         info = lidar_info.get(selected_sample["token"])
@@ -684,16 +698,42 @@ with pointcloud_tab_view:
             tokens = tuple(
                 f["token"] for f in frames if f["channel"] in enabled_channels
             )
-            fittings = load_box_fittings(
-                view_run_id, tokens, include_points=True
-            ) if tokens else {}
-            flat = [fit for items_ in fittings.values() for fit in items_]
-            depth_key, lidar_key = POINTS_COLUMNS[points_mode]
+            refilter_params = st.session_state.get(PC_REFILTER_PARAMS)
+
+            if refilter_params and tokens:
+                # 調整したパラメータで作り直した点群を使う。
+                # 同じパラメータならキャッシュが効くので再計算されない
+                refiltered = refilter_instance_points(
+                    dataset_id, scene_token, view_run_id,
+                    selected_sample["token"],
+                    json.dumps(refilter_params, sort_keys=True),
+                    tuple(sorted(enabled_channels)),
+                )
+                flat = list(refiltered.values())
+                # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）
+                depth_key = (
+                    "points_raw_ego" if points_mode == POINTS_MODE_RAW
+                    else "points_filtered_ego"
+                )
+                lidar_key = None
+                refilter_summary = (
+                    sum(i["num_points_raw"] for i in flat),
+                    sum(i["num_points_kept"] for i in flat),
+                    len(flat),
+                )
+            else:
+                fittings = load_box_fittings(
+                    view_run_id, tokens, include_points=True
+                ) if tokens else {}
+                flat = [fit for items_ in fittings.values() for fit in items_]
+                depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_FILTERED]
+                refilter_summary = None
+
             if show_depth_instances:
                 instance_groups += group_instance_points(
                     flat, color_mode=pc_color_mode, points_key=depth_key
                 )
-            if show_lidar_instances:
+            if show_lidar_instances and lidar_key:
                 instance_groups += group_instance_points(
                     flat, color_mode=pc_color_mode, points_key=lidar_key
                 )
@@ -725,6 +765,104 @@ with pointcloud_tab_view:
         else:
             camera = CAMERA_PRESETS.get(current_view)
 
+        # --- 外れ値除去パラメータの調整 -----------------------------------
+        # パイプラインを回し直さず、保存済みの深度マップから点群を
+        # 作り直して即座に効果を確認する。
+        # Plotly の真上に置くのは、Apply の前後で点群の変化を
+        # 目線を動かさずに見比べられるようにするため
+        with st.expander("Filter Params", expanded=False):
+            run_depth = (run_info or {}).get("depth_params") or {}
+            run_lidar = (run_info or {}).get("lidar_params") or {}
+            # run を切り替えたら既定値も切り替わるよう、key に run を含める
+            prefix = f"_w_refilter_{view_run_id}"
+
+            def _slider(label, key, low, high, default, step):
+                return st.slider(
+                    label, low, high, value=default, step=step,
+                    key=f"{prefix}_{key}",
+                )
+
+            st.markdown("**LiDAR**")
+            lidar_cols = st.columns(4)
+            with lidar_cols[0]:
+                lidar_ror_nb_new = _slider(
+                    "ROR nb_points", "l_ror_nb", 1,
+                    settings.LIDAR_ROR_NB_POINTS_MAX,
+                    int(run_lidar.get("ror_nb_points",
+                                      settings.LIDAR_ROR_NB_POINTS_DEFAULT)), 1)
+            with lidar_cols[1]:
+                lidar_ror_radius_new = _slider(
+                    "ROR Radius", "l_ror_r", 0.1,
+                    settings.LIDAR_ROR_RADIUS_MAX,
+                    float(run_lidar.get("ror_radius",
+                                        settings.LIDAR_ROR_RADIUS_DEFAULT)), 0.1)
+            with lidar_cols[2]:
+                lidar_eps_new = _slider(
+                    "DBSCAN eps", "l_eps", 0.1,
+                    settings.LIDAR_DBSCAN_EPS_MAX,
+                    float(run_lidar.get("dbscan_eps",
+                                        settings.LIDAR_DBSCAN_EPS_DEFAULT)), 0.1)
+            with lidar_cols[3]:
+                lidar_min_new = _slider(
+                    "DBSCAN min_samples", "l_min", 2,
+                    settings.LIDAR_DBSCAN_MIN_SAMPLES_MAX,
+                    int(run_lidar.get("dbscan_min_samples",
+                                      settings.LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT)), 1)
+
+            st.markdown("**Depth**")
+            depth_cols = st.columns(4)
+            with depth_cols[0]:
+                depth_ror_nb_new = _slider(
+                    "ROR nb_points", "d_ror_nb", 1,
+                    settings.DEPTH_ROR_NB_POINTS_MAX,
+                    int(run_depth.get("ror_nb_points",
+                                      settings.DEPTH_ROR_NB_POINTS_DEFAULT)), 1)
+            with depth_cols[1]:
+                depth_ror_radius_new = _slider(
+                    "ROR Radius", "d_ror_r", 0.1,
+                    settings.DEPTH_ROR_RADIUS_MAX,
+                    float(run_depth.get("ror_radius",
+                                        settings.DEPTH_ROR_RADIUS_DEFAULT)), 0.1)
+            with depth_cols[2]:
+                depth_eps_new = _slider(
+                    "DBSCAN eps", "d_eps", 0.1,
+                    settings.DEPTH_DBSCAN_EPS_MAX,
+                    float(run_depth.get("dbscan_eps",
+                                        settings.DEPTH_DBSCAN_EPS_DEFAULT)), 0.1)
+            with depth_cols[3]:
+                depth_min_new = _slider(
+                    "DBSCAN min_samples", "d_min", 2,
+                    settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX,
+                    int(run_depth.get("dbscan_min_samples",
+                                      settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT)), 1)
+            st.caption("LiDAR 側は点群の混合を実装したあとに効きます")
+
+            apply_col, reset_col, _spacer = st.columns([1, 1, 6])
+            with apply_col:
+                if st.button("Apply", type="primary", width="stretch",
+                             disabled=not view_run_id):
+                    st.session_state[PC_REFILTER_PARAMS] = {
+                        "depth": {
+                            "ror_nb_points": int(depth_ror_nb_new),
+                            "ror_radius": float(depth_ror_radius_new),
+                            "dbscan_eps": float(depth_eps_new),
+                            "dbscan_min_samples": int(depth_min_new),
+                        },
+                        "lidar": {
+                            "ror_nb_points": int(lidar_ror_nb_new),
+                            "ror_radius": float(lidar_ror_radius_new),
+                            "dbscan_eps": float(lidar_eps_new),
+                            "dbscan_min_samples": int(lidar_min_new),
+                        },
+                    }
+                    st.rerun()
+            with reset_col:
+                if st.button("Reset", width="stretch",
+                             disabled=not st.session_state.get(PC_REFILTER_PARAMS)):
+                    # run 保存時の点群表示に戻す
+                    st.session_state.pop(PC_REFILTER_PARAMS, None)
+                    st.rerun()
+
         if not view_run_id:
             st.info("保存済みの推論結果がありません。Run Inference を実行してください。")
         else:
@@ -743,6 +881,14 @@ with pointcloud_tab_view:
                 ),
             )
             render_pointcloud(fig, counts)
+            if refilter_summary is not None:
+                raw_total, kept_total, n_inst = refilter_summary
+                ratio = kept_total / raw_total * 100 if raw_total else 0.0
+                st.caption(
+                    f"再フィルタ適用中: {n_inst} インスタンス / "
+                    f"{raw_total:,} → {kept_total:,} 点 ({ratio:.0f}% 残存)。"
+                    "この結果は保存されません（run の記録は実行時のまま）"
+                )
 
 # ------------------------------------------------------------------
 # Box Fitting タブ

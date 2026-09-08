@@ -19,7 +19,8 @@ import numpy as np
 
 from app.core.logging import get_logger
 from common.mask_rle import decode_rle, encode_rle, rle_bbox
-from common.point_ops import downsample_pair, points_to_json
+from common.point_ops import downsample_to_max, points_to_json
+from common.transform3d import scale_intrinsic
 
 logger = get_logger(__name__)
 
@@ -73,9 +74,24 @@ class BoxFittingStub:
         depth += np.float32(_rng_for(frame["sample_data_token"]).uniform(-2, 2))
         depth = depth.astype(np.float16)
 
+        # 本実装と同じ中身にしておく（内部パラメータと空マスクも保存）。
+        # 再フィルタは .npz の intrinsic を使うので、揃えないと
+        # スタブの run だけ再フィルタできなくなる
+        calib = frame.get("calibrated_sensor") or {}
+        base_intrinsic = calib.get("camera_intrinsic") or [
+            [width, 0, width / 2], [0, width, height / 2], [0, 0, 1]
+        ]
+        intrinsic = scale_intrinsic(
+            base_intrinsic,
+            width / (frame.get("width") or width),
+            height / (frame.get("height") or height),
+        )
         path = output_dir / "depth" / f"{frame['sample_data_token']}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(path, depth=depth)
+        np.savez_compressed(
+            path, depth=depth, intrinsic=intrinsic,
+            non_sky=np.ones((height, width), dtype=bool),
+        )
 
         return {
             "sample_data_token": frame["sample_data_token"],
@@ -200,30 +216,21 @@ class BoxFittingStub:
                 center + rng.normal(0, size / 5.0, size=(num_lidar, 3))
                 if num_lidar else np.empty((0, 3))
             )
-            # フィルタ前は、離れた位置にノイズが乗っている状態を模す。
-            # UI の Raw / ROV・DBSCAN 切り替えで差が見えるようにする
-            depth_noise = center + rng.normal(0, size, size=(max(1, num_depth // 4), 3))
-            depth_raw = np.vstack([depth_points, depth_noise])
-            lidar_raw = (
-                np.vstack([lidar_points,
-                           center + rng.normal(0, size, size=(max(1, num_lidar // 4), 3))])
-                if num_lidar else np.empty((0, 3))
-            )
-            # フィルタ前後は同じボクセルサイズで間引く（本実装と同じ扱い）
-            d_raw, d_kept = downsample_pair(depth_raw, depth_points, stored_points_max)
-            l_raw, l_kept = (
-                downsample_pair(lidar_raw, lidar_points, stored_points_max)
-                if num_lidar else (None, None)
-            )
+            # フィルタ前の点数だけ、ノイズが乗っていた体で多めにしておく
+            # （点群自体は保存しない）
+            raw_depth_count = num_depth + max(1, num_depth // 4)
+            raw_lidar_count = num_lidar + max(1, num_lidar // 4) if num_lidar else 0
             results.append({
                 **base,
                 "status": "fitted",
-                "points_depth_ego": points_to_json(d_kept),
-                "points_lidar_ego": points_to_json(l_kept) if num_lidar else None,
-                "points_depth_raw_ego": points_to_json(d_raw),
-                "points_lidar_raw_ego": points_to_json(l_raw) if num_lidar else None,
-                "num_points_depth": len(depth_raw),
-                "num_points_lidar": len(lidar_raw),
+                "points_depth_ego": points_to_json(
+                    downsample_to_max(depth_points, stored_points_max)
+                ),
+                "points_lidar_ego": points_to_json(
+                    downsample_to_max(lidar_points, stored_points_max)
+                ) if num_lidar else None,
+                "num_points_depth": raw_depth_count,
+                "num_points_lidar": raw_lidar_count,
                 "num_points_depth_kept": num_depth,
                 "num_points_lidar_kept": num_lidar,
                 "center_ego": [round(float(v), 3) for v in center],

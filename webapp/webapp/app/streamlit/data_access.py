@@ -34,6 +34,7 @@ from app.services.detection2d_service import (
     load_run_boxes as _load_run_boxes,
 )
 from app.services.depth_boxfitting_service import (
+    refilter_sample as _refilter_sample,
     list_input_tracking_runs as _list_input_tracking_runs,
     list_runs as _list_boxfit_runs,
     load_box_fittings as _load_box_fittings,
@@ -340,4 +341,32 @@ def load_box_fittings(
         sample_data_tokens=list(sample_data_tokens) if sample_data_tokens else None,
         include_points=include_points,
         include_mask=include_mask,
+    )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="点群を再フィルタ中...")
+def refilter_instance_points(
+    dataset_id: str,
+    scene_token: str,
+    params_id: str,
+    sample_token: str,
+    params_json: str,
+    channels: tuple[str, ...] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """保存済みの深度マップから点群を作り直す（パラメータ調整用）.
+
+    パラメータは JSON 文字列で受け取る。dict はハッシュできず
+    キャッシュキーにできないため（同じ値なら再計算しない、が目的）。
+
+    Returns:
+        {BoxFitting3D.id: 再フィルタ結果}
+    """
+    import json
+
+    params = json.loads(params_json)
+    return _refilter_sample(
+        dataset_id, scene_token, params_id, sample_token,
+        depth_params=params.get("depth", {}),
+        lidar_params=params.get("lidar", {}),
+        channels=list(channels) if channels else None,
     )

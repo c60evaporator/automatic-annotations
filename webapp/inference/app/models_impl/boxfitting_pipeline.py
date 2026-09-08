@@ -30,7 +30,7 @@ from app.services.depth_ops import (
     rle_to_depth_mask,
 )
 from common.mask_rle import encode_rle
-from common.point_ops import downsample_pair, points_to_json
+from common.point_ops import downsample_to_max, points_to_json
 from common.transform3d import camera_to_ego
 
 logger = get_logger(__name__)
@@ -263,31 +263,17 @@ class BoxFittingPipeline:
             points_ego = camera_to_ego(
                 points_camera, calib["translation"], calib["rotation"]
             )
-            # フィルタ前の点群も保存する。UI で「何が落ちたか」を
-            # 見比べられないと、ROR / DBSCAN の調整ができない
-            raw_ego = camera_to_ego(
-                points_raw_camera, calib["translation"], calib["rotation"]
-            ) if points_raw_camera.shape[0] else None
-
-            # フィルタ前後は同じボクセルサイズで間引く。
-            # 別々に間引くと、広がりの大きいフィルタ前が粗くなり、
-            # UI で「フィルタして点が増えた」ように見える
-            reduced_raw, reduced_filtered = downsample_pair(
-                raw_ego if raw_ego is not None else points_ego,
-                points_ego,
-                stored_points_max,
-            )
             results.append({
                 **base,
                 # Box Fitting は未実装。点群までを保存し、
                 # ボックスが無いことが status で分かるようにする
                 "status": "not_fitted",
-                "points_depth_ego": points_to_json(reduced_filtered),
-                "points_depth_raw_ego": (
-                    points_to_json(reduced_raw) if raw_ego is not None else None
+                # フィルタ前は保存しない。深度マップとクロージング後マスクから
+                # 再生成できるため（再フィルタ用エンドポイント経由）
+                "points_depth_ego": points_to_json(
+                    downsample_to_max(points_ego, stored_points_max)
                 ),
                 "points_lidar_ego": None,
-                "points_lidar_raw_ego": None,
             })
 
         return results
