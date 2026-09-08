@@ -164,22 +164,25 @@ def instance_points_from_depth(
     ror_radius: float = 0.0,
     dbscan_eps: float = 0.0,
     dbscan_min_samples: int = 0,
-) -> tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray]:
     """1 インスタンス分の点群を作り、外れ値を除去する.
 
     Returns:
-        (フィルタ後の点群, フィルタ前の点数)
-    """
-    points = masked_points(all_points, mask, common_mask)
-    raw_count = int(points.shape[0])
-    if raw_count == 0:
-        return points, 0
+        (フィルタ後の点群, フィルタ前の点群)
 
+    フィルタ前も返すのは、UI が ROR / DBSCAN の効き具合を
+    見比べられるようにするため（webapp 側では再計算できない）。
+    """
+    raw = masked_points(all_points, mask, common_mask)
+    if raw.shape[0] == 0:
+        return raw, raw
+
+    points = raw
     if ror_nb_points >= 1 and ror_radius > 0:
         points = remove_radius_outliers(points, ror_nb_points, ror_radius)
     if dbscan_eps > 0 and dbscan_min_samples >= 2:
         points = largest_dbscan_cluster(points, dbscan_eps, dbscan_min_samples)
-    return points, raw_count
+    return points, raw
 
 
 def rle_to_depth_mask(

@@ -176,8 +176,12 @@ class DepthBoxFittingRepository:
             "mask_rle_closed": item.get("mask_rle_closed"),
             "points_depth_ego": item.get("points_depth_ego"),
             "points_lidar_ego": item.get("points_lidar_ego"),
+            "points_depth_raw_ego": item.get("points_depth_raw_ego"),
+            "points_lidar_raw_ego": item.get("points_lidar_raw_ego"),
             "num_points_depth": int(item.get("num_points_depth", 0)),
             "num_points_lidar": int(item.get("num_points_lidar", 0)),
+            "num_points_depth_kept": int(item.get("num_points_depth_kept", 0)),
+            "num_points_lidar_kept": int(item.get("num_points_lidar_kept", 0)),
             "depth_align_scale": item.get("depth_align_scale"),
             "depth_align_shift": item.get("depth_align_shift"),
             "center_ego": item.get("center_ego"),
@@ -369,12 +373,16 @@ class DepthBoxFittingRepository:
             BoxFitting3D.sample_annotation_token,
             BoxFitting3D.track_id, BoxFitting3D.label, BoxFitting3D.status,
             BoxFitting3D.num_points_depth, BoxFitting3D.num_points_lidar,
+            BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
             BoxFitting3D.depth_align_scale, BoxFitting3D.depth_align_shift,
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh, BoxFitting3D.yaw_ego,
             BoxFitting3D.fitting_score, BoxFitting3D.manually_modified,
         ]
         if include_points:
-            columns += [BoxFitting3D.points_depth_ego, BoxFitting3D.points_lidar_ego]
+            columns += [
+                BoxFitting3D.points_depth_ego, BoxFitting3D.points_lidar_ego,
+                BoxFitting3D.points_depth_raw_ego, BoxFitting3D.points_lidar_raw_ego,
+            ]
         if include_mask:
             columns.append(BoxFitting3D.mask_rle_closed)
 
@@ -400,6 +408,7 @@ class DepthBoxFittingRepository:
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh,
             BoxFitting3D.yaw_ego, BoxFitting3D.fitting_score,
             BoxFitting3D.num_points_depth, BoxFitting3D.num_points_lidar,
+            BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
         ).where(
             BoxFitting3D.depth_estimation_params_id == params_id,
             BoxFitting3D.status == BOXFIT_STATUS_FITTED,

@@ -43,6 +43,89 @@ def voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
     return points[np.sort(first_indices)]
 
 
+def find_voxel_size(
+    points: np.ndarray, max_points: int, *, initial_voxel_size: float | None = None
+) -> float | None:
+    """点数を上限以下にするボクセルサイズを探す.
+
+    Returns:
+        必要なボクセルサイズ。間引き不要なら None。
+
+    フィルタ前後の点群を見比べる用途では、**両方に同じサイズを使う**こと。
+    別々に決めると、広がりの大きいフィルタ前のほうが粗く間引かれ、
+    「フィルタで点が増えた」ように見える。
+    """
+    points = np.asarray(points, dtype=np.float64)
+    if max_points <= 0 or points.shape[0] <= max_points:
+        return None
+
+    working = points
+    if working.shape[0] > max_points * PRE_STRIDE_FACTOR:
+        stride = int(np.ceil(working.shape[0] / (max_points * PRE_STRIDE_FACTOR)))
+        working = working[::stride]
+
+    if initial_voxel_size is None:
+        extent = working.max(axis=0) - working.min(axis=0)
+        volume = float(np.prod(np.maximum(extent, 1e-6)))
+        initial_voxel_size = max((volume / max_points) ** (1.0 / 3.0), 1e-3)
+
+    voxel_size = initial_voxel_size
+    for _ in range(MAX_VOXEL_ITERATIONS):
+        if voxel_downsample(working, voxel_size).shape[0] <= max_points:
+            return voxel_size
+        voxel_size *= 1.5
+    return voxel_size
+
+
+def downsample_pair(
+    raw: np.ndarray, filtered: np.ndarray, max_points: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """フィルタ前後の点群を、同じボクセルサイズで間引く.
+
+    別々に間引くと、広がりの大きいフィルタ前のほうが粗く間引かれ、
+    「フィルタで点が増えた」ように見える。同じサイズを使えば
+    包含関係（filtered ⊆ raw）が見た目にも保たれる。
+
+    サイズは raw 基準の候補から始め、**両方が上限に収まる範囲で
+    最も細かいもの**まで戻す。raw 基準のまま使うと、密度の高い
+    filtered が必要以上に間引かれてスカスカになる。
+    """
+    raw = np.asarray(raw, dtype=np.float64)
+    filtered = np.asarray(filtered, dtype=np.float64)
+
+    voxel_size = find_voxel_size(raw, max_points)
+    if voxel_size is None:
+        return raw, filtered
+
+    # raw が収まる最大サイズから、1.5 倍刻みで細かい側へ戻していく
+    candidate = voxel_size
+    best = voxel_size
+    for _ in range(MAX_VOXEL_ITERATIONS):
+        candidate /= 1.5
+        if candidate <= 0:
+            break
+        if voxel_downsample(raw, candidate).shape[0] > max_points:
+            break
+        best = candidate
+
+    reduced_raw = voxel_downsample(raw, best)
+    reduced_filtered = voxel_downsample(filtered, best)
+    # find_voxel_size は前段の粗い間引き後の点数で判定しているため、
+    # 全点に適用すると上限をわずかに超えることがある。等間隔で詰める
+    return (
+        _clip_to_max(reduced_raw, max_points),
+        _clip_to_max(reduced_filtered, max_points),
+    )
+
+
+def _clip_to_max(points: np.ndarray, max_points: int) -> np.ndarray:
+    """等間隔に間引いて、確実に上限以下にする."""
+    if points.shape[0] <= max_points:
+        return points
+    stride = int(np.ceil(points.shape[0] / max_points))
+    return points[::stride][:max_points]
+
+
 def downsample_to_max(
     points: np.ndarray,
     max_points: int,

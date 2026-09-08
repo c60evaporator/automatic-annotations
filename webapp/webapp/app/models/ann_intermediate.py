@@ -647,13 +647,23 @@ class BoxFitting3D(Base):
 
     # --- 点群（ego 座標、ボクセル間引き済み）-------------------------------
     # {"points": [[x, y, z], ...]} の形。表示用に上限を設けて保存する。
-    # 元のファイルを消しても過去 run を可視化できるよう、座標を直接持つ
+    # 元のファイルを消しても過去 run を可視化できるよう、座標を直接持つ。
+    #
+    # ROR / DBSCAN の適用前後を両方持つ。フィルタの効き具合は
+    # 「何が落ちたか」を見ないと判断できず、webapp 側には open3d が無いため
+    # 適用前から再計算することもできない
     points_depth_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     points_lidar_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    points_depth_raw_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    points_lidar_raw_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 間引き前の実点数。信頼度の判断にはこちらを使う
     # （間引き後の点数を使うと、上限で頭打ちになって判断できない）
     num_points_depth: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_points_lidar: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # ROR / DBSCAN を通した後の点数（間引き前）。
+    # フィルタで何割落ちたかを UI で示すのに使う
+    num_points_depth_kept: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    num_points_lidar_kept: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     # DA3 点群を LiDAR に合わせる際の補正（points_metric = raw * scale + shift）
     depth_align_scale: Mapped[float | None] = mapped_column(Float, nullable=True)
     depth_align_shift: Mapped[float | None] = mapped_column(Float, nullable=True)

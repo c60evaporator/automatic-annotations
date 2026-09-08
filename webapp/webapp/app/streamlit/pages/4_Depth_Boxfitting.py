@@ -93,9 +93,20 @@ OPT_SHOW_MASKS, W_SHOW_MASKS = "boxfit_show_masks", "_w_boxfit_show_masks"
 OPT_MASK_COLOR, W_MASK_COLOR = "boxfit_mask_color", "_w_boxfit_mask_color"
 OPT_INST_TEXT, W_INST_TEXT = "boxfit_inst_text", "_w_boxfit_inst_text"
 OPT_PC_COLOR, W_PC_COLOR = "boxfit_pc_color", "_w_boxfit_pc_color"
+OPT_PC_POINTS, W_PC_POINTS = "boxfit_pc_points", "_w_boxfit_pc_points"
 W_SAMPLE = "_w_boxfit_sample"
 
 MASK_MODES = ("None", "Original", "Closed")
+
+# インスタンス点群を、外れ値除去の前後どちらで見るか
+POINTS_MODE_RAW = "Raw"
+POINTS_MODE_FILTERED = "ROR/DBSCAN"
+POINTS_MODES = (POINTS_MODE_RAW, POINTS_MODE_FILTERED)
+# 表示モード → BoxFitting3D のカラム名
+POINTS_COLUMNS = {
+    POINTS_MODE_RAW: ("points_depth_raw_ego", "points_lidar_raw_ego"),
+    POINTS_MODE_FILTERED: ("points_depth_ego", "points_lidar_ego"),
+}
 
 # --- 初期表示: 保存済みの run --------------------------------------------------
 if VIEW_RUN_ID not in st.session_state:
@@ -617,6 +628,13 @@ with pointcloud_tab_view:
                            key=f"_w_pc_cam_{sensor['channel']}")
         }
 
+        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_FILTERED)
+        points_mode = st.radio(
+            "Instance Points", POINTS_MODES, key=W_PC_POINTS,
+            on_change=S.sync_sticky, args=(W_PC_POINTS, OPT_PC_POINTS),
+            help="外れ値除去（ROR / DBSCAN）の適用前後を切り替える",
+        )
+
         S.init_sticky(W_PC_COLOR, OPT_PC_COLOR, COLOR_MODE_LABEL)
         pc_color_mode = st.radio(
             "Instance Color", COLOR_MODES, key=W_PC_COLOR,
@@ -662,13 +680,14 @@ with pointcloud_tab_view:
                 view_run_id, tokens, include_points=True
             ) if tokens else {}
             flat = [fit for items_ in fittings.values() for fit in items_]
+            depth_key, lidar_key = POINTS_COLUMNS[points_mode]
             if show_depth_instances:
                 instance_groups += group_instance_points(
-                    flat, color_mode=pc_color_mode, points_key="points_depth_ego"
+                    flat, color_mode=pc_color_mode, points_key=depth_key
                 )
             if show_lidar_instances:
                 instance_groups += group_instance_points(
-                    flat, color_mode=pc_color_mode, points_key="points_lidar_ego"
+                    flat, color_mode=pc_color_mode, points_key=lidar_key
                 )
 
     with view_col:
