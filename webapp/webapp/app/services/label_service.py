@@ -118,6 +118,18 @@ def validate_label_config() -> list[str]:
             problems.append(
                 f"ラベル '{label}' の nuScenes カテゴリ変換が未定義です"
             )
+        # 未定義でも倍率 1.0 で動くが、意図した設定漏れを拾えるようにする
+        if label not in settings.NB_POINTS_RATIO:
+            problems.append(
+                f"ラベル '{label}' の NB_POINTS_RATIO が未定義です（1.0 で動作）"
+            )
+
+    # 倍率だけあってラベルが存在しない（綴り違い等）
+    for label in settings.NB_POINTS_RATIO:
+        if label not in settings.LABEL_TO_CATEGORY_GROUP:
+            problems.append(
+                f"NB_POINTS_RATIO の '{label}' に対応するラベルがありません"
+            )
 
     # nuScenes カテゴリからの変換先が検出ラベルとして存在するか
     for category, label in settings.NUSC_CATEGORY_TO_LABEL.items():

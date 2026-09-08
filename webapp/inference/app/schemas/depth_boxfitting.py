@@ -73,6 +73,9 @@ class BoxFittingRequest(BaseModel):
     depth_params: dict[str, Any] = Field(default_factory=dict)
     lidar_params: dict[str, Any] = Field(default_factory=dict)
     box_fitting_params: dict[str, Any] = Field(default_factory=dict)
+    # ROR の nb_points にかけるラベルごとの倍率。
+    # ラベル体系は webapp 側の設定なので、解決済みのものを受け取る
+    nb_points_ratio: dict[str, float] = Field(default_factory=dict)
 
     # DB へ保存する点群の上限（間引き後）
     stored_points_max: int = 500
@@ -167,6 +170,8 @@ class RefilterRequest(BaseModel):
     depth_params: dict[str, Any] = Field(default_factory=dict)
     # LiDAR 側は未実装（use_lidar の混合を入れるときに使う）
     lidar_params: dict[str, Any] = Field(default_factory=dict)
+    # ROR の nb_points にかけるラベルごとの倍率
+    nb_points_ratio: dict[str, float] = Field(default_factory=dict)
     stored_points_max: int = 500
     max_depth: float | None = None
 

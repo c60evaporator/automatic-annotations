@@ -150,6 +150,8 @@ def build_boxfitting_payload(
         "depth_params": depth_params,
         "lidar_params": lidar_params,
         "box_fitting_params": box_fitting_params or {},
+        # ROR の nb_points にかけるラベルごとの倍率（設定のスナップショット）
+        "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         # 保存する点群の上限（間引き後）。推論サーバー側で間引いて返す
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
         # 派生ファイルの出力先（推論サーバーも /derived を共有マウントしている）。
@@ -557,6 +559,7 @@ def refilter_sample(
         "frames": payload_frames,
         "depth_params": depth_params,
         "lidar_params": lidar_params or {},
+        "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
     })
     logger.info(

@@ -96,6 +96,24 @@ class Settings(BaseSettings):
         "CAM_BACK",
     ]
 
+    # Radius Outlier Removal の nb_points にかけるラベルごとの倍率。
+    # 小さい物体（traffic_cone / pedestrian）は点群自体が疎で、
+    # 全ラベル共通の nb_points だと点が丸ごと消えてしまう。
+    # 実際に使う値は「指定した nb_points × この倍率」を四捨五入したもの。
+    # Depth 側・LiDAR 側の両方で共通に使う
+    NB_POINTS_RATIO: dict[str, float] = {
+        "car": 1.0,
+        "truck": 1.0,
+        "construction_vehicle": 1.0,
+        "bus": 1.0,
+        "trailer": 1.0,
+        "barrier": 1.0,
+        "traffic_cone": 0.5,
+        "motorcycle": 1.0,
+        "bicycle": 1.0,
+        "pedestrian": 0.8,
+    }
+
     # --- 2D Object Detection ---------------------------------------------
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
@@ -155,11 +173,11 @@ class Settings(BaseSettings):
     # 深度点群のフィルタ（Depth Estimation タブ）
     DEPTH_ROR_NB_POINTS_DEFAULT: int = 8
     DEPTH_ROR_NB_POINTS_MAX: int = 50
-    DEPTH_ROR_RADIUS_DEFAULT: float = 0.5
+    DEPTH_ROR_RADIUS_DEFAULT: float = 0.6
     DEPTH_ROR_RADIUS_MAX: float = 5.0
-    DEPTH_DBSCAN_EPS_DEFAULT: float = 0.5
+    DEPTH_DBSCAN_EPS_DEFAULT: float = 1.0
     DEPTH_DBSCAN_EPS_MAX: float = 5.0
-    DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 10
+    DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 12
     DEPTH_DBSCAN_MIN_SAMPLES_MAX: int = 100
 
     # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）

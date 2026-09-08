@@ -173,6 +173,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         use_lidar=req.use_lidar,
                         stored_points_max=req.stored_points_max,
                         max_depth=max_depth,
+                        nb_points_ratio=req.nb_points_ratio,
                         stub_delay_sec=req.stub_delay_sec,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -261,6 +262,7 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
         results, elapsed = refilter(
             settings.DERIVED_ROOT, frames,
             depth_params=req.depth_params,
+            nb_points_ratio=req.nb_points_ratio,
             stored_points_max=req.stored_points_max,
             max_depth=(
                 req.max_depth if req.max_depth is not None

@@ -111,6 +111,24 @@ def masked_points(
     return picked[np.isfinite(picked).all(axis=1)]
 
 
+def scaled_nb_points(
+    base_nb_points: int, label: str | None, ratio: dict[str, float] | None
+) -> int:
+    """ラベルごとの倍率を掛けた nb_points を返す.
+
+    traffic_cone や pedestrian のような小さい物体は点群が疎で、
+    全ラベル共通の nb_points だと Radius Outlier Removal で
+    点が丸ごと消える。ラベルごとに緩める。
+
+    倍率が小さくても 1 は下回らせない（0 にすると ROR が無効化され、
+    「緩めたつもりが素通し」という分かりにくい状態になる）。
+    """
+    if base_nb_points < 1:
+        return base_nb_points
+    factor = (ratio or {}).get(label or "", 1.0)
+    return max(1, int(round(base_nb_points * float(factor))))
+
+
 def remove_radius_outliers(
     points: np.ndarray, nb_points: int, radius: float
 ) -> np.ndarray:
@@ -164,8 +182,14 @@ def instance_points_from_depth(
     ror_radius: float = 0.0,
     dbscan_eps: float = 0.0,
     dbscan_min_samples: int = 0,
+    label: str | None = None,
+    nb_points_ratio: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """1 インスタンス分の点群を作り、外れ値を除去する.
+
+    Args:
+        label: ラベルごとの nb_points 倍率を引くのに使う
+        nb_points_ratio: {ラベル: 倍率}。webapp の設定から渡される
 
     Returns:
         (フィルタ後の点群, フィルタ前の点群)
@@ -179,7 +203,9 @@ def instance_points_from_depth(
 
     points = raw
     if ror_nb_points >= 1 and ror_radius > 0:
-        points = remove_radius_outliers(points, ror_nb_points, ror_radius)
+        # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める
+        nb_points = scaled_nb_points(ror_nb_points, label, nb_points_ratio)
+        points = remove_radius_outliers(points, nb_points, ror_radius)
     if dbscan_eps > 0 and dbscan_min_samples >= 2:
         points = largest_dbscan_cluster(points, dbscan_eps, dbscan_min_samples)
     return points, raw

@@ -49,6 +49,7 @@ def refilter_frame(
     *,
     calibrated_sensor: dict[str, Any],
     depth_params: dict[str, Any],
+    nb_points_ratio: dict[str, float] | None = None,
     stored_points_max: int = 500,
     max_depth: float | None = None,
     camera_intrinsic: Any | None = None,
@@ -99,6 +100,8 @@ def refilter_frame(
             ror_radius=float(depth_params.get("ror_radius", 0.0)),
             dbscan_eps=float(depth_params.get("dbscan_eps", 0.0)),
             dbscan_min_samples=int(depth_params.get("dbscan_min_samples", 0)),
+            label=instance.get("label"),
+            nb_points_ratio=nb_points_ratio,
         )
 
         raw_ego = camera_to_ego(
@@ -130,6 +133,7 @@ def refilter(
     frames: list[dict[str, Any]],
     *,
     depth_params: dict[str, Any],
+    nb_points_ratio: dict[str, float] | None = None,
     stored_points_max: int = 500,
     max_depth: float | None = None,
 ) -> tuple[list[dict[str, Any]], float]:
@@ -151,6 +155,7 @@ def refilter(
                 path, frame["instances"],
                 calibrated_sensor=frame["calibrated_sensor"],
                 depth_params=depth_params,
+                nb_points_ratio=nb_points_ratio,
                 stored_points_max=stored_points_max,
                 max_depth=max_depth,
                 camera_intrinsic=(frame.get("calibrated_sensor") or {}).get(

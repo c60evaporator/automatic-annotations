@@ -187,6 +187,7 @@ class BoxFittingPipeline:
         use_lidar: bool = False,
         stored_points_max: int = 500,
         max_depth: float | None = None,
+        nb_points_ratio: dict[str, float] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1 フレーム分のインスタンスを処理する.
@@ -237,6 +238,9 @@ class BoxFittingPipeline:
                 ror_radius=float(depth_params.get("ror_radius", 0.0)),
                 dbscan_eps=float(depth_params.get("dbscan_eps", 0.0)),
                 dbscan_min_samples=int(depth_params.get("dbscan_min_samples", 0)),
+                # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める
+                label=instance.get("label"),
+                nb_points_ratio=nb_points_ratio,
             )
             raw_count = int(points_raw_camera.shape[0])
 
