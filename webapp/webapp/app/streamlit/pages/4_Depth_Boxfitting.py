@@ -48,7 +48,11 @@ from app.streamlit.components.instance_tracking_viewer import (
     preferred_instances,
 )
 from app.streamlit.components.pointcloud_viewer import (
+    CAMERA_PRESETS,
+    VIEWS,
+    VIEW_GLOBAL,
     build_pointcloud_figure,
+    global_camera,
     group_instance_points,
     render_pointcloud,
 )
@@ -94,6 +98,10 @@ OPT_MASK_COLOR, W_MASK_COLOR = "boxfit_mask_color", "_w_boxfit_mask_color"
 OPT_INST_TEXT, W_INST_TEXT = "boxfit_inst_text", "_w_boxfit_inst_text"
 OPT_PC_COLOR, W_PC_COLOR = "boxfit_pc_color", "_w_boxfit_pc_color"
 OPT_PC_POINTS, W_PC_POINTS = "boxfit_pc_points", "_w_boxfit_pc_points"
+# 点群ビューの視点。ボタンで切り替え、押すたびに版番号を進めて
+# Plotly 側の uirevision を変える（同じ値のままだと視点が更新されない）
+PC_VIEW = "boxfit_pc_view"
+PC_VIEW_REVISION = "boxfit_pc_view_rev"
 W_SAMPLE = "_w_boxfit_sample"
 
 MASK_MODES = ("None", "Original", "Closed")
@@ -691,6 +699,32 @@ with pointcloud_tab_view:
                 )
 
     with view_col:
+        # 視点ボタン。既定は Global View（global 座標に対して向きが固定）
+        st.session_state.setdefault(PC_VIEW, VIEW_GLOBAL)
+        st.session_state.setdefault(PC_VIEW_REVISION, 0)
+        view_cols = st.columns(len(VIEWS) + 3)
+        for index, view_name in enumerate(VIEWS):
+            with view_cols[index]:
+                if st.button(view_name, width="stretch",
+                             key=f"_w_pc_view_{view_name}"):
+                    st.session_state[PC_VIEW] = view_name
+                    # 同じ視点を押し直したときも戻せるよう、毎回進める
+                    st.session_state[PC_VIEW_REVISION] += 1
+
+        current_view = st.session_state[PC_VIEW]
+        if current_view == VIEW_GLOBAL:
+            # ego_pose はどのカメラフレームでも同じ sample のものを使う
+            ego_pose = next(
+                (f["ego_pose"] for f in frames if f.get("ego_pose")), None
+            )
+            camera = global_camera(
+                ego_pose["rotation"],
+                settings.DEFAULT_GLOBAL_POINTCLOUD_EYE,
+                settings.DEFAULT_GLOBAL_POINTCLOUD_UP,
+            ) if ego_pose else None
+        else:
+            camera = CAMERA_PRESETS.get(current_view)
+
         if not view_run_id:
             st.info("保存済みの推論結果がありません。Run Inference を実行してください。")
         else:
@@ -700,6 +734,13 @@ with pointcloud_tab_view:
                 raw_depth=raw_depth_points,
                 instance_groups=instance_groups,
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
+                camera=camera,
+                # Global View は sample ごとに ego の向きが変わるため、
+                # sample も版番号に含めて視点を追従させる
+                view_revision=(
+                    f"{current_view}:{st.session_state[PC_VIEW_REVISION]}"
+                    f":{selected_sample_idx if current_view == VIEW_GLOBAL else ''}"
+                ),
             )
             render_pointcloud(fig, counts)
 

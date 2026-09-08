@@ -175,6 +175,12 @@ class Settings(BaseSettings):
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
 
+    # 点群ビューの Global View の視点。
+    # global 座標に対する既定の視線位置と上方向で、
+    # ego_pose の回転を打ち消して適用される（車両が回っても向きが変わらない）
+    DEFAULT_GLOBAL_POINTCLOUD_EYE: list[float] = [-1.0, -0.5, 1.5]
+    DEFAULT_GLOBAL_POINTCLOUD_UP: list[float] = [0.0, 0.0, 1.0]
+
     # 点群ビューの既定表示
     SHOW_RAW_LIDAR: bool = False
     SHOW_RAW_LIDAR_GROUND: bool = False
