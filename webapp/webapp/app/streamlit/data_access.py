@@ -329,6 +329,7 @@ def load_box_fittings(
     *,
     include_points: bool = False,
     include_mask: bool = False,
+    include_hull: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     """{sample_data_token: [Box Fitting 結果, ...]}.
 
@@ -341,6 +342,7 @@ def load_box_fittings(
         sample_data_tokens=list(sample_data_tokens) if sample_data_tokens else None,
         include_points=include_points,
         include_mask=include_mask,
+        include_hull=include_hull,
     )
 
 
@@ -370,3 +372,20 @@ def refilter_instance_points(
         lidar_params=params.get("lidar", {}),
         channels=list(channels) if channels else None,
     )
+
+
+@st.cache_data(ttl=CACHE_TTL_SEC)
+def list_gt_annotations(
+    dataset_id: str, sample_token: str
+) -> list[dict[str, Any]]:
+    """sample の GT アノテーション（source='imported'）.
+
+    Box Fitting の BEV 比較で使う。自動生成分（source='auto'）を混ぜると
+    「GT と推定の比較」にならないので、取り込み由来だけに絞る。
+    """
+    from app.models.annotation import SOURCE_IMPORTED
+
+    with read_only_session() as session:
+        return AnnotationRepository(session).list_by_sample(
+            sample_token, source=SOURCE_IMPORTED, include_attributes=False
+        )

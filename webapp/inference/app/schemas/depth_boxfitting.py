@@ -136,6 +136,10 @@ class BoxFittingResult(BaseModel):
     size_wlh: list[float] | None = None
     yaw_ego: float | None = None
     fitting_score: float | None = None
+    # 当てはめに使った凸包（BEV）。UI で重ねて表示する
+    hull_xy: dict[str, Any] | None = None
+    # 手法固有の指標（occlusion_area など）
+    fit_metrics: dict[str, Any] | None = None
     error: str | None = None
 
 

@@ -26,6 +26,7 @@ from app.services.depth_boxfitting_service import (
     resolve_display_run,
 )
 from app.services.depth_pointcloud import depth_to_ego_points
+from app.services.gt_bev import gt_boxes_in_ego
 from app.services.derived_file_service import load_depth_map, load_lidar_pointcloud
 from app.services.frame_image import get_keyframe_image  # noqa: F401  (将来の重ね表示用)
 from app.services.inference_client import (
@@ -49,6 +50,12 @@ from app.streamlit.components.instance_tracking_viewer import (
     draw_instances,
     preferred_instances,
 )
+from app.streamlit.components.bev_viewer import (
+    GT_BOX_COLOR,
+    build_bev_figure,
+    combined_axis_range,
+    render_bev,
+)
 from app.streamlit.components.pointcloud_viewer import (
     CAMERA_PRESETS,
     VIEWS,
@@ -61,6 +68,7 @@ from app.streamlit.components.pointcloud_viewer import (
 from app.streamlit.components.waypoint_viewer import render_scene_waypoint_view
 from app.streamlit.data_access import (
     clear_caches,
+    list_gt_annotations,
     refilter_instance_points,
     get_dataset,
     get_scene,
@@ -107,6 +115,8 @@ PC_VIEW = "boxfit_pc_view"
 PC_VIEW_REVISION = "boxfit_pc_view_rev"
 # Apply で確定した再フィルタのパラメータ。None なら run 保存時の点群を使う
 PC_REFILTER_PARAMS = "boxfit_refilter_params"
+# Box Fitting タブの表示オプション
+OPT_BF_COLOR, W_BF_COLOR = "boxfit_bf_color", "_w_boxfit_bf_color"
 W_SAMPLE = "_w_boxfit_sample"
 
 MASK_MODES = ("None", "Original", "Closed")
@@ -241,9 +251,35 @@ with param_col:
             )
 
         with fitting_tab:
-            st.caption("Box Fitting のアルゴリズム確定後にパラメータを追加します。")
+            boxfit_method = st.selectbox(
+                "Method", settings.BOXFIT_METHODS,
+                index=settings.BOXFIT_METHODS.index(settings.BOXFIT_METHOD_DEFAULT)
+                if settings.BOXFIT_METHOD_DEFAULT in settings.BOXFIT_METHODS else 0,
+                help=("convex_hull_moa: BEV の凸包に対し、センサーから見た"
+                      "オクルージョン面積が最小になる向きを探す"),
+            )
+            angle_step_deg = st.slider(
+                "angle_step_deg",
+                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
+                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
+                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
+                help="向きの探索刻み。細かいほど遅くなる",
+            )
+            z_percentiles = st.slider(
+                "z_percentiles", 0.0, 100.0,
+                value=(settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT,
+                       settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT),
+                step=0.5,
+                help=("高さを決めるパーセンタイル。0/100 にすると"
+                      "はみ出した 1 点で箱が縦に伸びる"),
+            )
 
 mask_params = {"dilation": int(mask_dilation), "erosion": int(mask_erosion)}
+box_fitting_params = {
+    "method": boxfit_method,
+    "angle_step_deg": float(angle_step_deg),
+    "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
+}
 depth_params = {
     "ror_nb_points": int(depth_ror_nb), "ror_radius": float(depth_ror_radius),
     "dbscan_eps": float(depth_dbscan_eps), "dbscan_min_samples": int(depth_dbscan_min),
@@ -316,6 +352,7 @@ with param_col:
                             num_lidar_sweeps=int(num_lidar_sweeps),
                             mask_params=mask_params, depth_params=depth_params,
                             lidar_params=lidar_params,
+                            box_fitting_params=box_fitting_params,
                         )
                         payload = build_boxfitting_payload(
                             dataset_id, scene_token, dataset["dataroot"],
@@ -325,6 +362,7 @@ with param_col:
                             num_lidar_sweeps=int(num_lidar_sweeps),
                             mask_params=mask_params, depth_params=depth_params,
                             lidar_params=lidar_params,
+                            box_fitting_params=box_fitting_params,
                             stub_delay_sec=settings.BOXFIT_STUB_DELAY_SEC,
                         )
                         job = submit_boxfitting(payload)
@@ -894,20 +932,121 @@ with pointcloud_tab_view:
 # Box Fitting タブ
 # ------------------------------------------------------------------
 with fitting_tab_view:
+    bf_view_col, bf_opt_col = st.columns([8, 1])
+
+    with bf_opt_col:
+        compare_gt = st.checkbox(
+            "Compare with GT", value=False, key="_w_bf_compare_gt",
+            help="GT ボックスの BEV を左に並べて表示する",
+        )
+        show_bf_lidar = st.checkbox(
+            "LiDAR Instances", value=False, key="_w_bf_lidar",
+            disabled=not (run_info and run_info["use_lidar"]),
+        )
+        show_bf_depth = st.checkbox(
+            "Depth Instances", value=True, key="_w_bf_depth")
+        show_hull = st.checkbox(
+            "Convex-Hull", value=False, key="_w_bf_hull",
+            help="当てはめに使った凸包を重ねる")
+        S.init_sticky(W_BF_COLOR, OPT_BF_COLOR, COLOR_MODE_LABEL)
+        bf_color_mode = st.radio(
+            "Instance Color", COLOR_MODES, key=W_BF_COLOR,
+            on_change=S.sync_sticky, args=(W_BF_COLOR, OPT_BF_COLOR),
+        )
+
     if not view_run_id:
-        st.info("保存済みの推論結果がありません。")
+        with bf_view_col:
+            st.info("保存済みの推論結果がありません。")
     else:
-        fittings = load_box_fittings(view_run_id, frame_tokens)
-        flat = [fit for items_ in fittings.values() for fit in items_]
-        from collections import Counter
-        counts = Counter(f["status"] for f in flat)
-        st.caption(
-            f"このサンプルのインスタンス: {len(flat)} 件 / "
-            + " / ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+        bf_fittings = load_box_fittings(
+            view_run_id, frame_tokens,
+            include_points=(show_bf_depth or show_bf_lidar),
+            include_hull=show_hull,
         )
-        st.info(
-            "点群までを生成しています（status=not_fitted）。"
-            "3D ボックスの当てはめはアルゴリズム確定後に実装します。"
-        )
+        bf_flat = [fit for items_ in bf_fittings.values() for fit in items_]
+
+        def _bf_color(item: dict) -> str:
+            key = (str(item.get("track_id")) if bf_color_mode == COLOR_MODE_TRACK
+                   else str(item.get("label")))
+            return (color_for_track(key) if bf_color_mode == COLOR_MODE_TRACK
+                    else color_for_label(key))
+
+        # 推定ボックス（当てはめできたものだけ）
+        est_boxes = [
+            {
+                "key": f"{fit['label']}#{fit['track_id']}",
+                "color": _bf_color(fit),
+                "center_xy": fit["center_ego"][:2],
+                "width": fit["size_wlh"][0],
+                "length": fit["size_wlh"][1],
+                "yaw": fit["yaw_ego"] or 0.0,
+            }
+            for fit in bf_flat if fit.get("center_ego") and fit.get("size_wlh")
+        ]
+        hulls = [
+            {"key": f"{fit['label']}#{fit['track_id']}", "color": _bf_color(fit),
+             "points": fit["hull_xy"]["points"]}
+            for fit in bf_flat
+            if show_hull and fit.get("hull_xy") and fit["hull_xy"].get("points")
+        ]
+
+        bf_groups = []
+        if show_bf_depth:
+            bf_groups += group_instance_points(
+                bf_flat, color_mode=bf_color_mode, points_key="points_depth_ego")
+        if show_bf_lidar:
+            bf_groups += group_instance_points(
+                bf_flat, color_mode=bf_color_mode, points_key="points_lidar_ego")
+
+        # GT は sample 単位。ego_pose はどのカメラフレームでも同じ
+        gt_boxes = []
+        if compare_gt:
+            ego_pose = next((f["ego_pose"] for f in frames if f.get("ego_pose")), None)
+            if ego_pose:
+                gt_boxes = [
+                    {
+                        "key": f"{box['label']}(GT)",
+                        # GT は色分けの対象外。推定と混同しないよう固定色にする
+                        "color": GT_BOX_COLOR,
+                        "center_xy": box["center_ego"][:2],
+                        "width": box["size_wlh"][0],
+                        "length": box["size_wlh"][1],
+                        "yaw": box["yaw_ego"],
+                    }
+                    for box in gt_boxes_in_ego(
+                        list_gt_annotations(dataset_id, selected_sample["token"]),
+                        ego_pose,
+                    )
+                ]
+
+        # 左右で同じ表示範囲にする。揃えないと同じ物体が別位置に見える
+        range_sources = [np.asarray(g["points"]) for g in bf_groups]
+        centers = [b["center_xy"] for b in est_boxes + gt_boxes]
+        if centers:
+            range_sources.append(np.asarray(centers, dtype=float))
+        axis_range = combined_axis_range(range_sources)
+
+        with bf_view_col:
+            st.caption(
+                f"インスタンス {len(bf_flat)} 件 / ボックス生成 {len(est_boxes)} 件"
+                + (f" / GT {len(gt_boxes)} 件" if compare_gt else "")
+            )
+            common = dict(
+                max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
+                axis_range=axis_range,
+            )
+            if compare_gt:
+                gt_col, est_col = st.columns(2)
+                with gt_col:
+                    render_bev(build_bev_figure(
+                        boxes=gt_boxes, title="Ground truth", **common))
+                with est_col:
+                    render_bev(build_bev_figure(
+                        instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
+                        title="Fitted", **common))
+            else:
+                render_bev(build_bev_figure(
+                    instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
+                    **common))
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])

@@ -467,6 +467,7 @@ def load_box_fittings(
     sample_data_tokens: list[str] | None = None,
     include_points: bool = False,
     include_mask: bool = False,
+    include_hull: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     with read_only_session() as session:
         return DepthBoxFittingRepository(session).list_box_fittings_by_run(
@@ -474,6 +475,7 @@ def load_box_fittings(
             sample_data_tokens=sample_data_tokens,
             include_points=include_points,
             include_mask=include_mask,
+            include_hull=include_hull,
         )
 
 

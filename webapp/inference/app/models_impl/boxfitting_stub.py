@@ -19,6 +19,7 @@ import numpy as np
 
 from app.core.logging import get_logger
 from common.mask_rle import decode_rle, encode_rle, rle_bbox
+from app.services.box_fitting import convex_hull_xy
 from common.point_ops import downsample_to_max, points_to_json
 from common.transform3d import scale_intrinsic
 
@@ -237,5 +238,9 @@ class BoxFittingStub:
                 "size_wlh": [float(v) for v in size],
                 "yaw_ego": float(rng.uniform(-np.pi, np.pi)),
                 "fitting_score": round(float(rng.uniform(0.4, 0.95)), 3),
+                # 本実装と同じく凸包も返す（UI の hull 表示を確認できるように）
+                "hull_xy": {"points": np.round(
+                    convex_hull_xy(depth_points[:, :2]), 3).tolist()},
+                "fit_metrics": {"method": "stub", "occlusion_area": 0.0},
             })
         return results

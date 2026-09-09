@@ -108,7 +108,7 @@ class Settings(BaseSettings):
         "bus": 1.0,
         "trailer": 1.0,
         "barrier": 1.0,
-        "traffic_cone": 0.4,
+        "traffic_cone": 0.5,
         "motorcycle": 1.0,
         "bicycle": 1.0,
         "pedestrian": 0.8,
@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     # 深度点群のフィルタ（Depth Estimation タブ）
     DEPTH_ROR_NB_POINTS_DEFAULT: int = 8
     DEPTH_ROR_NB_POINTS_MAX: int = 50
-    DEPTH_ROR_RADIUS_DEFAULT: float = 0.6
+    DEPTH_ROR_RADIUS_DEFAULT: float = 0.8
     DEPTH_ROR_RADIUS_MAX: float = 5.0
     DEPTH_DBSCAN_EPS_DEFAULT: float = 1.0
     DEPTH_DBSCAN_EPS_MAX: float = 5.0
@@ -192,6 +192,20 @@ class Settings(BaseSettings):
     LIDAR_DBSCAN_EPS_MAX: float = 5.0
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
+
+    # --- Box Fitting -------------------------------------------------------
+    # 当てはめ手法。convex_hull_moa は BEV の凸包に対し、角度を刻んで
+    # 外接矩形の面積が最小になる向きを探す
+    BOXFIT_METHOD_DEFAULT: str = "convex_hull_moa"
+    BOXFIT_METHODS: list[str] = ["convex_hull_moa"]
+    # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
+    BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
+    BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
+    BOXFIT_ANGLE_STEP_DEG_MAX: float = 10.0
+    # 高さを決めるパーセンタイル（下限, 上限）。最小・最大をそのまま使うと
+    # 路面やマスクのはみ出し 1 点で箱が縦に伸びる
+    BOXFIT_Z_PERCENTILE_LOW_DEFAULT: float = 1.0
+    BOXFIT_Z_PERCENTILE_HIGH_DEFAULT: float = 99.0
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

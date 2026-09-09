@@ -668,12 +668,22 @@ class BoxFitting3D(Base):
     depth_align_scale: Mapped[float | None] = mapped_column(Float, nullable=True)
     depth_align_shift: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # 推定に使った凸包（BEV の XY 平面）。{"points": [[x, y], ...]}
+    # UI で「hull を重ねる」表示に使う。点群から再計算もできるが、
+    # webapp 側に凸包の実装を増やさず、当時の推定過程をそのまま残す
+    hull_xy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # --- フィッティング結果（ego 座標）------------------------------------
     # SampleAnnotation は global 座標なので、デバッグのたびに ego へ戻すのを避ける
     center_ego: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [x, y, z]
     size_wlh:   Mapped[list | None] = mapped_column(JSON, nullable=True)  # [w, l, h]
     yaw_ego:    Mapped[float | None] = mapped_column(Float, nullable=True)  # [rad]
     fitting_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 手法ごとの指標（occlusion_area、探索した角度など）。
+    # 手法を増やすたびに列を足さずに済むよう JSON で持つ。
+    # fitting_score は手法をまたいで比較できる値（大きいほど良い）に統一し、
+    # 「小さいほど良い」ような指標はこちらへ入れる
+    fit_metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 結果状態（BOXFIT_STATUS_* のいずれか）
     status: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text(f"'{BOXFIT_STATUS_FITTED}'")

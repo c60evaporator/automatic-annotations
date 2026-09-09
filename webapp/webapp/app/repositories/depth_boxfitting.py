@@ -182,6 +182,8 @@ class DepthBoxFittingRepository:
             "num_points_lidar_kept": int(item.get("num_points_lidar_kept", 0)),
             "depth_align_scale": item.get("depth_align_scale"),
             "depth_align_shift": item.get("depth_align_shift"),
+            "hull_xy": item.get("hull_xy"),
+            "fit_metrics": item.get("fit_metrics"),
             "center_ego": item.get("center_ego"),
             "size_wlh": item.get("size_wlh"),
             "yaw_ego": item.get("yaw_ego"),
@@ -354,6 +356,7 @@ class DepthBoxFittingRepository:
         sample_data_tokens: list[str] | None = None,
         include_points: bool = False,
         include_mask: bool = False,
+        include_hull: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
         """{sample_data_token: [Box Fitting 結果, ...]} を返す.
 
@@ -374,12 +377,15 @@ class DepthBoxFittingRepository:
             BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
             BoxFitting3D.depth_align_scale, BoxFitting3D.depth_align_shift,
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh, BoxFitting3D.yaw_ego,
-            BoxFitting3D.fitting_score, BoxFitting3D.manually_modified,
+            BoxFitting3D.fitting_score, BoxFitting3D.fit_metrics,
+            BoxFitting3D.manually_modified,
         ]
         if include_points:
             columns += [BoxFitting3D.points_depth_ego, BoxFitting3D.points_lidar_ego]
         if include_mask:
             columns.append(BoxFitting3D.mask_rle_closed)
+        if include_hull:
+            columns.append(BoxFitting3D.hull_xy)
 
         stmt = select(*columns).where(
             BoxFitting3D.depth_estimation_params_id == params_id

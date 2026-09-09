@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 
 from app.core.logging import get_logger
+from app.services.box_fitting import BOXFIT_METHOD_CONVEX_HULL_MOA, fit_box
 from app.services.depth_ops import (
     close_mask,
     depth_map_to_point_cloud,
@@ -188,6 +189,7 @@ class BoxFittingPipeline:
         stored_points_max: int = 500,
         max_depth: float | None = None,
         nb_points_ratio: dict[str, float] | None = None,
+        box_fitting_params: dict[str, Any] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1 フレーム分のインスタンスを処理する.
@@ -267,18 +269,34 @@ class BoxFittingPipeline:
             points_ego = camera_to_ego(
                 points_camera, calib["translation"], calib["rotation"]
             )
-            results.append({
+            entry = {
                 **base,
-                # Box Fitting は未実装。点群までを保存し、
-                # ボックスが無いことが status で分かるようにする
-                "status": "not_fitted",
                 # フィルタ前は保存しない。深度マップとクロージング後マスクから
                 # 再生成できるため（再フィルタ用エンドポイント経由）
                 "points_depth_ego": points_to_json(
                     downsample_to_max(points_ego, stored_points_max)
                 ),
                 "points_lidar_ego": None,
-            })
+            }
+
+            # 3D ボックスの当てはめ。間引き前の点群を使う
+            # （表示用に間引いた点で当てると形が粗くなる）
+            # MOA はセンサーから見た隠れ方を使うため、ego 座標での
+            # カメラ位置を渡す（(0,0) はセンサー座標系のときの値）
+            fit = fit_box(
+                points_ego,
+                (box_fitting_params or {}).get("method", BOXFIT_METHOD_CONVEX_HULL_MOA),
+                box_fitting_params,
+                sensor_origin_xy=(
+                    float(calib["translation"][0]), float(calib["translation"][1])
+                ),
+            )
+            if fit is None:
+                entry["status"] = "not_fitted"
+            else:
+                entry.update(fit)
+                entry["status"] = "fitted"
+            results.append(entry)
 
         return results
 
