@@ -108,7 +108,7 @@ class Settings(BaseSettings):
         "bus": 1.0,
         "trailer": 1.0,
         "barrier": 1.0,
-        "traffic_cone": 0.5,
+        "traffic_cone": 0.4,
         "motorcycle": 1.0,
         "bicycle": 1.0,
         "pedestrian": 0.8,
