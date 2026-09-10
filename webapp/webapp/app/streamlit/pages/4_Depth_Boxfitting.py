@@ -27,6 +27,7 @@ from app.services.depth_boxfitting_service import (
 )
 from app.services.depth_pointcloud import depth_to_ego_points
 from app.services.gt_bev import gt_boxes_in_ego
+from app.services.label_service import all_labels
 from app.services.derived_file_service import load_depth_map, load_lidar_pointcloud
 from app.services.frame_image import get_keyframe_image  # noqa: F401  (将来の重ね表示用)
 from app.services.inference_client import (
@@ -46,9 +47,15 @@ from app.streamlit.components.instance_tracking_viewer import (
     COLOR_MODES,
     INSTANCE_TEXT_MODES,
     TEXT_MODE_NONE,
+    TEXT_MODE_TRACK,
     color_for_track,
     draw_instances,
     preferred_instances,
+)
+from app.streamlit.components.box3d_viewer import (
+    box_center_in_fov,
+    render_box3d_comparison_grid,
+    render_box3d_grid,
 )
 from app.streamlit.components.bev_viewer import (
     build_bev_figure,
@@ -116,6 +123,9 @@ PC_VIEW_REVISION = "boxfit_pc_view_rev"
 PC_REFILTER_PARAMS = "boxfit_refilter_params"
 # Box Fitting タブの表示オプション
 OPT_BF_COLOR, W_BF_COLOR = "boxfit_bf_color", "_w_boxfit_bf_color"
+# Box on Cam タブの表示オプション
+OPT_CAM_COLOR, W_CAM_COLOR = "boxfit_cam_color", "_w_boxfit_cam_color"
+OPT_CAM_TEXT, W_CAM_TEXT = "boxfit_cam_text", "_w_boxfit_cam_text"
 W_SAMPLE = "_w_boxfit_sample"
 
 MASK_MODES = ("None", "Original", "Closed")
@@ -503,8 +513,8 @@ frames = [
 frames_by_channel = {f["channel"]: f for f in frames}
 frame_tokens = tuple(f["token"] for f in frames)
 
-depth_tab_view, pointcloud_tab_view, fitting_tab_view = st.tabs(
-    ["Depth Estimation", "PointCloud", "Box Fitting"]
+depth_tab_view, pointcloud_tab_view, fitting_tab_view, cam_tab_view = st.tabs(
+    ["Depth Estimation", "PointCloud", "Box Fitting", "Box on Cam"]
 )
 
 # ------------------------------------------------------------------
@@ -1084,5 +1094,102 @@ with fitting_tab_view:
                 render_bev(build_bev_figure(
                     instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
                     **common))
+
+# ------------------------------------------------------------------
+# Box on Cam タブ（3D ボックスをカメラ画像へ投影）
+# ------------------------------------------------------------------
+with cam_tab_view:
+    cam_view_col, cam_opt_col = st.columns([8, 1])
+
+    with cam_opt_col:
+        cam_compare_gt = st.checkbox(
+            "Compare with GT", value=False, key="_w_cam_compare_gt",
+            help="GT の 3D ボックスを左に並べて表示する",
+        )
+        S.init_sticky(W_CAM_COLOR, OPT_CAM_COLOR, COLOR_MODE_LABEL)
+        cam_color_mode = st.radio(
+            "Instance Color", COLOR_MODES, key=W_CAM_COLOR,
+            on_change=S.sync_sticky, args=(W_CAM_COLOR, OPT_CAM_COLOR),
+        )
+        S.init_sticky(W_CAM_TEXT, OPT_CAM_TEXT, TEXT_MODE_TRACK)
+        cam_text_mode = st.radio(
+            "Instance text", INSTANCE_TEXT_MODES, key=W_CAM_TEXT,
+            on_change=S.sync_sticky, args=(W_CAM_TEXT, OPT_CAM_TEXT),
+        )
+
+    if not view_run_id:
+        with cam_view_col:
+            st.info("保存済みの推論結果がありません。")
+    else:
+        cam_fittings = load_box_fittings(view_run_id, frame_tokens)
+        cam_flat = [f for items_ in cam_fittings.values() for f in items_
+                    if f.get("center_ego") and f.get("size_wlh")]
+
+        # 凡例は config のラベル定義から出す。検出結果に含まれるものだけを
+        # 出すと、推論のたびに並びとチェック状態が変わってしまう
+        with cam_opt_col:
+            counts: dict[str, int] = {}
+            for fit in cam_flat:
+                counts[fit["label"]] = counts.get(fit["label"], 0) + 1
+            enabled_labels = render_label_legend(
+                all_labels(), counts=counts,
+                key_prefix="boxfit_cam_legend",
+            )
+
+        shown = [f for f in cam_flat if f["label"] in enabled_labels]
+
+        # GT はカメラごとの ego_pose で変換する。sample_data の時刻が
+        # カメラ間でわずかに違うため、1 つの ego_pose で済ませると
+        # 投影がずれる
+        annotations = (
+            list_gt_annotations(dataset_id, selected_sample["token"])
+            if cam_compare_gt else []
+        )
+
+        cam_items = []
+        for sensor in cam_sensors:
+            frame = frames_by_channel.get(sensor["channel"])
+            if frame is None:
+                continue
+            image, _frame = get_keyframe_image(
+                dataset_id, dataset["dataroot"],
+                selected_sample["token"], sensor["token"],
+            )
+            calib = frame["calibrated_sensor"]
+            width, height = frame["width"], frame["height"]
+
+            # そのカメラのフレームで推定されたボックスだけを描く。
+            # 他カメラのボックスは、画角内に入っても別インスタンスなので混ぜない
+            boxes = [f for f in shown if f["sample_data_token"] == frame["token"]]
+
+            gt_boxes = []
+            if cam_compare_gt and annotations:
+                gt_boxes = [
+                    box for box in gt_boxes_in_ego(annotations, frame["ego_pose"])
+                    if box["label"] in enabled_labels
+                    and box_center_in_fov(box, calib, width, height)
+                ]
+
+            cam_items.append({
+                "channel": sensor["channel"], "image": image,
+                "calibrated_sensor": calib,
+                "boxes": boxes, "gt_boxes": gt_boxes,
+            })
+
+        with cam_view_col:
+            st.caption(
+                f"推定ボックス {sum(len(i['boxes']) for i in cam_items)} 件"
+                + (f" / GT {sum(len(i['gt_boxes']) for i in cam_items)} 件"
+                   if cam_compare_gt else "")
+            )
+            if cam_compare_gt:
+                render_box3d_comparison_grid(
+                    cam_items, color_mode=cam_color_mode, text_mode=cam_text_mode,
+                )
+            else:
+                render_box3d_grid(
+                    cam_items, columns=2,
+                    color_mode=cam_color_mode, text_mode=cam_text_mode,
+                )
 
 S.render_selection_sidebar(dataset_name=dataset["name"], scene_name=scene["name"])
