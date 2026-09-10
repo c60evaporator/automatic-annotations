@@ -3,9 +3,6 @@
 fastapi[standard]
 pydantic-settings
  
-# --- Settings ---
-pydantic-settings
- 
 # --- numpy の固定 ---
 # ベースイメージの C 拡張は numpy 1.x でビルドされている。
 # 他パッケージの依存で 2.x へ上がるのを防ぐため明示的に上限を切る
