@@ -20,7 +20,8 @@ from common.point_ops import downsample_to_max
 
 # 自車位置のマーカー
 EGO_MARKER_COLOR = "#444444"
-# GT ボックスの色（推定ボックスとの区別を色でつける）
+# GT ボックスの既定色。現在はラベル色を使うため未使用だが、
+# 「GT を一色で描きたい」場合の色として残してある
 GT_BOX_COLOR = "#2ca02c"
 
 
@@ -123,6 +124,10 @@ def build_bev_figure(
         showlegend=False,
         xaxis_title="X [m] (前方)",
         yaxis_title="Y [m] (左方)",
+        # ドラッグは Pan。既定の Zoom（範囲選択）だと、
+        # 見たい場所へ寄るのに毎回ダブルクリックで戻す操作が要る。
+        # 拡縮はホイールで行う（render_bev の scrollZoom）
+        dragmode="pan",
     )
     # 実寸比を保つ。崩れると当てはまりの善し悪しが読めない
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
@@ -157,5 +162,14 @@ def combined_axis_range(
     )
 
 
+# Plotly.js へ渡す操作設定。
+# scrollZoom を有効にしないと、dragmode="pan" のときに拡縮できなくなる
+BEV_PLOT_CONFIG = {
+    "scrollZoom": True,
+    "displaylogo": False,
+    "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+}
+
+
 def render_bev(fig: go.Figure) -> None:
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", config=BEV_PLOT_CONFIG)

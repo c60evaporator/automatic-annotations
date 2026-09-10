@@ -51,7 +51,6 @@ from app.streamlit.components.instance_tracking_viewer import (
     preferred_instances,
 )
 from app.streamlit.components.bev_viewer import (
-    GT_BOX_COLOR,
     build_bev_figure,
     combined_axis_range,
     render_bev,
@@ -1006,8 +1005,11 @@ with fitting_tab_view:
                 gt_boxes = [
                     {
                         "key": f"{box['label']}(GT)",
-                        # GT は色分けの対象外。推定と混同しないよう固定色にする
-                        "color": GT_BOX_COLOR,
+                        # GT も推定と同じラベル色にする。左右に並べたとき、
+                        # 同じ色の箱が対応するかどうかで見比べられる。
+                        # Track ID 色分けのときも GT はラベル色のまま
+                        # （GT に track_id は無く、色を対応づけられない）
+                        "color": color_for_label(box["label"]),
                         "center_xy": box["center_ego"][:2],
                         "width": box["size_wlh"][0],
                         "length": box["size_wlh"][1],
