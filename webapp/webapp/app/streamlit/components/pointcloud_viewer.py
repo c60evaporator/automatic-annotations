@@ -9,6 +9,7 @@ Plotly の 3D 散布図はブラウザへ JSON で送られるため、点数が
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -28,8 +29,25 @@ COLOR_GROUND = "#8b6b4a"       # 茶色
 COLOR_RAW_DEPTH = "#9fd8e8"    # 薄い水色
 
 # 点の大きさ
-MARKER_SIZE_BACKGROUND = 0.6
-MARKER_SIZE_INSTANCE = 1
+MARKER_SIZE_BACKGROUND = 1
+MARKER_SIZE_INSTANCE = 2
+
+# 自車の姿勢を示す軸の色（x=前方 / y=左方 / z=上方）
+AXIS_COLORS = ("red", "green", "blue")
+AXIS_NAMES = ("X", "Y", "Z")
+AXIS_LINE_WIDTH = 4
+# 矢先の円錐の大きさ [m]
+AXIS_TIP_SIZE = 0.8
+
+# 3D ボックスの枠線の太さ
+BOX_LINE_WIDTH = 3
+# 直方体の 12 辺（頂点インデックスの組）。
+# 頂点は下面 0-3 → 上面 4-7 の順で作る
+BOX_EDGES = (
+    (0, 1), (1, 2), (2, 3), (3, 0),      # 下面
+    (4, 5), (5, 6), (6, 7), (7, 4),      # 上面
+    (0, 4), (1, 5), (2, 6), (3, 7),      # 垂直
+)
 
 # 視点プリセット。点群は ego 座標（x=前方 / y=左方 / z=上方）。
 #
@@ -144,21 +162,128 @@ def _add_points(
     return reduced.shape[0]
 
 
+def box_corners_3d(
+    center: Sequence[float], size_wlh: Sequence[float], yaw: float
+) -> np.ndarray:
+    """3D ボックスの 8 頂点を返す ``(8, 3)``.
+
+    Args:
+        size_wlh: nuScenes の並び ``[width, length, height]``。
+            取り違えると縦横が入れ替わった箱になる
+    """
+    width, length, height = (float(v) for v in size_wlh)
+    half_l, half_w, half_h = length / 2.0, width / 2.0, height / 2.0
+    local = np.array([
+        [half_l, half_w, -half_h], [half_l, -half_w, -half_h],
+        [-half_l, -half_w, -half_h], [-half_l, half_w, -half_h],
+        [half_l, half_w, half_h], [half_l, -half_w, half_h],
+        [-half_l, -half_w, half_h], [-half_l, half_w, half_h],
+    ])
+    cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+    rotation = np.array([
+        [cos_y, -sin_y, 0.0], [sin_y, cos_y, 0.0], [0.0, 0.0, 1.0],
+    ])
+    return local @ rotation.T + np.asarray(center, dtype=float)
+
+
+def add_boxes(
+    fig: go.Figure, boxes: Sequence[dict[str, Any]]
+) -> int:
+    """3D ボックスを枠線で追加する.
+
+    Args:
+        boxes: ``{"key", "color", "center", "size_wlh", "yaw"}`` のリスト
+
+    Returns:
+        描いたボックス数。
+
+    同じ色のボックスは 1 トレースにまとめ、辺の間を None で区切る。
+    ボックスごとにトレースを作ると、数十個で Plotly が目に見えて重くなる。
+    """
+    by_color: dict[str, list[np.ndarray]] = {}
+    for box in boxes:
+        corners = box_corners_3d(box["center"], box["size_wlh"], box.get("yaw") or 0.0)
+        by_color.setdefault(box["color"], []).append(corners)
+
+    for color, corner_sets in by_color.items():
+        xs: list[float | None] = []
+        ys: list[float | None] = []
+        zs: list[float | None] = []
+        for corners in corner_sets:
+            for start, end in BOX_EDGES:
+                xs += [corners[start, 0], corners[end, 0], None]
+                ys += [corners[start, 1], corners[end, 1], None]
+                zs += [corners[start, 2], corners[end, 2], None]
+        fig.add_trace(go.Scatter3d(
+            x=xs, y=ys, z=zs, mode="lines", name="fitted box",
+            line=dict(color=color, width=BOX_LINE_WIDTH),
+            showlegend=False, hoverinfo="skip",
+        ))
+    return len(boxes)
+
+
+def add_ego_axes(
+    fig: go.Figure,
+    *,
+    length: float = 5.0,
+    origin: Sequence[float] = (0.0, 0.0, 0.0),
+    rotation: np.ndarray | None = None,
+) -> None:
+    """自車の姿勢を示す軸を追加する.
+
+    Args:
+        length: 軸の長さ [m]
+        rotation: 3x3 の回転行列。**点群は ego 座標なので既定は恒等**
+            （global 座標で描くときは ego→global の回転を渡す）
+
+    向きが分からないと、点群だけ見ても前後左右が判断できない。
+    x=赤 / y=緑 / z=青 は 3D ツールの慣習に合わせている。
+    """
+    axis_origin = np.asarray(origin, dtype=float)
+    axis_rotation = np.eye(3) if rotation is None else np.asarray(rotation, float)
+    # 列ベクトルが各軸の方向
+    axis_vectors = length * axis_rotation
+
+    for index, (color, name) in enumerate(zip(AXIS_COLORS, AXIS_NAMES)):
+        direction = axis_vectors[:, index]
+        tip = axis_origin + direction
+        fig.add_trace(go.Scatter3d(
+            x=[axis_origin[0], tip[0]],
+            y=[axis_origin[1], tip[1]],
+            z=[axis_origin[2], tip[2]],
+            mode="lines", name=name,
+            line=dict(color=color, width=AXIS_LINE_WIDTH),
+            showlegend=False, hoverinfo="name",
+        ))
+        # 線だけだと向き（どちらが先か）が分からないので矢先を付ける
+        unit = direction / max(float(np.linalg.norm(direction)), 1e-9)
+        fig.add_trace(go.Cone(
+            x=[tip[0]], y=[tip[1]], z=[tip[2]],
+            u=[unit[0]], v=[unit[1]], w=[unit[2]],
+            colorscale=[[0, color], [1, color]], showscale=False,
+            sizemode="absolute", sizeref=AXIS_TIP_SIZE,
+            anchor="tip", name=name, hoverinfo="name",
+        ))
+
+
 def build_pointcloud_figure(
     *,
     raw_lidar: np.ndarray | None = None,
     ground: np.ndarray | None = None,
     raw_depth: np.ndarray | None = None,
     instance_groups: Sequence[dict[str, Any]] = (),
+    boxes: Sequence[dict[str, Any]] = (),
     max_points_per_trace: int = 50_000,
     height: int = 720,
     camera: dict[str, Any] | None = None,
     view_revision: str = "",
+    axis_length: float | None = 5.0,
 ) -> tuple[go.Figure, dict[str, int]]:
     """点群を重ねた figure を組み立てる.
 
     Args:
         instance_groups: ``{"key": 表示名, "color": 色, "points": (N,3)}`` のリスト
+        boxes: ``{"key", "color", "center", "size_wlh", "yaw"}`` のリスト
         camera: Plotly の scene.camera 設定。None なら Plotly 既定
         view_revision: uirevision に渡す値。**同じ値の間はユーザーの回転操作が
             保持され、値が変わったときだけ視点がプリセットへ戻る**。
@@ -198,6 +323,13 @@ def build_pointcloud_figure(
             size=MARKER_SIZE_INSTANCE, max_points=max_points_per_trace,
         )
         counts[group["key"]] = counts.get(group["key"], 0) + drawn
+
+    if boxes:
+        counts["Fitted boxes"] = add_boxes(fig, boxes)
+
+    # 軸は最後に足す。点群より手前に描いて隠れないようにする
+    if axis_length:
+        add_ego_axes(fig, length=axis_length)
 
     scene = dict(
         xaxis_title="X [m] (前方)",

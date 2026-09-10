@@ -213,6 +213,9 @@ class Settings(BaseSettings):
     DEFAULT_GLOBAL_POINTCLOUD_EYE: list[float] = [-1.0, -0.5, 1.5]
     DEFAULT_GLOBAL_POINTCLOUD_UP: list[float] = [0.0, 0.0, 1.0]
 
+    # 点群ビューに描く自車姿勢の軸の長さ [m]（x=赤 / y=緑 / z=青）
+    POINTCLOUD_AXIS_LENGTH_M: float = 5.0
+
     # 点群ビューの既定表示
     SHOW_RAW_LIDAR: bool = False
     SHOW_RAW_LIDAR_GROUND: bool = False

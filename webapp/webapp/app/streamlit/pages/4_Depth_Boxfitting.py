@@ -684,6 +684,12 @@ with pointcloud_tab_view:
                   "下の Filter Params で Apply すると選べるようになる"),
         )
 
+        show_fitted_boxes = st.checkbox(
+            "Fitted Boxes", value=False, key="_w_pc_fitted_boxes",
+            help=("Box Fitting で推定した 3D ボックスを点群に重ねる。"
+                  "色は Instance Color の指定に従う"),
+        )
+
         S.init_sticky(W_PC_COLOR, OPT_PC_COLOR, COLOR_MODE_LABEL)
         pc_color_mode = st.radio(
             "Instance Color", COLOR_MODES, key=W_PC_COLOR,
@@ -701,6 +707,7 @@ with pointcloud_tab_view:
 
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
+    fitted_boxes: list[dict] = []
     refilter_summary: tuple[int, int, int] | None = None
 
     if view_run_id:
@@ -730,7 +737,7 @@ with pointcloud_tab_view:
             if chunks:
                 raw_depth_points = np.vstack(chunks)
 
-        if show_depth_instances or show_lidar_instances:
+        if show_depth_instances or show_lidar_instances or show_fitted_boxes:
             # 対象カメラのフレームだけ読む。全フレームぶん点群を読むと重い
             tokens = tuple(
                 f["token"] for f in frames if f["channel"] in enabled_channels
@@ -747,6 +754,10 @@ with pointcloud_tab_view:
                     tuple(sorted(enabled_channels)),
                 )
                 flat = list(refiltered.values())
+                # 再フィルタは点群だけを作り直す。ボックスは run 保存時の
+                # ものなので、DB 側から別に読む
+                box_source = load_box_fittings(view_run_id, tokens) if (
+                    show_fitted_boxes and tokens) else {}
                 # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）
                 depth_key = (
                     "points_raw_ego" if points_mode == POINTS_MODE_RAW
@@ -760,11 +771,13 @@ with pointcloud_tab_view:
                 )
             else:
                 fittings = load_box_fittings(
-                    view_run_id, tokens, include_points=True
+                    view_run_id, tokens,
+                    include_points=(show_depth_instances or show_lidar_instances),
                 ) if tokens else {}
                 flat = [fit for items_ in fittings.values() for fit in items_]
                 depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_FILTERED]
                 refilter_summary = None
+                box_source = fittings
 
             if show_depth_instances:
                 instance_groups += group_instance_points(
@@ -774,6 +787,25 @@ with pointcloud_tab_view:
                 instance_groups += group_instance_points(
                     flat, color_mode=pc_color_mode, points_key=lidar_key
                 )
+
+            if show_fitted_boxes:
+                for fit in (f for items_ in box_source.values() for f in items_):
+                    if not (fit.get("center_ego") and fit.get("size_wlh")):
+                        continue
+                    key = (str(fit["track_id"]) if pc_color_mode == COLOR_MODE_TRACK
+                           else str(fit["label"]))
+                    if enabled_keys is not None and key not in enabled_keys:
+                        continue
+                    fitted_boxes.append({
+                        "key": f"{fit['label']}#{fit['track_id']}",
+                        # 点群と同じ色にして、どの点群に当てた箱かを分かるようにする
+                        "color": (color_for_track(key)
+                                  if pc_color_mode == COLOR_MODE_TRACK
+                                  else color_for_label(key)),
+                        "center": fit["center_ego"],
+                        "size_wlh": fit["size_wlh"],
+                        "yaw": fit["yaw_ego"],
+                    })
 
     with view_col:
         # 視点ボタン。既定は Global View（global 座標に対して向きが固定）
@@ -908,7 +940,9 @@ with pointcloud_tab_view:
                 ground=ground_points,
                 raw_depth=raw_depth_points,
                 instance_groups=instance_groups,
+                boxes=fitted_boxes,
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
+                axis_length=settings.POINTCLOUD_AXIS_LENGTH_M,
                 camera=camera,
                 # Global View は sample ごとに ego の向きが変わるため、
                 # sample も版番号に含めて視点を追従させる
