@@ -37,7 +37,7 @@ from app.streamlit.components.instance_tracking_viewer import (
     color_for_track,
 )
 
-# 3D ボックスの線幅。2D の枠より細くして、重なっても形が読めるようにする
+# 3D ボックスの線幅。12 辺あるので細いと画像上で追いにくい
 BOX3D_LINE_WIDTH = 5
 # カメラ前方と見なす z の下限 [m]
 NEAR_PLANE = 0.1
