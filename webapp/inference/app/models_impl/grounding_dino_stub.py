@@ -36,6 +36,7 @@ class GroundingDinoDetectorStub:
         score_threshold: float = 0.3,
         nms_same_class_iou: float = 0.6,
         stub_delay_sec: float | None = None,
+        sublabel_to_label: dict[str, str] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         delay = DEFAULT_STUB_DELAY_SEC if stub_delay_sec is None else stub_delay_sec
@@ -46,9 +47,13 @@ class GroundingDinoDetectorStub:
         seed = int(hashlib.md5(f"{image_path}:{group_name}".encode()).hexdigest()[:8], 16)
         rng = random.Random(seed)
 
+        mapping = sublabel_to_label or {}
         boxes: list[dict[str, Any]] = []
         for _i in range(rng.randint(0, 5)):
-            label = rng.choice(labels)
+            # labels にはサブラベルが入る。本実装と同じく、
+            # 返す label は畳み込み後・sublabel は元の語にする
+            sublabel = rng.choice(labels)
+            label = mapping.get(sublabel, sublabel)
             score = round(rng.uniform(0.15, 0.98), 3)
             if score < score_threshold:
                 continue
@@ -58,6 +63,8 @@ class GroundingDinoDetectorStub:
                 "xmin": x, "ymin": y,
                 "xmax": min(x + rng.randint(60, 220), 1600),
                 "ymax": min(y + rng.randint(50, 200), 900),
-                "label": label, "score": score, "group": group_name,
+                "label": label, "sublabel": sublabel,
+                "score": score, "group": group_name,
             })
+        # NMS はラベル単位（畳み込み済みの label を見る）
         return same_class_nms(boxes, nms_same_class_iou)

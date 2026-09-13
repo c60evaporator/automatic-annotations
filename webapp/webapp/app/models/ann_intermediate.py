@@ -188,6 +188,10 @@ class Detection2D(Base):
     xmax:  Mapped[int] = mapped_column(Integer, nullable=False)
     ymax:  Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str] = mapped_column(String, nullable=False)
+    # GroundingDINO が実際に返した語（プロンプトに使ったサブラベル）。
+    # label は sublabel を畳み込んだ結果で、後段はこちらを使わない。
+    # 「van と car のどちらで拾われたか」を UI で確認するために残す
+    sublabel: Mapped[str | None] = mapped_column(String, nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

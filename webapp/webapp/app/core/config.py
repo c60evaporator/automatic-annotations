@@ -68,6 +68,28 @@ class Settings(BaseSettings):
         "pedestrian": "human.pedestrian.adult",
         "traffic_cone": "movable_object.trafficcone",
     }
+    # ラベル -> GroundingDINO のプロンプトに使うサブラベル。
+    #
+    # ラベル名をそのまま投げると、語彙のずれで見逃しや取り違えが起きる
+    # （タンクローリーが truck として拾われない、van が car と truck の
+    #   どちらに寄るか安定しない、など）。呼び方の違いを列挙して
+    # まとめて投げ、検出後にラベルへ畳み込む。
+    #
+    # NOTE: 同じサブラベルを複数のラベルに割り当てないこと。
+    # どのラベルへ畳み込むか決まらなくなる（validate_label_config で検出する）。
+    LABEL_TO_SUBLABEL: dict[str, list[str]] = {
+        "car": ["car", "van"],
+        "truck": ["truck", "tank_truck"],
+        "construction_vehicle": ["construction_vehicle"],
+        "bus": ["bus"],
+        "trailer": ["trailer"],
+        "barrier": ["barrier"],
+        "traffic_cone": ["traffic_cone"],
+        "motorcycle": ["motorcycle"],
+        "bicycle": ["bicycle"],
+        "pedestrian": ["pedestrian"],
+    }
+
     LABEL_TO_CATEGORY_GROUP: dict[str, str] = {  # 検出ラベル -> カテゴリグループ
         "car": "vehicle",
         "truck": "vehicle",

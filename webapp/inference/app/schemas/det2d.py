@@ -36,9 +36,12 @@ class LabelGroup(BaseModel):
     実行時まで分からない。グループごとに1オブジェクトへまとめる。
     """
     name: str
+    # プロンプトに渡す語。ラベルそのものではなく**サブラベル**を入れる
+    # （呼び方の違いを列挙して見逃しを減らすため）
     labels: list[str] = Field(min_length=1)
     score_threshold: float = 0.3
-    # 同一クラス内の NMS。グループ内のボックスに適用する
+    # 同一クラス内の NMS。**ラベル単位**で適用する
+    # （van と car のように、サブラベルが違ってもラベルが同じなら統合する）
     nms_same_class_iou: float = 0.6
 
 
@@ -55,6 +58,10 @@ class Detection2DRequest(BaseModel):
     # クラスをまたぐ NMS。全グループの推論が終わったフレーム単位で適用する
     nms_cross_class_iou: float = 0.85
 
+    # サブラベル -> ラベルの逆引き。ラベル体系は webapp 側の設定なので、
+    # 解決済みのものを受け取る。未知の語はそのままラベルとして扱う
+    sublabel_to_label: dict[str, str] = Field(default_factory=dict)
+
     # スタブ用: 1推論あたりの待ち時間（秒）。本実装では無視される
     stub_delay_sec: float | None = None
 
@@ -64,7 +71,10 @@ class BBox2D(BaseModel):
     ymin: int
     xmax: int
     ymax: int
+    # 畳み込み後のラベル。後段（Instance Tracking 以降）はこれだけを使う
     label: str
+    # モデルが実際に返した語。UI での確認用に残す
+    sublabel: str | None = None
     score: float
     # どのグループの推論で得られたか（デバッグ・色分け用）
     group: str | None = None

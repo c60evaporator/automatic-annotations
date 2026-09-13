@@ -31,6 +31,45 @@ def label_groups() -> dict[str, list[str]]:
     return {g: sorted(labels) for g, labels in groups.items()}
 
 
+# 引数ありなので maxsize=1 にしない（毎回追い出されて効かなくなる）
+@lru_cache(maxsize=None)
+def sublabels_of(label: str) -> tuple[str, ...]:
+    """ラベルに紐づくサブラベル。未定義ならラベル自身を返す."""
+    settings = get_settings()
+    return tuple(settings.LABEL_TO_SUBLABEL.get(label) or [label])
+
+
+@lru_cache(maxsize=1)
+def sublabel_groups() -> dict[str, list[str]]:
+    """カテゴリグループ -> そのグループで投げるサブラベル一覧.
+
+    GroundingDINO のプロンプトはこの単位で組み立てる。
+    ラベルの並び順は label_groups() と揃えてある。
+    """
+    groups: dict[str, list[str]] = {}
+    for group, labels in label_groups().items():
+        sublabels: list[str] = []
+        for label in labels:
+            sublabels.extend(sublabels_of(label))
+        groups[group] = sublabels
+    return groups
+
+
+@lru_cache(maxsize=1)
+def sublabel_to_label() -> dict[str, str]:
+    """サブラベル -> ラベルの逆引き.
+
+    推論結果（サブラベル）をラベルへ畳み込むのに使う。
+    ラベル自身もキーに含めるので、サブラベル未定義のラベルでも引ける。
+    """
+    mapping: dict[str, str] = {}
+    for label in all_labels():
+        mapping[label] = label
+        for sublabel in sublabels_of(label):
+            mapping[sublabel] = label
+    return mapping
+
+
 @lru_cache(maxsize=1)
 def group_names() -> list[str]:
     return list(label_groups().keys())
@@ -124,6 +163,24 @@ def validate_label_config() -> list[str]:
                 f"ラベル '{label}' の NB_POINTS_RATIO が未定義です（1.0 で動作）"
             )
 
+    # サブラベルの重複（どのラベルへ畳み込むか決まらなくなる）
+    owner: dict[str, str] = {}
+    for label in settings.LABEL_TO_CATEGORY_GROUP:
+        for sublabel in (settings.LABEL_TO_SUBLABEL.get(label) or [label]):
+            if sublabel in owner and owner[sublabel] != label:
+                problems.append(
+                    f"サブラベル '{sublabel}' が "
+                    f"'{owner[sublabel]}' と '{label}' の両方に割り当てられています"
+                )
+            owner[sublabel] = label
+
+    # サブラベルだけあってラベルが存在しない（綴り違い等）
+    for label in settings.LABEL_TO_SUBLABEL:
+        if label not in settings.LABEL_TO_CATEGORY_GROUP:
+            problems.append(
+                f"LABEL_TO_SUBLABEL の '{label}' に対応するラベルがありません"
+            )
+
     # 倍率だけあってラベルが存在しない（綴り違い等）
     for label in settings.NB_POINTS_RATIO:
         if label not in settings.LABEL_TO_CATEGORY_GROUP:
@@ -145,5 +202,8 @@ def validate_label_config() -> list[str]:
 def clear_caches() -> None:
     """設定を差し替えたときに呼ぶ（テスト用）."""
     label_groups.cache_clear()
+    sublabels_of.cache_clear()
+    sublabel_groups.cache_clear()
+    sublabel_to_label.cache_clear()
     group_names.cache_clear()
     all_labels.cache_clear()

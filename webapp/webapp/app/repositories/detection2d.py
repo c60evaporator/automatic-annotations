@@ -129,6 +129,7 @@ class Detection2DRepository:
                     "xmin": int(box["xmin"]), "ymin": int(box["ymin"]),
                     "xmax": int(box["xmax"]), "ymax": int(box["ymax"]),
                     "label": box["label"],
+                    "sublabel": box.get("sublabel"),
                     "score": box.get("score"),
                     "manually_modified": bool(box.get("manually_modified", False)),
                 })
@@ -262,7 +263,7 @@ class Detection2DRepository:
             Detection2D.sample_data_token,
             Detection2D.xmin, Detection2D.ymin,
             Detection2D.xmax, Detection2D.ymax,
-            Detection2D.label, Detection2D.score,
+            Detection2D.label, Detection2D.sublabel, Detection2D.score,
             Detection2D.manually_modified,
         ).where(Detection2D.detection_2d_params_id == params_id)
         if manual_only:
@@ -274,7 +275,8 @@ class Detection2DRepository:
                 "id": r["id"],
                 "xmin": r["xmin"], "ymin": r["ymin"],
                 "xmax": r["xmax"], "ymax": r["ymax"],
-                "label": r["label"], "score": r["score"],
+                "label": r["label"], "sublabel": r["sublabel"],
+                "score": r["score"],
                 "manually_modified": r["manually_modified"],
             })
         return result

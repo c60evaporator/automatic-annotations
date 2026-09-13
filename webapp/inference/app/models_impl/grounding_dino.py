@@ -70,13 +70,19 @@ class GroundingDinoDetector:
         score_threshold: float = 0.3,
         nms_same_class_iou: float = 0.6,
         nms_cross_class_iou: float = 0.85,
+        sublabel_to_label: dict[str, str] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1画像 × 1カテゴリグループの検出を行う.
 
+        Args:
+            labels: プロンプトに渡す語（サブラベル）
+            sublabel_to_label: サブラベル -> ラベルの逆引き。
+                same-class NMS をラベル単位で行うために使う
+
         Returns:
-            [{"xmin":.., "ymin":.., "xmax":.., "ymax":.., "label":.., "score":..}, ...]
-            座標は画素単位の整数。
+            [{"xmin":.., .., "label":.., "sublabel":.., "score":..}, ...]
+            座標は画素単位の整数。label は畳み込み後の値。
         """
         from app.models_impl.groundingdino_predict import predict_multi_labels
 
@@ -89,6 +95,7 @@ class GroundingDinoDetector:
             labels=labels,
             box_threshold=score_threshold,
             same_class_nms_iou=nms_same_class_iou,
+            sublabel_to_label=sublabel_to_label,
             cross_class_nms_iou=nms_cross_class_iou,
             device=self.device,
         )
@@ -101,7 +108,10 @@ class GroundingDinoDetector:
         return [
             {
                 "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
-                "label": b["label"], "score": b["score"], "group": group_name,
+                # label は畳み込み後、sublabel はモデルが返した語そのもの。
+                # sublabel を落とすと UI の SubLabel 表示が空になる
+                "label": b["label"], "sublabel": b.get("sublabel"),
+                "score": b["score"], "group": group_name,
             }
             for b, (xmin, ymin, xmax, ymax) in zip(boxes, pixel_boxes, strict=True)
         ]

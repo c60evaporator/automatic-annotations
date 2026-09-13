@@ -97,6 +97,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                             # グループ内でのクラス跨ぎ NMS。
                             # グループ間の重複はこの後フレーム単位で潰す
                             nms_cross_class_iou=req.nms_cross_class_iou,
+                            sublabel_to_label=req.sublabel_to_label,
                             stub_delay_sec=req.stub_delay_sec,
                         )
                         for b in detected:

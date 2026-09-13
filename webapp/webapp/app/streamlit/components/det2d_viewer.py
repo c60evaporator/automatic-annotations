@@ -68,8 +68,13 @@ BOX_TEXT_MARGIN = 2
 # 画像に重ねる文字の種類
 TEXT_MODE_NONE = "None"
 TEXT_MODE_LABEL = "Label"
+# GroundingDINO が実際に返した語。label は畳み込み後なので、
+# 「van と car のどちらで拾われたか」はこちらでしか分からない
+TEXT_MODE_SUBLABEL = "SubLabel"
 TEXT_MODE_SCORE = "Score"
-TEXT_MODES = (TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_SCORE)
+TEXT_MODES = (
+    TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_SUBLABEL, TEXT_MODE_SCORE,
+)
 
 
 @lru_cache(maxsize=1)
@@ -152,6 +157,9 @@ def _font(size: int):
 
 def box_text(box: dict[str, Any], text_mode: str) -> str:
     """ボックスに重ねる文字を作る."""
+    if text_mode == TEXT_MODE_SUBLABEL:
+        # 古い run には sublabel が無いので label へ落とす
+        return str(box.get("sublabel") or box.get("label", ""))
     if text_mode == TEXT_MODE_LABEL:
         return str(box.get("label", ""))
     if text_mode == TEXT_MODE_SCORE:
@@ -171,7 +179,7 @@ def draw_boxes(
 
     Args:
         width: 枠線の太さ。None なら BOX_LINE_WIDTH
-        text_mode: TEXT_MODE_NONE / _LABEL / _SCORE。
+        text_mode: TEXT_MODE_NONE / _LABEL / _SUBLABEL / _SCORE。
             文字色は枠線と同じ色にする（凡例の色と対応させるため）
 
     元画像はキャッシュ（cache_resource）で共有されているので、

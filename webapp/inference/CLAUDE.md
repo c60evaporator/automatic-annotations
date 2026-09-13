@@ -28,6 +28,33 @@ groundingdino_model = load_model(str(GROUNDINGDINO_CONFIG_PATH), str(GROUNDINGDI
 推論の実装例（フレーム、カメラ、カテゴリグループ数分だけ推論を実施し、結果をまとめて返す）
 
 ```python
+# ラベル -> カテゴリグループの変換dict
+LABEL_TO_CATEGORY_GROUP: dict[str, str] = {
+    "car": "vehicle",
+    "truck": "vehicle",
+    "construction_vehicle": "vehicle",
+    "bus": "vehicle",
+    "trailer": "vehicle",
+    "barrier": "road_object",
+    "traffic_cone": "road_object",
+    "motorcycle": "two_wheeler",
+    "bicycle": "two_wheeler",
+    "pedestrian": "pedestrian",
+}
+category_groups = set(list(LABEL_TO_CATEGORY_GROUP.values()))
+# ラベル -> GroundingDINOでプロンプトに使用するサブラベルの変換dict
+LABEL_TO_SUBLABEL: dict[str, str] = {  
+    "car": ["car", "van"],
+    "truck": ["truck", "tank_truck"],
+    "construction_vehicle": ["construction_vehicle"],
+    "bus": ["bus"],
+    "trailer": ["trailer"],
+    "barrier": ["barrier"],
+    "motorcycle": ["motorcycle"],
+    "bicycle": ["bicycle"],
+    "pedestrian": ["pedestrian"],
+    "traffic_cone": ["traffic cone"],
+}
 ###### データ読込処理（省略） ######
 # Frame loop
 for sample_index in proc_sample_indices:
@@ -37,18 +64,35 @@ for sample_index in proc_sample_indices:
         for category_group in category_groups:
             image = images[sample_index][camera_channel]
             box_threshold = DET2D_DEFAULT_SCORE_THRESHOLDS[category_group]
-            labels = label_groups[category_group]
+            labels = [k for k, v in LABEL_TO_CATEGORY_GROUP.items() if v == category_group]
+            sublabels = [sublabel for label in labels for sublabel in LABEL_TO_SUBLABEL[label]]
             # Infer the image with GroundingDINO model
             predicted_boxes, caption = predict_multi_labels(
                 model=groundingdino_model,
                 image=image,
-                labels=category_names_in_group,
+                labels=sublabels, # 実際にプロンプトとして使用するラベル=サブラベルを渡す
                 box_threshold=box_threshold,
+                same_class_nms_iou=0.6,
+                cross_class_nms_iou=0.85,
+                sublabel_to_label=sublabel_to_label # Reverse mapping of LABEL_TO_SUBLABEL
             )
             # convert box coordinates from normalized to pixel coordinates
             for box in predicted_boxes:
                 box.xyxy = box.xyxy * np.array([image.width, image.height, image.width, image.height])
 ```
+
+カテゴリグループ内のラベルをそのままプロンプトとして渡すわけではなく、ラベルに紐づく複数（1個以上）のサブラベルをまとめてプロンプトに渡し、GroundingDINOの推論を実施します。
+
+例えば上記の例の"vehicle"カテゴリグループにおいては、["car", "van", "truck", "tank_truck", "construction_vehicle", "bus", "trailer"]のリストがlabels引数として`predict_multi_labels`関数に渡されます。この関数内では、以下の処理によりリストをプロンプトに整形して推論を実行し
+
+- リスト内の要素のアンダースコアをスペースで置換する（自然言語として適切な表現となり、推論の精度が上がる）
+- リストをピリオド区切りの文字列に変換し、プロンプトとする（GroundingDINOの推奨に従う）
+- リストの各要素（サブラベル）のトークン位置を保持しておく
+- プロンプトをGroundingDINOに渡して推論を実行
+- 推論で得られた各ボックスのトークンごとのスコアを、先ほど保持したトークン位置情報を基にサブラベルごとに合計し、各サブラベルのスコアを得る
+- スコアが最大のサブラベルをそのボックスのサブラベルとし、逆引きdict`sublabel_to_label`を基にラベルに変換する
+- ラベルが等しいボックス同士で`same_class_nms_iou`に基づきNMSを実施
+- ラベルが異なるボックス同士で`cross_class_nms_iou`に基づきNMSを実施
 
 ## Instance Tracking
 

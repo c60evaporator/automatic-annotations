@@ -39,6 +39,7 @@ def predict_multi_labels(
     same_class_nms_iou: float = 0.60,
     cross_class_nms_iou: float = 0.85,
     device: str = "cuda",
+    sublabel_to_label: dict[str, str] | None = None,
 ) -> tuple[list[dict], str]:
     """Run Grounding DINO prediction for a list of labels
 
@@ -53,10 +54,14 @@ def predict_multi_labels(
             Recommended to be higher than same_class_nms_iou to avoid removing
             boxes of different classes that overlap.
         device: Device to run the model on (e.g., "cuda" or "cpu").
+        sublabel_to_label: サブラベル -> ラベルの逆引き。
+            **same-class NMS はラベル単位で行う**ため、prompt に渡した語が
+            サブラベル（car / van など）でも、同じラベルに畳み込まれる
+            もの同士は統合される。
 
     Returns:
         (boxes, caption)
-        boxes は {"xyxy": [x1, y1, x2, y2], "label": str, "score": float} のリスト。
+        boxes は {"xyxy": [...], "label": str, "sublabel": str, "score": float} のリスト。
         xyxy は 0〜1 に正規化された座標。画素座標への変換は呼び出し側で行う
         （画像サイズを知っているのは呼び出し側なので）。
     """
@@ -115,11 +120,26 @@ def predict_multi_labels(
     kept_scores = kept_scores[valid_geometry]
     kept_label_indices = kept_label_indices[valid_geometry]
 
-    # Apply non-maximum suppression (NMS) within the same class
+    # Apply non-maximum suppression (NMS) within the same class.
+    #
+    # NOTE: idxs はサブラベルではなく**ラベル**の index にする。
+    # サブラベルのままだと、同じ車が car と van で二重に残る
+    mapping = sublabel_to_label or {}
+    label_names = [
+        mapping.get(name, name) for name in prompt_definition.raw_labels
+    ]
+    unique_labels = sorted(set(label_names))
+    label_index_of = {name: i for i, name in enumerate(unique_labels)}
+    sublabel_to_label_index = torch.tensor(
+        [label_index_of[name] for name in label_names],
+        dtype=torch.int64, device=kept_scores.device,
+    )
+    nms_class_indices = sublabel_to_label_index[kept_label_indices]
+
     keep_by_nms = batched_nms(
         boxes=boxes_xyxy,
         scores=kept_scores,
-        idxs=kept_label_indices,
+        idxs=nms_class_indices,
         iou_threshold=same_class_nms_iou,
     )
     boxes_xyxy = boxes_xyxy[keep_by_nms]
@@ -144,7 +164,12 @@ def predict_multi_labels(
     predicted_boxes = [
         {
             "xyxy": [float(v) for v in box.detach().cpu().tolist()],
-            "label": prompt_definition.raw_labels[int(label_index)],
+            # label は畳み込み後。sublabel はモデルが返した語そのもの
+            "label": mapping.get(
+                prompt_definition.raw_labels[int(label_index)],
+                prompt_definition.raw_labels[int(label_index)],
+            ),
+            "sublabel": prompt_definition.raw_labels[int(label_index)],
             "score": float(score.item()),
         }
         for box, score, label_index in zip(

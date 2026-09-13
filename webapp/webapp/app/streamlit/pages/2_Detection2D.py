@@ -31,6 +31,8 @@ from app.services.inference_client import (
     submit_detection2d,
 )
 from app.services.label_service import (
+    sublabel_groups,
+    sublabel_to_label,
     label_groups,
     scaled_nms_same_class_ious,
     scaled_score_thresholds,
@@ -194,7 +196,9 @@ def _build_payload() -> dict:
     groups = [
         {
             "name": name,
-            "labels": labels,
+            # プロンプトにはサブラベルを渡す（呼び方の違いを列挙して
+            # 見逃しを減らす）。畳み込みは推論サーバー側で行う
+            "labels": sublabel_groups()[name],
             "score_threshold": score_thresholds.get(name, 0.3),
             "nms_same_class_iou": nms_same.get(name, 0.6),
         }
@@ -205,6 +209,8 @@ def _build_payload() -> dict:
         "frames": frames,
         "label_groups": groups,
         "nms_cross_class_iou": nms_cross,
+        # サブラベル -> ラベルの逆引き（ラベル体系は webapp 側の設定）
+        "sublabel_to_label": sublabel_to_label(),
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
     }
 

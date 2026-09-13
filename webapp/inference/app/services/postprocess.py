@@ -34,10 +34,34 @@ def cross_class_nms(
     return kept
 
 
+def resolve_sublabels(
+    boxes: list[dict[str, Any]], mapping: dict[str, str]
+) -> list[dict[str, Any]]:
+    """モデルが返した語（サブラベル）をラベルへ畳み込む.
+
+    元の語は sublabel に残す。NMS より**前**に呼ぶこと。
+    後で畳み込むと、van と car が別クラス扱いのまま NMS を通り、
+    同じ物体に 2 つのボックスが残る。
+    """
+    resolved: list[dict[str, Any]] = []
+    for box in boxes:
+        sublabel = box.get("label", "")
+        resolved.append({
+            **box,
+            "sublabel": sublabel,
+            # 未知の語はそのままラベルとして扱う（設定漏れで落とさない）
+            "label": mapping.get(sublabel, sublabel),
+        })
+    return resolved
+
+
 def same_class_nms(
     boxes: list[dict[str, Any]], iou_threshold: float
 ) -> list[dict[str, Any]]:
-    """同じ label 同士でのみ NMS をかける."""
+    """同じ label 同士でのみ NMS をかける.
+
+    サブラベルではなくラベルで比較する（resolve_sublabels を先に通す前提）。
+    """
     if iou_threshold >= 1.0 or len(boxes) <= 1:
         return list(boxes)
 
