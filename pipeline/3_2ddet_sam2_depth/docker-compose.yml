@@ -52,6 +52,8 @@ services:
       - ../../common:/workspace/src/common
       # GroundingDINO source code
       - ../../models/grounding_dino/src:/workspace/src/grounding_dino
+      # SigLIP2 source code
+      - ../../models/siglip2/src:/workspace/src/siglip2
       # SAM2 source code
       - ../../models/sam2/src:/workspace/src/sam2
       # Depth-Anything-3 source code

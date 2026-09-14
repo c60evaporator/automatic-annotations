@@ -1,4 +1,6 @@
 import numpy as np
+from PIL import Image
+import math
 import cv2
 
 from ..schemas import Box3D, Box2D
@@ -204,3 +206,43 @@ def convert_3d_box_to_2d_box(box_3d_ego: Box3D,
         track_id=box_3d_ego.track_id,
         attributes=box_3d_ego.attributes.copy(),
     )
+
+
+def crop_image_with_margin(
+    image: Image.Image,
+    bbox: Box2D,
+    margin_ratio: float = 0.1,
+) -> Image.Image:
+    """
+    Crop the image with an extended bounding box.
+
+    Args:
+        image (Image.Image): The input image.
+        bbox (Box2D): The bounding box to crop, with xyxy coordinates.
+        margin_ratio (float, optional): The ratio by which to extend the bounding box in each direction. Defaults to 0.1.
+
+    Returns:
+        Image.Image: The cropped image with the extended bounding box.
+    """
+    x1, y1, x2, y2 = bbox.xyxy
+    image_width, image_height = image.size
+
+    bbox_width = x2 - x1
+    bbox_height = y2 - y1
+
+    margin_x = bbox_width * margin_ratio
+    margin_y = bbox_height * margin_ratio
+
+    # bboxを拡張
+    x1 = x1 - margin_x
+    y1 = y1 - margin_y
+    x2 = x2 + margin_x
+    y2 = y2 + margin_y
+
+    # 画像範囲内にclip
+    x1 = max(0, math.floor(x1))
+    y1 = max(0, math.floor(y1))
+    x2 = min(image_width, math.ceil(x2))
+    y2 = min(image_height, math.ceil(y2))
+
+    return image.crop((x1, y1, x2, y2))
