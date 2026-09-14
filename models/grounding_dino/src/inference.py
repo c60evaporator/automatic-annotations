@@ -142,6 +142,7 @@ def predict_multi_labels(
     same_class_nms_iou: float = 0.60,
     cross_class_nms_iou: float = 0.85,
     device: str = "cuda",
+    sublabel_to_label: dict[str, str] | None = None,
     ) -> list[Box2D]:
     """Run Grounding DINO prediction for a list of labels
 
@@ -153,6 +154,7 @@ def predict_multi_labels(
         same_class_nms_iou: IoU threshold for non-maximum suppression (NMS) within the same class.
         cross_class_nms_iou: IoU threshold for NMS across different classes. Recommended to be higher than same_class_nms_iou to avoid removing boxes of different classes that overlap.
         device: Device to run the model on (e.g., "cuda" or "cpu").
+        sublabel_to_label: Mapping from sublabels used in the prompt to the original labels. If None, no mapping is applied.
 
     Returns:
         A list of predicted Box2D objects. The box coordinates are in the format (x_min, y_min, x_max, y_max) in normalized coordinates (0 to 1).
@@ -209,11 +211,23 @@ def predict_multi_labels(
     kept_scores = kept_scores[valid_geometry]
     kept_label_indices = kept_label_indices[valid_geometry]
 
-    # Apply non-maximum suppression (NMS) within the same class
+    # Apply non-maximum suppression (NMS) within the same label (not sublabel)
+    mapping = sublabel_to_label or {}
+    label_names = [
+        mapping.get(name, name) for name in prompt_definition.raw_labels
+    ]
+    unique_labels = sorted(set(label_names))
+    label_index_of = {name: i for i, name in enumerate(unique_labels)}
+    sublabel_to_label_index = torch.tensor(
+        [label_index_of[name] for name in label_names],
+        dtype=torch.int64, device=kept_scores.device,
+    )
+    nms_class_indices = sublabel_to_label_index[kept_label_indices]
+
     keep_by_nms = batched_nms(
         boxes=boxes_xyxy,
         scores=kept_scores,
-        idxs=kept_label_indices,
+        idxs=nms_class_indices,
         iou_threshold=same_class_nms_iou,
     )
     boxes_xyxy = boxes_xyxy[keep_by_nms]
@@ -237,9 +251,13 @@ def predict_multi_labels(
     predicted_boxes = [
         Box2D(
             xyxy=box.detach().numpy(),
-            label=prompt_definition.raw_labels[label_index],
+            label=sublabel_to_label[prompt_definition.raw_labels[label_index]],
             score=float(score.item()),
         )
         for box, score, label_index in zip(boxes_xyxy, kept_scores, kept_label_indices, strict=True)
     ]
-    return predicted_boxes, prompt_definition.caption
+
+    # Keep sublabels
+    predicted_sublabels = [prompt_definition.raw_labels[label_index] for label_index in kept_label_indices]
+
+    return predicted_boxes, predicted_sublabels, prompt_definition.caption
