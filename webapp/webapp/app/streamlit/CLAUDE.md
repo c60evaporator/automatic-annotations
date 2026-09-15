@@ -26,7 +26,7 @@
 - テーブルのチェックボックスをチェックして「このシーンでアノテーションを開始」ボタンをクリックすると、当該シーンを選択選択（SCENE_TOKENがセッションに保存されて他の画面に遷移しても維持される）して2_Detection2D.py画面に遷移する
 
 ### 2_Detection2D.py
-- Grounding DINOを用いて、与えたラベルの2Dバウンディングボックスを検出する画面
+- Grounding DINOを用いて、与えたラベルの2Dバウンディングボックスを検出する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Detection2D`参照
 - 画面上部はparam_col, map_colで左右に分割
 - param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
     - Sample Interval: 推論を実施するsampleの間隔。number_inputで選択
@@ -54,24 +54,30 @@
     - Min scoreスライダ: 選択したscoreを超えたバウンディングボックスのみを表示
     - チェックボックス付きlabel凡例: チェックしているlabelのバウンディングボックスのみを表示。この凡例は選択中のsampleのバウンディングボックスに存在するlabelのみ表示。一括チェックする「全て」ボタンと、一括チェック解除する「解除」ボタンも設置
     - Box textラジオボタン: 画像上でバウンディングボックスの上に表示する文字の種類を指定する。以下の選択肢を持つ
-        - None: 何も表示しない
-        - Label: ラベルを表示（文字色はバウンディングボックスの色と一致）
-        - SubLabel: 実際にプロンプトに渡したサブラベルを表示（文字色はバウンディングボックスの色と一致）
-        - Score: スコアを表示（小数点以下2桁まで表示。文字色はバウンディングボックスの色と一致）
+- None: 何も表示しない
+- Label: ラベルを表示（文字色はバウンディングボックスの色と一致）
+- SubLabel: 実際にプロンプトに渡したサブラベルを表示（文字色はバウンディングボックスの色と一致）
+- Score: スコアを表示（小数点以下2桁まで表示。文字色はバウンディングボックスの色と一致）
 - view_colに表示する推論バウンディングボックスは、以下のように決める
     - （現在のセッションでの）推論実施前: `detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のもの。`status='succeeded'`のレコードがなければバウンディングボックスを表示しなし
     - 推論実施後: 推論結果のバウンディングボックス（基本的には推論実施前と同様に`detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のものになるはず）
     - 表示対象の変更方法: 手動操作を行わなければ上記のように表示対象が決まるが、前述のparam_col中央下部のexpanderで「このrunを表示」ボタンを押すと、ラジオボタンで選択した`detection_2d_params`テーブルのレコードのものに切り替わる
 
 ### 3_Instance_Tracking.py
-- SAM2を用いて、与えたラベルの2Dバウンディングボックスを検出する画面
+- SAM2を用いて、与えたラベルの2Dバウンディングボックスを検出する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Instance Tracking`参照
 - 画面上部はparam_col, map_colで左右に分割
 - param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
     - Box Prompt: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブル内の`status='succeeded'`のレコードをラジオボタン付きでリスト表示すれば良さそう。デフォルトでは`started_at`が最新のものを選択
-   - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`Settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`Settings.SWEEPS_PER_SAMPLE`を上限としたnumber_inputで良さそう
-   - IoU Threshold: トラッキングはDetection2DのSample Intervalごとにプロンプトを与えて実行するが、前のプロンプトから伝播したインスタンスと、次のプロンプトで推論されたインスタンス同士で貪欲マッチングを実施し、IoUがこのIoU Threshold以上の伝播インスタンスが存在すればこの伝播インスタンスのtrack_idを引き継ぎ、存在しなければ新たなtrack_idを割り当てる。デフォルト値`Settings.DEFAULT_TRACKING_IOU_THRESHOLD`
-   - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択。”Box”, “Mask”のselectboxで良さそう。デフォルトは”Box”
-   - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するか。”Label”, “Category Group”, “None”のselectboxで良さそう
+    - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`Settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`Settings.SWEEPS_PER_SAMPLE`を上限としたnumber_inputで良さそう
+    - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`Settings.DEFAULT_TRACKING_IOU_THRESHOLD`
+    - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択。”Box”, “Mask”のselectboxで良さそう。デフォルトは”Box”
+    - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。以下の選択肢を持つ
+        - Label: ラベルが一致する場合のみマッチング対象とする
+        - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
+        - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
+    - Track ID Inheritance: IoUマッチングに使用する手法を指定するSelectbox。以下の選択肢を持つ（両手法の詳細は`webapp/inference/CLAUDE.md`参照）
+        - continuous_id: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチング
+        - forward_backward_matching: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施
 - 推論container: Detection2D画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
@@ -88,9 +94,13 @@
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。Detection2D画面と異なり、全てのSampleを選択できるようにする（トラッキングはIntervalの間のフレームにも実行されるため）。Sample選択だとキーフレーム以外は選択できなくなるが、これで特に問題ない（キーフレーム以外のフレームは推論のトラッキング伝播には使用するが、結果自体は使用しないため表示できなくとも良い）
 - map_colにはDetection2D画面と同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
 - 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
-    - Compare propagation: 前のSample Intervalからの伝播インスタンスマスクと、今回のSample Intervalの推論インスタンスマスクを比較して表示するためのモード。チェックの有無により以下のように表示が変わる
-        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる
-        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合、ボックスは表示しない）。右側の画像には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
+    - Compare propagation: track_idの引き継ぎ時のインスタンス同士のマッチングを確認するモード。チェックの有無により以下のように表示が変わる
+        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる。Track ID Inheritance="forward_backward_matching"のとき、各インスタンスの表示マスクは以下のように決める
+            - そのインスタンスがBackward・Forwardどちらかの伝播にのみ存在（マッチング成立せず）: 伝播が存在するインスタンスマスクをそのまま表示
+            - そのインスタンスがBackward・Forward両方の伝播に存在（マッチング成立）: 最終的に採用するマスクの決め方と同じく、そのフレームからプロンプトボックスが近い方のインスタンスマスクを表示（例. ForwardがSample4から、BackwardがSample8から伝播している場合、Sample4〜6ではForwardのマスクを、Sample7〜8ではBackwardのマスクを表示）
+        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、track_idの引き継ぎに使用する2種類のインスタンスマスクを比較する。Track ID Inheritanceに応じて以下のように表示が変わる
+            - continuous_idのとき: 左側の画像には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合、ボックスは表示しない）。右側の画像には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
+            - forward_backward_matchingのとき: 左側の画像にはForward方向トラッキングで伝播されたマスクを、右側の画像にはBackward方向トラッキングで伝播されたマスクを表示する。プロンプトボックスを与えるフレーム（Sample Interval間隔で存在）は2つのブロックに重複して所属するため、2種類のBackwardおよびForwardマスクが存在することとなるが、左側の画像（Forward）にはプロンプトを与えて得られたマスク（前のブロックからForward伝播されたマスクではない）を、右側の画像（Backward）にはそのブロックの最後のフレームからBackward伝播されてきたマスク（プロントを与えて得られたマスクではない）を表示する。Show boxesラジオボタンでPromptを選択している場合、左側の画像（Forward）にプロンプトボックスを表示する。
     - Show boxesラジオボタン: 画像上でのバウンディングボックスの表示方法を指定する。以下の選択肢を持つ（デフォルトはPrompt）
         - Prompt: プロンプトとして与えたbox（Sample Intervalで選ばれたSampleでしか表示されないことになる）
         - Instance: インスタンスマスクの外接矩形（全Sampleにおいて表示される）

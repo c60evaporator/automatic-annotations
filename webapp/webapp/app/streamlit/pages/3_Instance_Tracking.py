@@ -588,6 +588,9 @@ with view_col:
             enabled_keys=enabled_keys,
             left_label=compare_labels[0],
             right_label=compare_labels[1],
+            # fb では Forward（左）が、そのフレームのプロンプトから
+            # 伝播してきたマスク。枠はそちらへ描く
+            prompt_side="left" if is_fb_run else "right",
         )
     else:
         render_instance_grid(

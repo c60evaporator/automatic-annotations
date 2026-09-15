@@ -292,37 +292,47 @@ def render_instance_comparison_grid(
     mask_alpha: float = MASK_ALPHA,
     left_label: str = "Propagated",
     right_label: str = "Prompt",
+    prompt_side: str = "right",
 ) -> None:
-    """1 カメラにつき 1 行、左に伝播マスク・右に推論マスクを並べる.
+    """1 カメラにつき 1 行、2 種類のマスクを左右に並べる.
 
     items の各要素は render_instance_grid と同じ形に加えて
-    "propagated_instances" / "prompt_instances" を持つ。
+    "propagated_instances"（左）/ "prompt_instances"（右）を持つ。
 
-    左（伝播）にはプロンプトボックスを描かない。
-    プロンプトは右側の入力であり、左に重ねると
-    「伝播がどれだけずれたか」が読み取れなくなる。
+    Args:
+        prompt_side: Show boxes=Prompt のときに枠を描く側。
+            **そのフレームのプロンプトから伝播したマスクを出している側**へ
+            描かないと、マスクと枠の対応が読み取れなくなる。
+
+            continuous_id             … 右（Prompt 由来のマスク）
+            forward_backward_matching … 左（Forward。区間先頭の
+                プロンプトから伝播してきたマスク。右の Backward は
+                次のアンカーのプロンプト由来なので対応しない）
     """
     for item in items:
         left_col, right_col = st.columns(2)
-        with left_col:
-            _render_one(
-                item, item.get("propagated_instances") or [],
-                f"{item['channel']} [{left_label}]",
-                color_mode=color_mode,
-                # 伝播側にプロンプト枠は出さない
-                box_mode=(BOX_MODE_NONE if box_mode == BOX_MODE_PROMPT else box_mode),
-                text_mode=text_mode, enabled_keys=enabled_keys,
-                prompt_boxes=None, mask_alpha=mask_alpha, pending=False,
-            )
-        with right_col:
-            _render_one(
-                item, item.get("prompt_instances") or [],
-                f"{item['channel']} [{right_label}]",
-                color_mode=color_mode, box_mode=box_mode,
-                text_mode=text_mode, enabled_keys=enabled_keys,
-                prompt_boxes=item.get("prompt_boxes"),
-                mask_alpha=mask_alpha, pending=item.get("pending", False),
-            )
+        prompt_boxes = item.get("prompt_boxes")
+
+        for column, label, key, side in (
+            (left_col, left_label, "propagated_instances", "left"),
+            (right_col, right_label, "prompt_instances", "right"),
+        ):
+            shows_prompt = side == prompt_side
+            with column:
+                _render_one(
+                    item, item.get(key) or [],
+                    f"{item['channel']} [{label}]",
+                    color_mode=color_mode,
+                    # 対応しない側にプロンプト枠は出さない
+                    box_mode=(
+                        box_mode if shows_prompt or box_mode != BOX_MODE_PROMPT
+                        else BOX_MODE_NONE
+                    ),
+                    text_mode=text_mode, enabled_keys=enabled_keys,
+                    prompt_boxes=prompt_boxes if shows_prompt else None,
+                    mask_alpha=mask_alpha,
+                    pending=item.get("pending", False) if side == "right" else False,
+                )
 
 
 def _render_one(

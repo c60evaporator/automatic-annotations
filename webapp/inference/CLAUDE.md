@@ -124,10 +124,12 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 sam2_predictor = build_sam2_video_predictor(str(SAM2_CONFIG_PATH), str(SAM2_CHECKPOINT_PATH), device=device)
 ```
 
-インスタンスセグメンテーション・トラッキングの推論はこの`sam2_predictor`インスタンスを用いて実施するが、`track_id_inheritance`パラメータに"continuous_id"と"reverse_matching"どちらを指定するかで、各推論間のトラッキングIDの引き継ぎ方法を以下のように変える（どちらも今回のSample Intervalから次のSample Intervalまでの画像フレームをまとめて推論に使用する）
+インスタンスセグメンテーション・トラッキングの推論はこの`sam2_predictor`インスタンスを用いて実施しますが、`track_id_inheritance`パラメータに"continuous_id"と"reverse_matching"どちらを指定するかで、各推論間のtrack_idの引き継ぎ方法を以下のように変えます（どちらも今回のSample Intervalから次のSample Intervalまでの画像フレームをまとめて推論に使用する）
 
-- `track_id_inheritance="continuous_id"`: 最初のフレームにDetection2Dのボックスプロンプトを与えた後ろ向きトラッキング結果のインスタンスと、最後のフレーム（次のSample Intervalの最初のフレームに相当）にDetection2Dのボックスプロンプトを与えて推論したインスタンスをIoUマッチングしてtrack_idを引き継ぐ（詳細は後述の例を参照）
-- `track_id_inheritance="forward_backward_matching"`: 最初のフレームにボックスプロンプトを与えた後ろ向きトラッキング推論と、最後のフレームにボックスプロンプトを与えた前向きトラッキング推論を実施し、各インスタンスの全フレームでの時空間IoUマッチングを実施してtrack_idを引き継ぐ（詳細は後述の例を参照）
+- `track_id_inheritance="continuous_id"`: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチングし、マッチングしたtrack_idを次のブロックに引き継ぐ
+- `track_id_inheritance="forward_backward_matching"`: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施してtrack_idを引き継ぐ
+
+両手法の詳細を以下に示します
 
 #### track_id_inheritance="continuous_id"
 
