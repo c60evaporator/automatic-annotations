@@ -63,7 +63,24 @@ RUN_STATUSES = (
 # 両方を残さないと「伝播がどれだけずれたか」を後から確認できない。
 INSTANCE_ORIGIN_PROMPT = "prompt"
 INSTANCE_ORIGIN_PROPAGATED = "propagated"
-INSTANCE_ORIGINS = (INSTANCE_ORIGIN_PROMPT, INSTANCE_ORIGIN_PROPAGATED)
+# forward_backward_matching 用。両方向のマスクを残し、
+# UI で「どちらが破綻したか」を見比べられるようにする
+INSTANCE_ORIGIN_FORWARD = "forward"
+INSTANCE_ORIGIN_BACKWARD = "backward"
+INSTANCE_ORIGINS = (
+    INSTANCE_ORIGIN_PROMPT,
+    INSTANCE_ORIGIN_PROPAGATED,
+    INSTANCE_ORIGIN_FORWARD,
+    INSTANCE_ORIGIN_BACKWARD,
+)
+
+# track_id の引き継ぎ方式（run に記録して、表示の切り替えにも使う）
+TRACK_ID_INHERITANCE_CONTINUOUS = "continuous_id"
+TRACK_ID_INHERITANCE_FB = "forward_backward_matching"
+TRACK_ID_INHERITANCES = (
+    TRACK_ID_INHERITANCE_CONTINUOUS,
+    TRACK_ID_INHERITANCE_FB,
+)
 
 # Box Fitting の結果状態。
 # 「行が無い」と「実行したが作れなかった」を区別するために持つ。
@@ -254,6 +271,13 @@ class InstanceTracking2DParams(Base):
     # 前のプロンプト区間から伝播したインスタンスと、
     # 次のプロンプトで得たインスタンスの照合に使う
     new_track_iou_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    # track_id の引き継ぎ方式（TRACK_ID_INHERITANCE_*）。
+    # 表示側が「Compare propagation で何を並べるか」を決めるのにも使う
+    track_id_inheritance: Mapped[str] = mapped_column(
+        String, nullable=False,
+        server_default=text(f"'{TRACK_ID_INHERITANCE_CONTINUOUS}'"),
+    )
+
     # 上記照合の IoU 計算方法（IOU_METHOD_*）
     iou_method: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text(f"'{IOU_METHOD_BOX}'")
@@ -345,6 +369,13 @@ class InstanceTracking2D(Base):
     origin: Mapped[str] = mapped_column(
         String, nullable=False,
         server_default=text(f"'{INSTANCE_ORIGIN_PROMPT}'"),
+    )
+    # 下流（Box Fitting・エクスポート）が使うべき行かどうか。
+    # forward_backward_matching では 1 フレーム 1 トラックに対して
+    # forward と backward の 2 行が入るため、採用した方に True を立てる。
+    # 比較表示のために両方残すが、下流には 1 つだけ渡す
+    is_selected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("1")
     )
     label:    Mapped[str] = mapped_column(String, nullable=False)
     # マスク本体は COCO RLE 形式で保持: {"size": [h, w], "counts": "..."}

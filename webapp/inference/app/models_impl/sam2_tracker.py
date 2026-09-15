@@ -67,14 +67,17 @@ class Sam2Tracker:
         *,
         dataroot: Path | str = "",
         mask_score_threshold: float = 0.5,
+        direction: str = "forward",
         **_: Any,
     ) -> list[list[dict[str, Any]]]:
         """1 区間ぶんの伝播を行う.
 
         Args:
-            frames: 区間内のフレーム（時刻順、sweep 含む）。
-                先頭がプロンプトを与えるキーフレーム
-            prompts: 先頭フレームに与えるボックス
+            frames: 区間内のフレーム（時刻順、sweep 含む）
+            prompts: プロンプトのボックス
+            direction: "forward" なら先頭フレームにプロンプトを与えて
+                時間順に伝播。"backward" なら **最終フレーム**に与えて
+                さかのぼる（区間途中で現れたインスタンスを拾うため）
 
         Returns:
             frames と同じ長さのリスト。各要素はそのフレームの
@@ -106,16 +109,23 @@ class Sam2Tracker:
             b["local_id"]: b.get("detection_2d_id") for b in prompt_boxes
         }
 
+        # プロンプトを与えるフレーム。backward は最終フレーム
+        reverse = direction == "backward"
+        prompt_frame_idx = len(frames) - 1 if reverse else 0
+
         with torch.inference_mode(), _autocast(self.device):
             inference_state = init_frame_state(self.predictor, images)
             # 状態を作り直した直後でも、プロンプト追加前に reset しておく
             # （同じ predictor を区間ごとに使い回すため）
             self.predictor.reset_state(inference_state)
             add_box_prompts(
-                self.predictor, inference_state, frame_idx=0,
+                self.predictor, inference_state, frame_idx=prompt_frame_idx,
                 box_prompts=prompt_boxes,
             )
-            propagated = propagate_inference(self.predictor, inference_state)
+            propagated = propagate_inference(
+                self.predictor, inference_state,
+                start_frame_idx=prompt_frame_idx, reverse=reverse,
+            )
 
         height = inference_state["video_height"]
         width = inference_state["video_width"]
@@ -137,7 +147,7 @@ class Sam2Tracker:
                 labels=[local_to_label.get(int(i)) for i in obj_ids],
                 scores=[local_to_score.get(int(i)) for i in obj_ids],
                 detection_ids=[local_to_detection.get(int(i)) for i in obj_ids],
-                is_prompt_frame=(frame_index == 0),
+                is_prompt_frame=(frame_index == prompt_frame_idx),
                 threshold=0.5,  # マスクは既に logits>0 で二値化済み
             )
             results.append(instances)

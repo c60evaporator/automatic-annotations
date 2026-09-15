@@ -24,6 +24,10 @@ from app.services.tracking_match import (
     LABEL_MATCH_LABEL,
 )
 
+# track_id の引き継ぎ方式
+TRACK_ID_INHERITANCE_CONTINUOUS = "continuous_id"
+TRACK_ID_INHERITANCE_FB = "forward_backward_matching"
+
 
 class TrackingFrameRef(BaseModel):
     """トラッキングに使う 1 フレーム."""
@@ -70,6 +74,10 @@ class InstanceTrackingRequest(BaseModel):
     iou_threshold: float = 0.5
     iou_method: str = IOU_METHOD_BOX
     iou_label_match: str = LABEL_MATCH_LABEL
+    # track_id の引き継ぎ方式（TRACK_ID_INHERITANCE_*）。
+    # continuous_id は Forward のみ、forward_backward_matching は
+    # 両方向を走らせて区間内で照合する
+    track_id_inheritance: str = TRACK_ID_INHERITANCE_CONTINUOUS
     # iou_label_match='category_group' のときに使う。
     # ラベル体系は webapp 側の設定なので、解決済みのものを受け取る
     label_to_category_group: dict[str, str] = Field(default_factory=dict)
@@ -97,11 +105,18 @@ class TrackedInstance(BaseModel):
     detection_2d_id: str | None = None
     # このフレームがプロンプトを与えた sample かどうか
     is_prompt_frame: bool = False
+    # 下流（Box Fitting・エクスポート）が使うべき行かどうか。
+    # forward_backward_matching では 1 フレーム 1 トラックに forward と
+    # backward の 2 件が入るため、採用した方に True を立てる
+    is_selected: bool = True
 
 
 # インスタンスの由来（webapp の models と同じ値を使う）
 ORIGIN_PROMPT = "prompt"            # その sample のプロンプトから得た結果
 ORIGIN_PROPAGATED = "propagated"    # 前の区間から伝播してきた結果
+# forward_backward_matching 用。両方向を残して比較できるようにする
+ORIGIN_FORWARD = "forward"
+ORIGIN_BACKWARD = "backward"
 
 
 class TrackingFrameResult(BaseModel):

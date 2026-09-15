@@ -76,9 +76,6 @@ for sample_index in proc_sample_indices:
                 cross_class_nms_iou=0.85,
                 sublabel_to_label=sublabel_to_label # Reverse mapping of LABEL_TO_SUBLABEL
             )
-            # convert box coordinates from normalized to pixel coordinates
-            for box in predicted_boxes:
-                box.xyxy = box.xyxy * np.array([image.width, image.height, image.width, image.height])
 ```
 
 カテゴリグループ内のラベルをそのままプロンプトとして渡すわけではなく、ラベルに紐づく複数（1個以上）のサブラベルをまとめてプロンプトに渡し、GroundingDINOの推論を実施します。
@@ -93,6 +90,7 @@ for sample_index in proc_sample_indices:
 - スコアが最大のサブラベルをそのボックスのサブラベルとし、逆引きdict`sublabel_to_label`を基にラベルに変換する
 - ラベルが等しいボックス同士で`same_class_nms_iou`に基づきNMSを実施
 - ラベルが異なるボックス同士で`cross_class_nms_iou`に基づきNMSを実施
+- ボックスの座標を標準化座標からピクセル座標に変換
 
 ## Instance Tracking
 

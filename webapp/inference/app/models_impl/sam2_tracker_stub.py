@@ -41,15 +41,17 @@ class Sam2TrackerStub:
         *,
         dataroot: Path | str = "",
         mask_score_threshold: float = 0.5,
+        direction: str = "forward",
         stub_delay_sec: float | None = None,
         **_: Any,
     ) -> list[list[dict[str, Any]]]:
         """1 区間ぶんの伝播を行う.
 
         Args:
-            frames: 区間内のフレーム（sample_idx 昇順、sweep 含む）。
-                先頭がプロンプトを与える sample のキーフレーム。
-            prompts: 先頭フレームに与えるボックス
+            frames: 区間内のフレーム（sample_idx 昇順、sweep 含む）
+            prompts: プロンプトのボックス
+            direction: "forward" なら先頭フレーム、"backward" なら
+                最終フレームにプロンプトを与えて伝播する
 
         Returns:
             frames と同じ長さのリスト。各要素はそのフレームの
@@ -66,8 +68,12 @@ class Sam2TrackerStub:
 
         # フレームごとに少しずつボックスを動かして、伝播の見た目を作る。
         # 同じ入力なら同じ結果になるよう、パスから決まる乱数にする
+        # プロンプトを与えるフレーム。backward は最終フレーム
+        reverse = direction == "backward"
+        prompt_index = len(frames) - 1 if reverse else 0
+
         seed = int(hashlib.md5(
-            f"{frames[0]['sample_data_token']}".encode()
+            f"{frames[prompt_index]['sample_data_token']}:{direction}".encode()
         ).hexdigest()[:8], 16)
         rng = random.Random(seed)
         drifts = [
@@ -75,7 +81,10 @@ class Sam2TrackerStub:
         ]
 
         results: list[list[dict[str, Any]]] = []
-        for step, frame in enumerate(frames):
+        for frame_index, frame in enumerate(frames):
+            # プロンプトフレームからの距離ぶんだけドリフトさせる。
+            # backward では最終フレームが起点になる
+            step = abs(frame_index - prompt_index)
             instances: list[dict[str, Any]] = []
             for index, prompt in enumerate(prompts):
                 dx, dy = drifts[index]

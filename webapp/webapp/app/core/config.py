@@ -167,10 +167,15 @@ class Settings(BaseSettings):
     # --- Instance Tracking -----------------------------------------------
     SWEEPS_PER_SAMPLE: int = 6
     DEFAULT_TRACKING_NUM_SWEEPS: int = 2
-    DEFAULT_TRACKING_IOU_THRESHOLD: float = 0.5
+    DEFAULT_TRACKING_IOU_THRESHOLD: float = 0.4
     DEFAULT_TRACKING_IOU_METHOD: str = "box"
     DEFAULT_TRACKING_IOU_LABEL_MATCH: str = "label"
     DEFAULT_TRACKING_MASK_SCORE_THRESHOLD: float = 0.5
+    # track_id の引き継ぎ方式。
+    #   continuous_id            … Forward のみ。区間境界で次のプロンプトと照合
+    #   forward_backward_matching … Forward と Backward を走らせ、区間内で照合。
+    #                               区間途中に現れたインスタンスを拾える
+    DEFAULT_TRACK_ID_INHERITANCE: str = "forward_backward_matching"
     TRACKING_MAX_RUNS_PER_SCENE: int = 10
     TRACKING_MODEL_NAME: str = "sam2.1_hiera_large"
     TRACKING_STUB_DELAY_SEC: float | None = 0.05

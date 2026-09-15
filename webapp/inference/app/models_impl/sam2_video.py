@@ -159,15 +159,24 @@ def propagate_inference(
     predictor: Any,
     inference_state: dict,
     start_frame_idx: int = 0,
+    reverse: bool = False,
 ) -> dict[int, tuple[np.ndarray, list[int]]]:
-    """全フレームへ伝播させ、フレームごとのマスクを返す.
+    """プロンプトを与えたフレームから伝播させ、フレームごとのマスクを返す.
+
+    Args:
+        start_frame_idx: 伝播の起点。backward ではプロンプトを与えた
+            **最終フレームの index** を渡す
+        reverse: True で時間をさかのぼって伝播する
 
     Returns:
         ``{frame_idx: (マスク (N, H, W), obj_id のリスト)}``
+
+    NOTE: reverse=True でも frame_idx は区間内の絶対 index が返る。
+    呼び出し側でフレーム順に並べ替える必要はない。
     """
     results: dict[int, tuple[np.ndarray, list[int]]] = {}
     for frame_idx, obj_ids, mask_logits in predictor.propagate_in_video(
-        inference_state, start_frame_idx=start_frame_idx
+        inference_state, start_frame_idx=start_frame_idx, reverse=reverse
     ):
         results[frame_idx] = (_logits_to_masks(mask_logits), list(obj_ids))
     return results

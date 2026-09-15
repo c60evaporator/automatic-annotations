@@ -33,8 +33,11 @@ from app.core.config import get_settings
 from app.core.jobs import Job, JobManager, get_job_manager
 from app.core.logging import get_logger
 from app.schemas.instance_tracking import (
+    ORIGIN_BACKWARD,
+    ORIGIN_FORWARD,
     ORIGIN_PROMPT,
     ORIGIN_PROPAGATED,
+    TRACK_ID_INHERITANCE_FB,
     InstanceTrackingRequest,
     JobResponse,
     TrackedInstance,
@@ -108,9 +111,8 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
     total = sum(len(v) for v in segments.values())
     job.set_progress(0, total, "モデルを準備中...")
 
-    done = 0
-    total_time = 0.0
-    next_track_id = 0
+    # 関数へ切り出した区間ループと進捗・採番を共有する
+    state: dict[str, Any] = {"done": 0, "total_time": 0.0, "next_track_id": 0}
     all_frames: list[TrackingFrameResult] = []
     # キーフレームの結果だけを保持する（sweep は伝播にのみ使う）。
     # キーは (sample_data_token, origin)。区間境界の sample には
@@ -118,126 +120,18 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
     results_by_frame: dict[tuple[str, str], TrackingFrameResult] = {}
 
     with model_registry.use_gpu("sam2") as tracker:
-        for channel, channel_segments in segments.items():
-            # track_id はカメラを跨がない。
-            # 同一物体が別カメラに写っても、2D の情報だけでは同定できないため
-            previous_boundary: list[dict[str, Any]] = []
+        if req.track_id_inheritance == TRACK_ID_INHERITANCE_FB:
+            _run_forward_backward(
+                req, job, tracker, segments, prompts_by_token,
+                results_by_frame, state,
+            )
+        else:
+            _run_continuous(
+                req, job, tracker, segments, prompts_by_token,
+                results_by_frame, state,
+            )
 
-            for seg_index, seg_frames in enumerate(channel_segments):
-                if job.cancel_requested():
-                    break
-
-                head = seg_frames[0]
-                prompts = [p.model_dump() for p in prompts_by_token.get(
-                    head.sample_data_token, []
-                )]
-                started = time.perf_counter()
-                error: str | None = None
-                per_frame: list[list[dict[str, Any]]] = []
-
-                try:
-                    if prompts:
-                        per_frame = tracker.propagate(
-                            [f.model_dump() for f in seg_frames],
-                            prompts,
-                            dataroot=settings.DATA_ROOT / req.dataroot,
-                            mask_score_threshold=req.mask_score_threshold,
-                            stub_delay_sec=req.stub_delay_sec,
-                        )
-                    else:
-                        # プロンプトが無い区間（検出0件）は空で通す
-                        per_frame = [[] for _ in seg_frames]
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("tracking failed (%s seg %d): %s",
-                                   channel, seg_index, exc)
-                    error = f"{type(exc).__name__}: {exc}"
-                    per_frame = [[] for _ in seg_frames]
-                finally:
-                    elapsed = time.perf_counter() - started
-                    total_time += elapsed
-                    done += 1
-                    job.set_progress(
-                        done,
-                        message=f"{channel} / 区間 {seg_index + 1}/{len(channel_segments)}",
-                    )
-
-                # 区間の先頭（＝プロンプト sample）で track_id を引き継ぐ
-                head_instances = per_frame[0] if per_frame else []
-                track_ids, next_track_id = assign_track_ids(
-                    previous_boundary,
-                    head_instances,
-                    next_track_id=next_track_id,
-                    iou_threshold=req.iou_threshold,
-                    iou_method=req.iou_method,
-                    label_match=req.iou_label_match,
-                    label_to_category_group=req.label_to_category_group,
-                )
-                local_to_track = {
-                    inst["local_id"]: track_ids[i]
-                    for i, inst in enumerate(head_instances)
-                }
-
-                for frame_position, (frame, instances) in enumerate(
-                    zip(seg_frames, per_frame)
-                ):
-                    # 区間の先頭はプロンプト由来、それ以降は伝播由来。
-                    # 次の区間の先頭が同じ sample を prompt として上書きせず、
-                    # 別レコードとして併存する
-                    origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
-                    resolved: list[TrackedInstance] = []
-                    for inst in instances:
-                        track_id = local_to_track.get(inst["local_id"])
-                        if track_id is None:
-                            continue
-                        resolved.append(TrackedInstance(
-                            track_id=track_id,
-                            label=inst["label"],
-                            score=inst.get("score"),
-                            mask_rle=inst["mask_rle"],
-                            mask_area=inst["mask_area"],
-                            xmin=inst["xmin"], ymin=inst["ymin"],
-                            xmax=inst["xmax"], ymax=inst["ymax"],
-                            detection_2d_id=inst.get("detection_2d_id"),
-                            is_prompt_frame=bool(inst.get("is_prompt_frame")),
-                        ))
-
-                    if not frame.is_key_frame:
-                        # sweep は伝播にのみ使い、結果は残さない
-                        continue
-
-                    result = TrackingFrameResult(
-                        origin=origin,
-                        sample_data_token=frame.sample_data_token,
-                        sample_token=frame.sample_token,
-                        sample_idx=frame.sample_idx,
-                        channel=frame.channel,
-                        is_key_frame=True,
-                        instances=resolved,
-                        inference_time=round(elapsed, 3),
-                        error=error,
-                    )
-                    results_by_frame[(frame.sample_data_token, origin)] = result
-
-                # 次の区間へ渡す境界インスタンス（この区間の最後のキーフレーム）
-                previous_boundary = []
-                for frame, instances in reversed(list(zip(seg_frames, per_frame))):
-                    if not frame.is_key_frame:
-                        continue
-                    for inst in instances:
-                        track_id = local_to_track.get(inst["local_id"])
-                        if track_id is None:
-                            continue
-                        previous_boundary.append({**inst, "track_id": track_id})
-                    break
-
-                # 完了した区間ぶんを UI へ流す
-                for frame_position, frame in enumerate(seg_frames):
-                    if not frame.is_key_frame:
-                        continue
-                    origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
-                    result = results_by_frame.get((frame.sample_data_token, origin))
-                    if result is not None:
-                        job.append_partial(result.model_dump())
+    total_time = state["total_time"]
 
     all_frames = sorted(
         results_by_frame.values(),
@@ -300,3 +194,352 @@ def list_tracking_jobs(
 @router.get("/status")
 def status() -> dict[str, str]:
     return {"kind": KIND, "implemented": "stub"}
+
+
+def _run_continuous(
+    req: InstanceTrackingRequest,
+    job: Job,
+    tracker: Any,
+    segments: dict[str, list[list[Any]]],
+    prompts_by_token: dict[str, list[Any]],
+    results_by_frame: dict[tuple[str, str], TrackingFrameResult],
+    state: dict[str, Any],
+) -> None:
+    """continuous_id: Forward のみ。区間境界で次のプロンプトと照合する.
+
+    従来の挙動をそのまま維持している（回帰を避けるため中身は変更していない）。
+    """
+    # 呼び出し元のローカル変数は見えないので、ここで取り直す
+    settings = get_settings()
+
+    for channel, channel_segments in segments.items():
+        # track_id はカメラを跨がない。
+        # 同一物体が別カメラに写っても、2D の情報だけでは同定できないため
+        previous_boundary: list[dict[str, Any]] = []
+
+        for seg_index, seg_frames in enumerate(channel_segments):
+            if job.cancel_requested():
+                break
+
+            head = seg_frames[0]
+            prompts = [p.model_dump() for p in prompts_by_token.get(
+                head.sample_data_token, []
+            )]
+            started = time.perf_counter()
+            error: str | None = None
+            per_frame: list[list[dict[str, Any]]] = []
+
+            try:
+                if prompts:
+                    per_frame = tracker.propagate(
+                        [f.model_dump() for f in seg_frames],
+                        prompts,
+                        dataroot=settings.DATA_ROOT / req.dataroot,
+                        mask_score_threshold=req.mask_score_threshold,
+                        stub_delay_sec=req.stub_delay_sec,
+                    )
+                else:
+                    # プロンプトが無い区間（検出0件）は空で通す
+                    per_frame = [[] for _ in seg_frames]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("tracking failed (%s seg %d): %s",
+                               channel, seg_index, exc)
+                error = f"{type(exc).__name__}: {exc}"
+                per_frame = [[] for _ in seg_frames]
+            finally:
+                elapsed = time.perf_counter() - started
+                state["total_time"] += elapsed
+                state["done"] += 1
+                job.set_progress(
+                    state["done"],
+                    message=f"{channel} / 区間 {seg_index + 1}/{len(channel_segments)}",
+                )
+
+            # 区間の先頭（＝プロンプト sample）で track_id を引き継ぐ
+            head_instances = per_frame[0] if per_frame else []
+            track_ids, state["next_track_id"] = assign_track_ids(
+                previous_boundary,
+                head_instances,
+                next_track_id=state["next_track_id"],
+                iou_threshold=req.iou_threshold,
+                iou_method=req.iou_method,
+                label_match=req.iou_label_match,
+                label_to_category_group=req.label_to_category_group,
+            )
+            local_to_track = {
+                inst["local_id"]: track_ids[i]
+                for i, inst in enumerate(head_instances)
+            }
+
+            for frame_position, (frame, instances) in enumerate(
+                zip(seg_frames, per_frame)
+            ):
+                # 区間の先頭はプロンプト由来、それ以降は伝播由来。
+                # 次の区間の先頭が同じ sample を prompt として上書きせず、
+                # 別レコードとして併存する
+                origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
+                resolved: list[TrackedInstance] = []
+                for inst in instances:
+                    track_id = local_to_track.get(inst["local_id"])
+                    if track_id is None:
+                        continue
+                    resolved.append(TrackedInstance(
+                        track_id=track_id,
+                        label=inst["label"],
+                        score=inst.get("score"),
+                        mask_rle=inst["mask_rle"],
+                        mask_area=inst["mask_area"],
+                        xmin=inst["xmin"], ymin=inst["ymin"],
+                        xmax=inst["xmax"], ymax=inst["ymax"],
+                        detection_2d_id=inst.get("detection_2d_id"),
+                        is_prompt_frame=bool(inst.get("is_prompt_frame")),
+                    ))
+
+                if not frame.is_key_frame:
+                    # sweep は伝播にのみ使い、結果は残さない
+                    continue
+
+                result = TrackingFrameResult(
+                    origin=origin,
+                    sample_data_token=frame.sample_data_token,
+                    sample_token=frame.sample_token,
+                    sample_idx=frame.sample_idx,
+                    channel=frame.channel,
+                    is_key_frame=True,
+                    instances=resolved,
+                    inference_time=round(elapsed, 3),
+                    error=error,
+                )
+                results_by_frame[(frame.sample_data_token, origin)] = result
+
+            # 次の区間へ渡す境界インスタンス（この区間の最後のキーフレーム）
+            previous_boundary = []
+            for frame, instances in reversed(list(zip(seg_frames, per_frame))):
+                if not frame.is_key_frame:
+                    continue
+                for inst in instances:
+                    track_id = local_to_track.get(inst["local_id"])
+                    if track_id is None:
+                        continue
+                    previous_boundary.append({**inst, "track_id": track_id})
+                break
+
+            # 完了した区間ぶんを UI へ流す
+            for frame_position, frame in enumerate(seg_frames):
+                if not frame.is_key_frame:
+                    continue
+                origin = ORIGIN_PROMPT if frame_position == 0 else ORIGIN_PROPAGATED
+                result = results_by_frame.get((frame.sample_data_token, origin))
+                if result is not None:
+                    job.append_partial(result.model_dump())
+
+
+
+def _to_tracked(
+    inst: dict[str, Any], track_id: str, *, is_selected: bool
+) -> TrackedInstance:
+    """伝播結果の dict を API の形へ直す."""
+    return TrackedInstance(
+        track_id=track_id,
+        label=inst["label"],
+        score=inst.get("score"),
+        mask_rle=inst["mask_rle"],
+        mask_area=inst["mask_area"],
+        xmin=inst["xmin"], ymin=inst["ymin"],
+        xmax=inst["xmax"], ymax=inst["ymax"],
+        detection_2d_id=inst.get("detection_2d_id"),
+        is_prompt_frame=bool(inst.get("is_prompt_frame")),
+        is_selected=is_selected,
+    )
+
+
+def _tracks_by_local_id(
+    per_frame: list[list[dict[str, Any]]], frame_offset: int = 0
+) -> tuple[list[int], list[dict[int, dict[str, Any]]]]:
+    """伝播結果を local_id ごとの ``{frame index: instance}`` へ組み替える.
+
+    fb_matching は「トラックのリスト」を受け取るため、
+    フレーム単位の結果を転置しておく。
+
+    Returns:
+        (local_id のリスト, それに対応するトラックのリスト)
+    """
+    tracks: dict[int, dict[int, dict[str, Any]]] = {}
+    for frame_index, instances in enumerate(per_frame):
+        for inst in instances:
+            tracks.setdefault(inst["local_id"], {})[frame_index + frame_offset] = inst
+    local_ids = sorted(tracks)
+    return local_ids, [tracks[i] for i in local_ids]
+
+
+def _run_forward_backward(
+    req: InstanceTrackingRequest,
+    job: Job,
+    tracker: Any,
+    segments: dict[str, list[list[Any]]],
+    prompts_by_token: dict[str, list[Any]],
+    results_by_frame: dict[tuple[str, str], TrackingFrameResult],
+    state: dict[str, Any],
+) -> None:
+    """forward_backward_matching: 両方向を走らせ、区間内で照合する.
+
+    区間 s の backward プロンプトと区間 s+1 の forward プロンプトは
+    **同じアンカーの同じ Detection2D ボックス**なので、境界での照合は不要。
+    照合するのは区間内の F×B だけで、その結果を連鎖させて track_id を配る。
+
+    両方向のマスクを ``origin='forward'/'backward'`` で残し、
+    採用した方に ``is_selected`` を立てる（比較表示のため）。
+    """
+    # 呼び出し元のローカル変数は見えないので、ここで取り直す
+    settings = get_settings()
+
+    from app.services.fb_matching import (
+        assign_chain_track_ids,
+        match_forward_backward,
+        select_direction,
+        temporal_iou_matrix,
+    )
+
+    for channel, channel_segments in segments.items():
+        if not channel_segments:
+            continue
+        # track_id はカメラを跨がない
+        anchors: list[int] = []
+        prompt_counts: dict[int, int] = {}
+        segment_matches: dict[tuple[int, int], dict[int, int]] = {}
+        # 区間ごとの伝播結果を保持する（照合後にまとめて結果へ変換する）
+        segment_data: list[dict[str, Any]] = []
+
+        for seg_index, seg_frames in enumerate(channel_segments):
+            if job.cancel_requested():
+                break
+
+            head, tail = seg_frames[0], seg_frames[-1]
+            fwd_prompts = [p.model_dump() for p in prompts_by_token.get(
+                head.sample_data_token, []
+            )]
+            bwd_prompts = [p.model_dump() for p in prompts_by_token.get(
+                tail.sample_data_token, []
+            )]
+
+            started = time.perf_counter()
+            error: str | None = None
+            per_frame_f: list[list[dict[str, Any]]] = [[] for _ in seg_frames]
+            per_frame_b: list[list[dict[str, Any]]] = [[] for _ in seg_frames]
+
+            try:
+                frame_dicts = [f.model_dump() for f in seg_frames]
+                common = dict(
+                    dataroot=settings.DATA_ROOT / req.dataroot,
+                    mask_score_threshold=req.mask_score_threshold,
+                    stub_delay_sec=req.stub_delay_sec,
+                )
+                if fwd_prompts:
+                    per_frame_f = tracker.propagate(
+                        frame_dicts, fwd_prompts, direction="forward", **common
+                    )
+                if bwd_prompts:
+                    per_frame_b = tracker.propagate(
+                        frame_dicts, bwd_prompts, direction="backward", **common
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("tracking failed (%s seg %d): %s",
+                               channel, seg_index, exc)
+                error = f"{type(exc).__name__}: {exc}"
+            finally:
+                elapsed = time.perf_counter() - started
+                state["total_time"] += elapsed
+                state["done"] += 1
+                job.set_progress(
+                    state["done"],
+                    message=f"{channel} / 区間 {seg_index + 1}/{len(channel_segments)}",
+                )
+
+            # アンカーの並びとプロンプト数を記録する。
+            # アンカーは「区間の先頭 index」を通し番号として使う
+            if not anchors:
+                anchors.append(seg_index)
+                prompt_counts[seg_index] = len(fwd_prompts)
+            anchors.append(seg_index + 1)
+            prompt_counts[seg_index + 1] = len(bwd_prompts)
+
+            # F×B の照合。local_id の並び順が prompt の index に対応する
+            f_ids, f_tracks = _tracks_by_local_id(per_frame_f)
+            b_ids, b_tracks = _tracks_by_local_id(per_frame_b)
+            score = temporal_iou_matrix(
+                f_tracks, b_tracks,
+                iou_method=req.iou_method,
+                label_match=req.iou_label_match,
+                label_to_category_group=req.label_to_category_group,
+            )
+            matched = match_forward_backward(score, req.iou_threshold)
+            # 行・列の index を prompt の index（= local_id）へ戻す
+            segment_matches[(seg_index, seg_index + 1)] = {
+                f_ids[i]: b_ids[j] for i, j in matched.items()
+            }
+
+            segment_data.append({
+                "seg_index": seg_index,
+                "frames": seg_frames,
+                "forward": per_frame_f,
+                "backward": per_frame_b,
+                "elapsed": elapsed,
+                "error": error,
+            })
+
+        # 連鎖割り当て。カメラごとに採番を続ける
+        assigned, state["next_track_id"] = assign_chain_track_ids(
+            anchors, prompt_counts, segment_matches,
+            start_track_id=state["next_track_id"],
+        )
+
+        # 結果へ変換する
+        for data in segment_data:
+            seg_index = data["seg_index"]
+            seg_frames = data["frames"]
+            last = len(seg_frames) - 1
+            # 区間は境界フレームを共有している。両方の区間が同じ
+            # (sample_data_token, origin) へ書くと後から書いた方で上書きされ、
+            # is_selected の判定も壊れる。末尾フレームは次の区間に任せる
+            # （最終区間だけは自分で持つ）
+            is_last_segment = seg_index == len(segment_data) - 1
+
+            for direction, per_frame, origin, anchor in (
+                ("forward", data["forward"], ORIGIN_FORWARD, seg_index),
+                ("backward", data["backward"], ORIGIN_BACKWARD, seg_index + 1),
+            ):
+                for frame_index, (frame, instances) in enumerate(
+                    zip(seg_frames, per_frame)
+                ):
+                    if not frame.is_key_frame:
+                        # sweep は伝播にのみ使い、結果は残さない
+                        continue
+                    if frame_index == last and not is_last_segment:
+                        # 境界フレームは次の区間が担当する
+                        continue
+                    # プロンプトフレームに近い方向を採用する
+                    selected = select_direction(frame_index, 0, last) == direction
+                    resolved = []
+                    for inst in instances:
+                        track_id = assigned.get((anchor, inst["local_id"]))
+                        if track_id is None:
+                            continue
+                        resolved.append(_to_tracked(
+                            inst, str(track_id), is_selected=selected,
+                        ))
+                    if not resolved:
+                        continue
+
+                    result = TrackingFrameResult(
+                        origin=origin,
+                        sample_data_token=frame.sample_data_token,
+                        sample_token=frame.sample_token,
+                        sample_idx=frame.sample_idx,
+                        channel=frame.channel,
+                        is_key_frame=True,
+                        instances=resolved,
+                        inference_time=round(data["elapsed"], 3),
+                        error=data["error"],
+                    )
+                    results_by_frame[(frame.sample_data_token, origin)] = result
+                    job.append_partial(result.model_dump())

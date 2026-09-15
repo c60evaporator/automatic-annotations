@@ -43,6 +43,7 @@ def build_tracking_payload(
     iou_threshold: float,
     iou_method: str,
     iou_label_match: str,
+    track_id_inheritance: str,
     mask_score_threshold: float = 0.5,
     stub_delay_sec: float | None = None,
 ) -> dict[str, Any]:
@@ -103,6 +104,7 @@ def build_tracking_payload(
         "iou_threshold": iou_threshold,
         "iou_method": iou_method,
         "iou_label_match": iou_label_match,
+        "track_id_inheritance": track_id_inheritance,
         # ラベル体系は webapp 側の設定なので、解決済みのものを渡す
         "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         "mask_score_threshold": mask_score_threshold,
@@ -124,6 +126,7 @@ def save_tracking_run(
     iou_threshold: float,
     iou_method: str,
     iou_label_match: str,
+    track_id_inheritance: str,
     mask_score_threshold: float = 0.5,
     model_name: str = "",
 ) -> str:
@@ -149,6 +152,7 @@ def save_tracking_run(
             new_track_iou_threshold=iou_threshold,
             iou_method=iou_method,
             iou_label_match=iou_label_match,
+            track_id_inheritance=track_id_inheritance,
             status=status,
         )
         saved = repo.save_instances(params_id, dataset_id, instances_by_frame)

@@ -49,33 +49,58 @@ MASK_ALPHA = 0.45
 # インスタンスの由来（DB の models と同じ値）
 ORIGIN_PROMPT = "prompt"
 ORIGIN_PROPAGATED = "propagated"
+ORIGIN_FORWARD = "forward"
+ORIGIN_BACKWARD = "backward"
+
+# track_id の引き継ぎ方式（run に記録されている値）
+TRACK_ID_INHERITANCE_CONTINUOUS = "continuous_id"
+TRACK_ID_INHERITANCE_FB = "forward_backward_matching"
 
 
 def split_by_origin(
-    instances: Iterable[dict[str, Any]]
+    instances: Iterable[dict[str, Any]],
+    *,
+    left_origin: str = ORIGIN_PROPAGATED,
+    right_origin: str = ORIGIN_PROMPT,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """インスタンスを (prompt 由来, propagated 由来) に分ける."""
-    prompt: list[dict[str, Any]] = []
-    propagated: list[dict[str, Any]] = []
+    """インスタンスを比較表示の (右, 左) に分ける.
+
+    既定は continuous_id 向けで、(prompt 由来, propagated 由来) を返す。
+    forward_backward_matching では left/right を forward/backward にする。
+
+    Returns:
+        ``(right_origin のもの, left_origin のもの)``
+    """
+    right: list[dict[str, Any]] = []
+    left: list[dict[str, Any]] = []
     for inst in instances:
-        if inst.get("origin") == ORIGIN_PROPAGATED:
-            propagated.append(inst)
+        if inst.get("origin") == left_origin:
+            left.append(inst)
         else:
-            prompt.append(inst)
-    return prompt, propagated
+            right.append(inst)
+    return right, left
 
 
 def preferred_instances(
     instances: Iterable[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """通常表示に使うインスタンスを選ぶ.
+    """通常表示・下流処理に使うインスタンスを選ぶ.
 
-    区間境界の sample には prompt と propagated の両方があるので、
-    検出器の出力そのものである prompt を優先する。
-    それ以外の sample は propagated しかないのでそのまま返る。
+    2 段で絞る:
+      1. ``is_selected`` が立っているものに限る（forward_backward_matching
+         では、プロンプトに近い方向だけが立っている）
+      2. その中で prompt 由来を優先する（continuous_id の区間境界には
+         prompt と propagated の両方があり、どちらも is_selected が立つ。
+         検出器の出力そのものである prompt を採る）
+
+    どちらの方式でも「1 フレーム 1 トラックに 1 件」へ落ちる。
     """
-    prompt, propagated = split_by_origin(instances)
-    return prompt if prompt else propagated
+    instances = list(instances)
+    candidates = [i for i in instances if i.get("is_selected", True)]
+    if not candidates:
+        candidates = instances
+    prompt, other = split_by_origin(candidates)
+    return prompt if prompt else other
 
 
 # ── 色 ────────────────────────────────────────────────────────────────────────

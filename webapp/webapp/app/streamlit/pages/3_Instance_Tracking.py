@@ -14,7 +14,12 @@ from __future__ import annotations
 import streamlit as st
 
 from app.core.config import get_settings
-from app.models.ann_intermediate import IOU_LABEL_MATCHES, IOU_METHODS
+from app.models.ann_intermediate import (
+    IOU_LABEL_MATCHES,
+    IOU_METHODS,
+    TRACK_ID_INHERITANCE_FB,
+    TRACK_ID_INHERITANCES,
+)
 from app.services.camera_service import order_cameras
 from app.services.inference_client import (
     InferenceServerError,
@@ -40,6 +45,9 @@ from app.streamlit.components.instance_tracking_viewer import (
     BOX_MODES,
     ORIGIN_PROMPT,
     preferred_instances,
+    ORIGIN_BACKWARD,
+    ORIGIN_FORWARD,
+    ORIGIN_PROPAGATED,
     render_instance_comparison_grid,
     split_by_origin,
     COLOR_MODE_LABEL,
@@ -180,6 +188,20 @@ with param_col:
                 "新しいプロンプトのインスタンスを照合する条件"
             )
 
+            st.markdown("**Track ID Inheritance**")
+            track_id_inheritance = st.radio(
+                "Track ID Inheritance", TRACK_ID_INHERITANCES,
+                index=TRACK_ID_INHERITANCES.index(
+                    settings.DEFAULT_TRACK_ID_INHERITANCE
+                ) if settings.DEFAULT_TRACK_ID_INHERITANCE in TRACK_ID_INHERITANCES
+                else 0,
+                label_visibility="collapsed",
+                help=("continuous_id: Forward のみ。区間境界で次のプロンプトと照合。\n\n"
+                      "forward_backward_matching: Forward と Backward を走らせ、"
+                      "区間内で照合する。区間途中に現れたインスタンスを拾えるが、"
+                      "推論時間は約 2 倍になる"),
+            )
+
 # ------------------------------------------------------------------
 # Run / progress
 # ------------------------------------------------------------------
@@ -216,6 +238,7 @@ def _save_completed_job(job: dict) -> None:
             iou_threshold=float(iou_threshold),
             iou_method=iou_method,
             iou_label_match=iou_label_match,
+            track_id_inheritance=track_id_inheritance,
             mask_score_threshold=settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD,
         )
     except Exception as exc:  # noqa: BLE001
@@ -233,7 +256,7 @@ with param_col:
             f"prompt={selected_prompt['nbr_boxes']} boxes / "
             f"interval={selected_prompt['sample_interval']} / "
             f"sweeps={num_sweeps} / iou={iou_threshold:g} {iou_method} "
-            f"{iou_label_match}"
+            f"{iou_label_match} / {track_id_inheritance}"
         )
         run_col, cancel_col, status_col = st.columns([1, 1, 3])
 
@@ -251,6 +274,7 @@ with param_col:
                             iou_threshold=float(iou_threshold),
                             iou_method=iou_method,
                             iou_label_match=iou_label_match,
+                            track_id_inheritance=track_id_inheritance,
                             mask_score_threshold=(
                                 settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD
                             ),
@@ -330,9 +354,13 @@ with param_col:
                 started = run["started_at"].strftime("%m-%d %H:%M:%S")
                 refs = (f" / depth参照 {run['nbr_depth_runs']}"
                         if run["nbr_depth_runs"] else "")
+                # 方式は表示名が長いので短縮する
+                method = ("fwd+bwd"
+                          if run["track_id_inheritance"] == TRACK_ID_INHERITANCE_FB
+                          else "fwd")
                 return (f"{mark}{started}  [{run['status']}]  "
                         f"{run['nbr_instances']} inst / {run['num_tracks']} tracks  "
-                        f"sweeps={run['num_sweeps']}{refs}")
+                        f"sweeps={run['num_sweeps']} {method}{refs}")
 
             options = [r["id"] for r in runs]
             labels = {r["id"]: _run_label(r) for r in runs}
@@ -382,6 +410,19 @@ display_interval = (
 # プロンプトを与えた sample（＝伝播と推論の両方が存在する sample）
 interval_sample_indices = get_skipped_sample_indices(len(samples), display_interval)
 
+# 比較表示で何を左右に並べるかは run の方式で決まる。
+#   continuous_id             … 区間境界のみ prompt(右) / propagated(左)
+#   forward_backward_matching … 全キーフレームで forward(右) / backward(左)
+is_fb_run = bool(
+    view_run_info
+    and view_run_info.get("track_id_inheritance") == TRACK_ID_INHERITANCE_FB
+)
+compare_origins = (
+    (ORIGIN_BACKWARD, ORIGIN_FORWARD) if is_fb_run
+    else (ORIGIN_PROPAGATED, ORIGIN_PROMPT)
+)
+compare_labels = ("Backward", "Forward") if is_fb_run else ("Propagated", "Prompt")
+
 # 比較表示のときは interval 対象の sample しか選べない。
 # それ以外の sample には伝播結果しか無く、左右に並べる意味がないため
 compare_propagation = S.sticky_value(OPT_COMPARE, False)
@@ -389,8 +430,10 @@ compare_propagation = S.sticky_value(OPT_COMPARE, False)
 with param_col:
     # Detection2D と違い、既定では全 sample を選べる。
     # トラッキングは interval の間の sample にも結果が出るため
+    # fb では全キーフレームで比較できるので、選択肢を絞る必要がない
+    restrict_to_anchors = compare_propagation and not is_fb_run
     sample_options = (
-        interval_sample_indices if compare_propagation
+        interval_sample_indices if restrict_to_anchors
         else list(range(len(samples)))
     ) or [0]
     # NOTE: key を付けずに毎回変わる value= を渡すと、Streamlit が
@@ -403,7 +446,7 @@ with param_col:
     selected_sample_idx = st.select_slider(
         "Select Sample", options=sample_options, key=W_SAMPLE,
     )
-    if compare_propagation:
+    if restrict_to_anchors:
         st.caption("比較表示中のため、プロンプトを与えた sample のみ選択できます")
 
 # ------------------------------------------------------------------
@@ -445,8 +488,11 @@ for sensor in cam_sensors:
     )
     token = frame["token"] if frame else None
     all_instances = results.get(token, [])
-    # 区間境界の sample には prompt / propagated の両方が入っている
-    prompt_instances, propagated_instances = split_by_origin(all_instances)
+    # 比較対象を左右に分ける（方式によって由来が違う）
+    prompt_instances, propagated_instances = split_by_origin(
+        all_instances,
+        left_origin=compare_origins[0], right_origin=compare_origins[1],
+    )
     items.append({
         "channel": sensor["channel"],
         "image": image,
@@ -458,8 +504,10 @@ for sensor in cam_sensors:
         "pending": token not in results,
     })
 
-# 比較できるのは、伝播と推論の両方が存在する sample のみ
-can_compare = selected_sample_idx in interval_sample_indices
+# 比較できる sample。
+#   continuous_id … prompt と propagated の両方があるのはアンカーのみ
+#   fb            … 全キーフレームに forward と backward が入っている
+can_compare = is_fb_run or selected_sample_idx in interval_sample_indices
 
 with opt_col:
     # 前の区間からの伝播マスクと、今回の区間の推論マスクを左右に並べる。
@@ -469,8 +517,10 @@ with opt_col:
     checked = st.checkbox(
         "Compare propagation", key=W_COMPARE, disabled=not can_compare,
         on_change=S.sync_sticky, args=(W_COMPARE, OPT_COMPARE),
-        help=("前の区間から伝播したマスク（左）と、今回の区間の推論マスク（右）"
-              "を並べて比較する。プロンプトを与えた sample でのみ有効"),
+        help=(f"{compare_labels[0]}（左）と {compare_labels[1]}（右）を"
+              "並べて比較する。"
+              + ("forward_backward_matching では全キーフレームで比較できる"
+                 if is_fb_run else "プロンプトを与えた sample でのみ有効")),
     )
     # NOTE: 比較できない sample に移ったときに、ウィジェットの key へ
     # False を書き込んで自動解除してはいけない。
@@ -533,6 +583,8 @@ with view_col:
             box_mode=box_mode,
             text_mode=text_mode,
             enabled_keys=enabled_keys,
+            left_label=compare_labels[0],
+            right_label=compare_labels[1],
         )
     else:
         render_instance_grid(

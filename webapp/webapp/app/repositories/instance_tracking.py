@@ -52,6 +52,7 @@ class InstanceTrackingRepository:
         new_track_iou_threshold: float,
         iou_method: str,
         iou_label_match: str,
+        track_id_inheritance: str,
         max_lost_frames: int = 0,
         status: str = RUN_STATUS_RUNNING,
     ) -> str:
@@ -74,6 +75,7 @@ class InstanceTrackingRepository:
             "new_track_iou_threshold": new_track_iou_threshold,
             "iou_method": iou_method,
             "iou_label_match": iou_label_match,
+            "track_id_inheritance": track_id_inheritance,
             "max_lost_frames": max_lost_frames,
             "status": status,
             "num_inferences": 0,
@@ -130,6 +132,9 @@ class InstanceTrackingRepository:
                     "detection_2d_id": inst.get("detection_2d_id"),
                     "track_id": str(inst["track_id"]),
                     "origin": inst.get("origin", INSTANCE_ORIGIN_PROMPT),
+                    # forward_backward_matching では 1 フレーム 1 トラックに
+                    # 両方向が入る。採用した方だけを下流へ渡すための印
+                    "is_selected": bool(inst.get("is_selected", True)),
                     "label": inst["label"],
                     "mask_rle": inst["mask_rle"],
                     "mask_area": int(inst.get("mask_area", 0)),
@@ -309,6 +314,7 @@ class InstanceTrackingRepository:
             InstanceTracking2D.detection_2d_id,
             InstanceTracking2D.manually_modified,
             InstanceTracking2D.origin,
+            InstanceTracking2D.is_selected,
         ]
         if include_mask:
             columns.append(InstanceTracking2D.mask_rle)
@@ -330,6 +336,7 @@ class InstanceTrackingRepository:
                 "detection_2d_id": r["detection_2d_id"],
                 "manually_modified": r["manually_modified"],
                 "origin": r["origin"],
+                "is_selected": r["is_selected"],
             }
             if include_mask:
                 item["mask_rle"] = r["mask_rle"]
@@ -393,6 +400,7 @@ def _run_to_dict(row: InstanceTracking2DParams) -> dict[str, Any]:
         "new_track_iou_threshold": row.new_track_iou_threshold,
         "iou_method": row.iou_method,
         "iou_label_match": row.iou_label_match,
+        "track_id_inheritance": row.track_id_inheritance,
         "max_lost_frames": row.max_lost_frames,
         "status": row.status,
         "num_inferences": row.num_inferences,
