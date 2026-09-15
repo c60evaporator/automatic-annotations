@@ -94,14 +94,14 @@ for sample_index in proc_sample_indices:
 
 ## Instance Tracking
 
-SAM2によるInstance Trackingは、`detection_2d_params`（Detection2Dでの推論実行単位でパラメータを保持するテーブル）のSample Intervalごとに実施する（間引き後のサンプル数N' × カメラ数C回推論が実施される）。
+SAM2によるInstance Trackingは、`detection_2d_params`（Detection2Dでの推論実行単位でパラメータを保持するテーブル）のSample Intervalごとに実施する。このSample Interval間のフレームをまとめてトラッキングに利用する（キーフレームだけでなく、Sweeps per Sampleパラメータに応じて非キーフレームをほぼ等間隔となるよう選択して使用する。このトラッキングに利用するフレーム群をブロックと呼ぶこととする）。
 例えばSample Interval=4のとき、以下のように推論が行われる
 
-- 1回目の推論: Sample0からSample4までの画像を入力データとして与え、Sample0のボックス（Detection2Dの結果）をプロンプトとして与えて推論（トラッキングpropagation）を実施
-- 2回目の推論: Sample4からSample8までの画像を入力データとして与え、Sample4のボックス（Detection2Dの結果）をプロンプトとして与えて推論を実施。前回（1回目の推論）のtrack_idをどのように引き継ぐかは、後述の`track_id_inheritance`パラメータにより変わる
+- 1つ目のブロック（Sample0から4）: Sample0からSample4までの画像をまとめたブロックを入力データとして与え、トラッキング推論を実施
+- 2つ目のブロック（Sample4から8）: Sample4からSample8までの画像をまとめたブロックを入力データとして与え、トラッキング推論を実施。前回（1回目の推論）のtrack_idをどのように引き継ぐかは、後述の`track_id_inheritance`パラメータにより変わる
 - 3回目の推論（以下略）
 
-なお、入力データとして与えるのはキーフレームだけでなく、Sweeps per Sampleパラメータに応じて非キーフレームをほぼ等間隔となるよう選択して使用する。具体的なフレームは、以下の参考コードのように、キーフレームと前のキーフレームとの間をSweeps per Sampleパラメータ（参考コード中の`nsweeps`）で等分するするように選択される
+入力データとして与えるブロックは、以下の参考コードのように、キーフレームと前のキーフレームとの間をSweeps per Sampleパラメータ（参考コード中の`nsweeps`）で等分するするように選択される
 
 ```python
 sweep_indices = sorted(dict.fromkeys(len(frames) - 1 - int(i)
@@ -127,15 +127,19 @@ sam2_predictor = build_sam2_video_predictor(str(SAM2_CONFIG_PATH), str(SAM2_CHEC
 インスタンスセグメンテーション・トラッキングの推論はこの`sam2_predictor`インスタンスを用いて実施するが、`track_id_inheritance`パラメータに"continuous_id"と"reverse_matching"どちらを指定するかで、各推論間のトラッキングIDの引き継ぎ方法を以下のように変える（どちらも今回のSample Intervalから次のSample Intervalまでの画像フレームをまとめて推論に使用する）
 
 - `track_id_inheritance="continuous_id"`: 最初のフレームにDetection2Dのボックスプロンプトを与えた後ろ向きトラッキング結果のインスタンスと、最後のフレーム（次のSample Intervalの最初のフレームに相当）にDetection2Dのボックスプロンプトを与えて推論したインスタンスをIoUマッチングしてtrack_idを引き継ぐ（詳細は後述の例を参照）
-- `track_id_inheritance="reverse_matching"`: 最初のフレームにボックスプロンプトを与えた後ろ向きトラッキング推論と、最後のフレームにボックスプロンプトを与えた前向きトラッキング推論を実施し、全フレームに対してIoUマッチングを実施してtrack_idを引き継ぐ（詳細は後述の例を参照）
+- `track_id_inheritance="forward_backward_matching"`: 最初のフレームにボックスプロンプトを与えた後ろ向きトラッキング推論と、最後のフレームにボックスプロンプトを与えた前向きトラッキング推論を実施し、各インスタンスの全フレームでの時空間IoUマッチングを実施してtrack_idを引き継ぐ（詳細は後述の例を参照）
 
 #### track_id_inheritance="continuous_id"
 
-例えばSample Interval=4のとき、以下のように推論が行われる
+この方法では、ブロック内の最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間方向に前から後ろ方向（Forward方向）にフレームをトラッキングし、トラッキングで得られた最後のフレームの全インスタンスと、次のブロックの推論の最初のフレームの全インスタンスをIoUでHungarianマッチングしてから`IoU Threshold`で閾値判定し、マッチングした場合track_idを次のブロックの推論に引き継ぎます。
 
-- 1回目の推論: Sample0からSample4までの画像を入力データとして与え、Sample0のボックス（Detection2Dの結果）をプロンプトとして与えて推論（トラッキングpropagation）を実施
-- 2回目の推論: Sample4からSample8までの画像を入力データとして与え、Sample4のボックス（Detection2Dの結果）をプロンプトとして与えて推論を実施。このとき、前回の推論（1回目の推論）で伝播により得られたSample4のインスタンスと、今回の推論（2回目の推論）で得られたSample4のインスタンス同士で貪欲マッチングを実施し、IoUが閾値（後述）以上のインスタンスが存在すれば1回目の推論のtrack_idを引き継ぎ、存在しなければ新たにtrack_idを割り振ります。
+例えばSample Interval=4のとき、以下のように推論が行われます。
+
+- 1つ目のブロック（Sample0から4）: Sample0からSample4までの画像を入力データとして与え、Sample0のボックス（Detection2Dの結果）をプロンプトとして与えて推論（トラッキングpropagation）を実施
+- 2つ目のブロック（Sample4から8）: Sample4からSample8までの画像を入力データとして与え、Sample4のボックス（Detection2Dの結果）をプロンプトとして与えて推論を実施。このとき、前回の推論（1回目の推論）で伝播により得られたSample4のインスタンスと、今回の推論（2回目の推論）で得られたSample4のインスタンス同士で貪欲マッチングを実施し、IoUが閾値（後述）以上のインスタンスが存在すれば1回目の推論のtrack_idを引き継ぎ、存在しなければ新たにtrack_idを割り振ります。
 - 3回目の推論（以下略）
+
+このケースでは、間引き後のサンプル数N' × カメラ数C回推論が実施されます。
 
 推論の実装例
 
@@ -190,4 +194,17 @@ for camera_channel in CAMERA_CHANNELS:
         result_instances = {k: v for i_sweep, (k, v) in enumerate(full_result_instances.items()) if i_sweep in keyframe_indices}
 ```
 
-#### track_id_inheritance="reverse_matching"
+#### track_id_inheritance="forward_backward_matching"
+
+この方法では、ブロック内の最初のフレームにボックスプロンプト（Detection2Dの結果）を与えたForward方向トラッキング推論と、最後のフレームにボックスプロンプト（Detection2Dの結果）を与えたBackward方向トラッキング推論を比較して、以下の式で複数フレームでのIoU（時空間IoU）を求めます
+
+```math
+score(i, j) = \sum_k \frac{\text{IoU}_k(F_i, B_j)} {k} \\
+F_i: Forward方向トラッキングのi番目のインスタンス \\
+B_j: Backward方向トラッキングのj番目のインスタンス \\
+k : F_i または B_j が存在するフレーム
+```
+
+求めた全ての$(i, j)$に対する$score(i, j)$の行列から、Hungarian algorithmでForwardとBackwardのインスタンスをマッチングしてから`IoU Threshold`で閾値判定し、紐づいた場合はForwardのtrack_idをBackwardに引き継ぐことで、次のブロックのForwardにもtrack_idが引き継がれます（Backwardのプロンプトボックスは次のブロックのForwardと等しいため）
+
+この方法では間引き後のサンプル数N' × カメラ数C回 × 2回推論が実施されます（ForwardとBackward両方向で実施するため、track_id_inheritance="continuous_id"の2倍の推論数となる）。

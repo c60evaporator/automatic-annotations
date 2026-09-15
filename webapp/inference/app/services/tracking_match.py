@@ -4,7 +4,7 @@ SAM2 には sample_interval ごとにプロンプト（Detection2D のボック�
 区間の境界となる sample には、
   - 前の区間から**伝播してきた**インスタンス
   - 今回のプロンプトから**新たに得た**インスタンス
-の両方が存在する。これらを貪欲マッチングし、IoU が閾値以上なら
+の両方が存在する。これらを 1 対 1 でマッチングし、IoU が閾値以上なら
 前の区間の track_id を引き継ぐ。閾値未満なら新しい track_id を発番する。
 
 これをしないと、区間ごとに track_id が振り直され、
@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from common.box_ops import box_iou, greedy_match
+import numpy as np
+
+from common.box_ops import box_iou
 from common.mask_rle import mask_iou
 
 # IoU の計算方法
@@ -70,7 +72,7 @@ def match_instances(
     label_match: str = LABEL_MATCH_LABEL,
     label_to_category_group: dict[str, str] | None = None,
 ) -> dict[int, int]:
-    """伝播インスタンスと新規検出インスタンスを1対1で貪欲マッチングする.
+    """伝播インスタンスと新規検出インスタンスを 1 対 1 でマッチングする.
 
     Args:
         propagated: 前の区間から伝播してきたインスタンス
@@ -80,18 +82,32 @@ def match_instances(
         {detected の index: propagated の index}。
         マッチしなかった detected は含まれない（＝新規 track_id を発番する）。
 
-    貪欲の順序は IoU の降順。組全体で最適にはならないが、
-    区間境界の照合では十分で、実装も挙動も追いやすい。
+    Hungarian（線形割当）で組全体のスコアを最大化する。
+    貪欲（IoU 降順）だと、近接したインスタンスが競合する場面で
+    「先に最大のペアを確定したせいで、残りが閾値を割って繋がらない」
+    ことがあり、トラックが不必要に分断される。
+
+    NOTE: Hungarian は必ず最大マッチングを作るので、
+    **割り当てた後に閾値未満を落とす**。これで「マッチしない」を表す。
     """
-    return greedy_match(
-        detected,
-        propagated,
-        iou_threshold=iou_threshold,
-        iou_fn=lambda a, b: instance_iou(a, b, iou_method),
-        compatible=lambda a, b: labels_compatible(
-            a, b, label_match, label_to_category_group
-        ),
-    )
+    if not propagated or not detected:
+        return {}
+
+    from scipy.optimize import linear_sum_assignment
+
+    # ラベル条件を満たさないペアは 0 にして、割り当て候補から実質外す
+    score = np.zeros((len(detected), len(propagated)))
+    for i, a in enumerate(detected):
+        for j, b in enumerate(propagated):
+            if labels_compatible(a, b, label_match, label_to_category_group):
+                score[i, j] = instance_iou(a, b, iou_method)
+
+    rows, cols = linear_sum_assignment(-score)
+    return {
+        int(i): int(j)
+        for i, j in zip(rows, cols)
+        if score[i, j] >= iou_threshold
+    }
 
 
 def assign_track_ids(

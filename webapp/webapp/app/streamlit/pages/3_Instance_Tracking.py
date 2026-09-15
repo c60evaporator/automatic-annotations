@@ -411,17 +411,20 @@ display_interval = (
 interval_sample_indices = get_skipped_sample_indices(len(samples), display_interval)
 
 # 比較表示で何を左右に並べるかは run の方式で決まる。
-#   continuous_id             … 区間境界のみ prompt(右) / propagated(左)
-#   forward_backward_matching … 全キーフレームで forward(右) / backward(左)
+#   continuous_id             … 区間境界のみ propagated(左) / prompt(右)
+#   forward_backward_matching … 全キーフレームで forward(左) / backward(右)
+#
+# compare_origins は (左に出す origin, 右に出す origin) の順。
+# 時間方向と同じ並び（前向き＝左）にすると読み取りやすい
 is_fb_run = bool(
     view_run_info
     and view_run_info.get("track_id_inheritance") == TRACK_ID_INHERITANCE_FB
 )
 compare_origins = (
-    (ORIGIN_BACKWARD, ORIGIN_FORWARD) if is_fb_run
+    (ORIGIN_FORWARD, ORIGIN_BACKWARD) if is_fb_run
     else (ORIGIN_PROPAGATED, ORIGIN_PROMPT)
 )
-compare_labels = ("Backward", "Forward") if is_fb_run else ("Propagated", "Prompt")
+compare_labels = ("Forward", "Backward") if is_fb_run else ("Propagated", "Prompt")
 
 # 比較表示のときは interval 対象の sample しか選べない。
 # それ以外の sample には伝播結果しか無く、左右に並べる意味がないため

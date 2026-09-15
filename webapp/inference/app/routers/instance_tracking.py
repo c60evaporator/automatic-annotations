@@ -504,31 +504,53 @@ def _run_forward_backward(
             # （最終区間だけは自分で持つ）
             is_last_segment = seg_index == len(segment_data) - 1
 
-            for direction, per_frame, origin, anchor in (
+            directions = (
                 ("forward", data["forward"], ORIGIN_FORWARD, seg_index),
                 ("backward", data["backward"], ORIGIN_BACKWARD, seg_index + 1),
-            ):
-                for frame_index, (frame, instances) in enumerate(
-                    zip(seg_frames, per_frame)
-                ):
-                    if not frame.is_key_frame:
-                        # sweep は伝播にのみ使い、結果は残さない
-                        continue
-                    if frame_index == last and not is_last_segment:
-                        # 境界フレームは次の区間が担当する
-                        continue
-                    # プロンプトフレームに近い方向を採用する
-                    selected = select_direction(frame_index, 0, last) == direction
-                    resolved = []
-                    for inst in instances:
+            )
+
+            for frame_index, frame in enumerate(seg_frames):
+                if not frame.is_key_frame:
+                    # sweep は伝播にのみ使い、結果は残さない
+                    continue
+                if frame_index == last and not is_last_segment:
+                    # 境界フレームは次の区間が担当する
+                    continue
+
+                # そのフレームで、方向ごとに track_id を解決しておく
+                resolved_by_direction: dict[str, dict[str, dict[str, Any]]] = {}
+                for direction, per_frame, _origin, anchor in directions:
+                    resolved: dict[str, dict[str, Any]] = {}
+                    for inst in per_frame[frame_index]:
                         track_id = assigned.get((anchor, inst["local_id"]))
-                        if track_id is None:
-                            continue
-                        resolved.append(_to_tracked(
-                            inst, str(track_id), is_selected=selected,
-                        ))
+                        if track_id is not None:
+                            resolved[str(track_id)] = inst
+                    resolved_by_direction[direction] = resolved
+
+                # 距離で決めるのは「両方向にあるトラック」だけ。
+                # 片方向しか無いトラック（プロンプトが一方のアンカーにしか
+                # 無い場合など）は、その方向を必ず採用する。
+                # フレーム単位で決めると、そのトラックが全フレームで
+                # 表示から消える
+                preferred = select_direction(frame_index, 0, last)
+
+                for direction, per_frame, origin, _anchor in directions:
+                    resolved = resolved_by_direction[direction]
                     if not resolved:
                         continue
+                    other = "backward" if direction == "forward" else "forward"
+                    counterpart = resolved_by_direction[other]
+
+                    instances = [
+                        _to_tracked(
+                            inst, track_id,
+                            is_selected=(
+                                direction == preferred
+                                if track_id in counterpart else True
+                            ),
+                        )
+                        for track_id, inst in resolved.items()
+                    ]
 
                     result = TrackingFrameResult(
                         origin=origin,
@@ -537,7 +559,7 @@ def _run_forward_backward(
                         sample_idx=frame.sample_idx,
                         channel=frame.channel,
                         is_key_frame=True,
-                        instances=resolved,
+                        instances=instances,
                         inference_time=round(data["elapsed"], 3),
                         error=data["error"],
                     )
