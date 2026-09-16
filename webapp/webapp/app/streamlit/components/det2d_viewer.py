@@ -67,13 +67,18 @@ BOX_TEXT_MARGIN = 2
 
 # 画像に重ねる文字の種類
 TEXT_MODE_NONE = "None"
+# GroundingDINO が付けたラベル（SigLIP2 の再判定前）
+TEXT_MODE_DETECTION_LABEL = "Detection Label"
+# 再判定後に最終的に割り当てたラベル
 TEXT_MODE_LABEL = "Label"
 # GroundingDINO が実際に返した語。label は畳み込み後なので、
 # 「van と car のどちらで拾われたか」はこちらでしか分からない
 TEXT_MODE_SUBLABEL = "SubLabel"
 TEXT_MODE_SCORE = "Score"
+# 表示順は「検出 → プロンプト語 → 最終」の流れに合わせる
 TEXT_MODES = (
-    TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_SUBLABEL, TEXT_MODE_SCORE,
+    TEXT_MODE_NONE, TEXT_MODE_DETECTION_LABEL, TEXT_MODE_SUBLABEL,
+    TEXT_MODE_LABEL, TEXT_MODE_SCORE,
 )
 
 
@@ -155,12 +160,25 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
+# 論理削除されたボックスに Label モードで出す文字
+DELETED_TEXT = "deleted"
+
+
 def box_text(box: dict[str, Any], text_mode: str) -> str:
-    """ボックスに重ねる文字を作る."""
+    """ボックスに重ねる文字を作る.
+
+    Label モードでは、SigLIP2 の再判定で落ちたボックスに
+    最終ラベルが無いので "deleted" と出す。
+    """
+    if text_mode == TEXT_MODE_DETECTION_LABEL:
+        # 古い run には detection_label が無いので label へ落とす
+        return str(box.get("detection_label") or box.get("label", ""))
     if text_mode == TEXT_MODE_SUBLABEL:
         # 古い run には sublabel が無いので label へ落とす
         return str(box.get("sublabel") or box.get("label", ""))
     if text_mode == TEXT_MODE_LABEL:
+        if box.get("is_deleted"):
+            return DELETED_TEXT
         return str(box.get("label", ""))
     if text_mode == TEXT_MODE_SCORE:
         score = box.get("score")
@@ -474,7 +492,6 @@ def render_camera_grid(
     columns: int = 2,
     min_score: float = 0.0,
     enabled_labels: set[str] | None = None,
-    show_boxes: bool = True,
     text_mode: str = TEXT_MODE_NONE,
 ) -> None:
     """カメラ画像をグリッド表示する.
@@ -489,7 +506,7 @@ def render_camera_grid(
             _render_one(
                 item, item.get("boxes"), item["channel"],
                 min_score=min_score, enabled_labels=enabled_labels,
-                show_boxes=show_boxes, text_mode=text_mode,
+                text_mode=text_mode,
                 pending=item.get("pending", False),
             )
 
@@ -499,7 +516,6 @@ def render_camera_comparison_grid(
     *,
     min_score: float = 0.0,
     enabled_labels: set[str] | None = None,
-    show_boxes: bool = True,
     text_mode: str = TEXT_MODE_NONE,
     left_label: str = "GT",
     right_label: str = "Pred",
@@ -517,13 +533,13 @@ def render_camera_comparison_grid(
                 item, item.get("gt_boxes"), f"{item['channel']} [{left_label}]",
                 min_score=0.0,  # GT にスコアは無いので閾値を適用しない
                 enabled_labels=enabled_labels,
-                show_boxes=show_boxes, text_mode=text_mode, pending=False,
+                text_mode=text_mode, pending=False,
             )
         with right_col:
             _render_one(
                 item, item.get("boxes"), f"{item['channel']} [{right_label}]",
                 min_score=min_score, enabled_labels=enabled_labels,
-                show_boxes=show_boxes, text_mode=text_mode,
+                text_mode=text_mode,
                 pending=item.get("pending", False),
             )
 
@@ -535,24 +551,24 @@ def _render_one(
     *,
     min_score: float,
     enabled_labels: set[str] | None,
-    show_boxes: bool,
     text_mode: str,
     pending: bool,
 ) -> None:
-    """画像1枚を描画する（グリッド共通の処理）."""
+    """画像1枚を描画する（グリッド共通の処理）.
+
+    ボックスは常に描く。表示の絞り込みは Min score・凡例・
+    Show deleted（読み込み時に除外）で行う
+    """
     image = item.get("image")
     if image is None:
         st.warning(f"{item['channel']}: 画像が見つかりません")
         return
 
-    if show_boxes:
-        shown = filter_boxes(
-            boxes or [], min_score=min_score, enabled_labels=enabled_labels
-        )
-        caption += "（推論待ち）" if pending else f"  {len(shown)} boxes"
-        if shown:
-            image = draw_boxes(image, shown, text_mode=text_mode)
-    elif pending:
-        caption += "（推論待ち）"
+    shown = filter_boxes(
+        boxes or [], min_score=min_score, enabled_labels=enabled_labels
+    )
+    caption += "（推論待ち）" if pending else f"  {len(shown)} boxes"
+    if shown:
+        image = draw_boxes(image, shown, text_mode=text_mode)
 
     st.image(image, caption=caption, width="stretch")

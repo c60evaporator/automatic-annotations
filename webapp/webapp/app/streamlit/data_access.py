@@ -255,9 +255,11 @@ def list_detection_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any
 
 
 @st.cache_data(ttl=CACHE_TTL_SEC, show_spinner="検出結果を読み込み中...")
-def load_detection_run_boxes(params_id: str) -> dict[str, list[dict[str, Any]]]:
+def load_detection_run_boxes(
+    params_id: str, include_deleted: bool = False
+) -> dict[str, list[dict[str, Any]]]:
     """run の検出結果を {sample_data_token: [box, ...]} で返す."""
-    return _load_run_boxes(params_id)
+    return _load_run_boxes(params_id, include_deleted=include_deleted)
 
 
 # ── Instance Tracking run ────────────────────────────────────────────────────

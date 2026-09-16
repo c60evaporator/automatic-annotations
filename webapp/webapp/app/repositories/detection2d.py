@@ -130,6 +130,8 @@ class Detection2DRepository:
                     "xmax": int(box["xmax"]), "ymax": int(box["ymax"]),
                     "label": box["label"],
                     "sublabel": box.get("sublabel"),
+                    "detection_label": box.get("detection_label") or box["label"],
+                    "is_deleted": bool(box.get("is_deleted", False)),
                     "score": box.get("score"),
                     "manually_modified": bool(box.get("manually_modified", False)),
                 })
@@ -250,22 +252,34 @@ class Detection2DRepository:
     # ── 結果の参照 ────────────────────────────────────────────────────────
 
     def list_boxes_by_run(
-        self, params_id: str, *, manual_only: bool = False
+        self,
+        params_id: str,
+        *,
+        manual_only: bool = False,
+        include_deleted: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
         """run の検出結果を {sample_data_token: [box, ...]} で返す.
 
         Args:
             manual_only: True なら手修正されたボックスだけ返す
                 （再実行時の引き継ぎに使う）
+            include_deleted: SigLIP2 の再判定で論理削除されたボックスも含めるか。
+                **既定では除外する。** Instance Tracking 以降は
+                削除されたボックスを使わないため、既定を安全側に寄せている。
+                表示で「削除されたものも見る」ときだけ True にする
         """
         stmt = select(
             Detection2D.id,
             Detection2D.sample_data_token,
             Detection2D.xmin, Detection2D.ymin,
             Detection2D.xmax, Detection2D.ymax,
-            Detection2D.label, Detection2D.sublabel, Detection2D.score,
+            Detection2D.label, Detection2D.sublabel,
+            Detection2D.detection_label, Detection2D.is_deleted,
+            Detection2D.score,
             Detection2D.manually_modified,
         ).where(Detection2D.detection_2d_params_id == params_id)
+        if not include_deleted:
+            stmt = stmt.where(Detection2D.is_deleted.is_(False))
         if manual_only:
             stmt = stmt.where(Detection2D.manually_modified.is_(True))
 
@@ -276,6 +290,8 @@ class Detection2DRepository:
                 "xmin": r["xmin"], "ymin": r["ymin"],
                 "xmax": r["xmax"], "ymax": r["ymax"],
                 "label": r["label"], "sublabel": r["sublabel"],
+                "detection_label": r["detection_label"],
+                "is_deleted": r["is_deleted"],
                 "score": r["score"],
                 "manually_modified": r["manually_modified"],
             })

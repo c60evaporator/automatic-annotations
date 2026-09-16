@@ -62,6 +62,16 @@ def register_model_loaders() -> None:
             device=settings.device,
         )
 
+    def load_siglip2():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.siglip2_stub import Siglip2ClassifierStub
+            return Siglip2ClassifierStub()
+
+        from app.models_impl.siglip2_classifier import Siglip2Classifier
+        return Siglip2Classifier(
+            model_name=settings.SIGLIP2_MODEL, device=settings.device
+        )
+
     def load_depth_anything():
         if settings.USE_STUB_MODELS:
             from app.models_impl.boxfitting_stub import BoxFittingStub
@@ -74,6 +84,7 @@ def register_model_loaders() -> None:
 
     model_registry.register_loader("grounding_dino", load_grounding_dino)
     model_registry.register_loader("sam2", load_sam2)
+    model_registry.register_loader("siglip2", load_siglip2)
     model_registry.register_loader("depth_anything", load_depth_anything)
 
 

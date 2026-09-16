@@ -136,6 +136,39 @@ class Settings(BaseSettings):
         "pedestrian": 0.8,
     }
 
+    # SigLIP2 によるラベル再判定。
+    # GroundingDINO はプロンプト由来の取り違えが多いため、
+    # ボックス周辺を切り出して zero-shot 分類で確認する。
+    #   key   … Detection2D が付けたラベル（再判定の対象）
+    #   value … {zero-shot のラベル候補: 最終的に割り当てるラベル}
+    #           None は「このボックスを使わない」（論理削除）
+    # ここに無いラベルは再判定しない
+    RE_CLASSIFICATION_CANDIDATES: dict[str, dict[str, str | None]] = {
+        "barrier": {"barrier": "barrier",
+                    "fence": None,
+                    "sidewalk": None,
+                    "sign": None},
+        "car": {"car": "car",
+                "window reflection": None,
+                "painting": None},
+        "construction_vehicle": {"construction vehicle": "construction_vehicle",
+                                 "truck": "truck"},
+        "bus": {"bus": "bus",
+                "truck": "truck",
+                "building": None},
+        "motorcycle": {"motorcycle": "motorcycle",
+                       "painting": None},
+        "pedestrian": {"pedestrian": "pedestrian",
+                       "painting": None,
+                       "rider": None},
+        "traffic_cone": {"traffic cone": "traffic_cone",
+                         "road marking": None},
+    }
+    # 切り出し時にボックスを広げる比率。
+    # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
+    DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.1
+    RECLASSIFICATION_CROP_MARGIN_RATIO_MAX: float = 1.0
+
     # --- 2D Object Detection ---------------------------------------------
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
@@ -169,7 +202,7 @@ class Settings(BaseSettings):
     DEFAULT_TRACKING_NUM_SWEEPS: int = 2
     DEFAULT_TRACKING_IOU_THRESHOLD: float = 0.4
     DEFAULT_TRACKING_IOU_METHOD: str = "box"
-    DEFAULT_TRACKING_IOU_LABEL_MATCH: str = "label"
+    DEFAULT_TRACKING_IOU_LABEL_MATCH: str = "category_group"
     DEFAULT_TRACKING_MASK_SCORE_THRESHOLD: float = 0.5
     # track_id の引き継ぎ方式。
     #   continuous_id            … Forward のみ。区間境界で次のプロンプトと照合

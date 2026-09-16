@@ -204,7 +204,18 @@ class Detection2D(Base):
     ymin:  Mapped[int] = mapped_column(Integer, nullable=False)
     xmax:  Mapped[int] = mapped_column(Integer, nullable=False)
     ymax:  Mapped[int] = mapped_column(Integer, nullable=False)
+    # 最終的に採用するラベル。SigLIP2 の再判定を通した後の値。
+    # 再判定で削除された場合は detection_label と同じ値を残し、
+    # is_deleted で区別する（NULL にすると後段のクエリが扱いづらい）
     label: Mapped[str] = mapped_column(String, nullable=False)
+    # GroundingDINO が付けたラベル（再判定前）。
+    # 再判定の効き具合を UI で見比べるために残す
+    detection_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    # SigLIP2 の再判定で「使わない」と判定されたか（論理削除）。
+    # 表示のために行は残し、Instance Tracking 以降では除外する
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
     # GroundingDINO が実際に返した語（プロンプトに使ったサブラベル）。
     # label は sublabel を畳み込んだ結果で、後段はこちらを使わない。
     # 「van と car のどちらで拾われたか」を UI で確認するために残す

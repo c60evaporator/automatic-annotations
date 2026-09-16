@@ -61,6 +61,13 @@ class Detection2DRequest(BaseModel):
     # サブラベル -> ラベルの逆引き。ラベル体系は webapp 側の設定なので、
     # 解決済みのものを受け取る。未知の語はそのままラベルとして扱う
     sublabel_to_label: dict[str, str] = Field(default_factory=dict)
+    # SigLIP2 による再判定。{検出ラベル: {分類候補: 最終ラベル or None}}。
+    # 空なら再判定しない（従来どおりの挙動）
+    re_classification_candidates: dict[str, dict[str, str | None]] = Field(
+        default_factory=dict
+    )
+    # 切り出し時にボックスを広げる比率
+    reclassification_crop_margin_ratio: float = 0.1
 
     # スタブ用: 1推論あたりの待ち時間（秒）。本実装では無視される
     stub_delay_sec: float | None = None
@@ -75,6 +82,12 @@ class BBox2D(BaseModel):
     label: str
     # モデルが実際に返した語。UI での確認用に残す
     sublabel: str | None = None
+    # GroundingDINO が付けたラベル（再判定前）
+    detection_label: str | None = None
+    # SigLIP2 が返した候補ラベル（デバッグ・確認用）
+    reclassified_as: str | None = None
+    # 再判定で「使わない」と判定されたか（論理削除）
+    is_deleted: bool = False
     score: float
     # どのグループの推論で得られたか（デバッグ・色分け用）
     group: str | None = None
@@ -98,6 +111,9 @@ class Detection2DResult(BaseModel):
     """ジョブ完了時に返る結果."""
     num_frames: int
     num_boxes: int
+    # SigLIP2 で再判定したボックス数と、そのうち論理削除された数
+    num_reclassified: int = 0
+    num_deleted: int = 0
     inference_time: float
     frames: list[Detection2DFrameResult]
 

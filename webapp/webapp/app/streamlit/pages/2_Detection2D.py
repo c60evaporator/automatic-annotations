@@ -93,6 +93,14 @@ if config_problems:
 # job_id はシーンに紐づくので、シーンを変えたら state 側でクリアされる
 JOB_ID = S.DET2D_JOB_ID
 RESULTS = S.DET2D_RESULTS
+
+# SigLIP2 の再判定で論理削除されたボックスを表示するか。
+# **結果の読み込み条件に使うので、ウィジェットより前に解決する**
+OPT_SHOW_DELETED, W_SHOW_DELETED = "det2d_show_deleted", "_w_det2d_show_deleted"
+show_deleted = S.sticky_value(OPT_SHOW_DELETED, False)
+# 表示中の結果が「どの設定で読まれたか」を覚えておく。
+# 論理削除の除外は SQL 側で行うため、切り替えたら読み直す必要がある
+RESULTS_SHOW_DELETED = "det2d_results_show_deleted"
 PARTIAL_SINCE = S.DET2D_PARTIAL_SINCE
 SAVED_JOB_ID = S.DET2D_SAVED_JOB_ID
 VIEW_RUN_ID = S.DET2D_VIEW_RUN_ID
@@ -105,11 +113,22 @@ st.session_state.setdefault(PARTIAL_SINCE, 0)
 if RESULTS not in st.session_state:
     run_id, reason = resolve_display_run(dataset_id, scene_token)
     if run_id:
-        st.session_state[RESULTS] = load_detection_run_boxes(run_id)
+        st.session_state[RESULTS] = load_detection_run_boxes(run_id, show_deleted)
         st.session_state[VIEW_RUN_ID] = run_id
     else:
         st.session_state[RESULTS] = {}
         st.session_state[VIEW_RUN_ID] = None
+    st.session_state[RESULTS_SHOW_DELETED] = show_deleted
+
+elif st.session_state.get(RESULTS_SHOW_DELETED) != show_deleted:
+    # Show deleted を切り替えた。保持している結果は除外済みなので、
+    # 表示中の run から読み直す（推論直後の未保存結果には効かない）
+    view_run_id = st.session_state.get(VIEW_RUN_ID)
+    if view_run_id:
+        st.session_state[RESULTS] = load_detection_run_boxes(
+            view_run_id, show_deleted
+        )
+    st.session_state[RESULTS_SHOW_DELETED] = show_deleted
 
 
 param_col, map_col = st.columns([2, 1])
@@ -165,6 +184,20 @@ with param_col:
             with cross_nms_col:
                 st.text(f"Cross-class NMS IOU: {nms_cross:.3f}")
 
+        st.markdown("**Re-Classification**")
+        reclassify_margin = st.slider(
+            "Re-Classification Crop Margin", 0.0,
+            settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX,
+            value=settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO, step=0.05,
+            help=("SigLIP2 の再判定で切り出す範囲を、ボックスの幅・高さに対して"
+                  "どれだけ広げるか。周囲が写らないと zero-shot 分類が当たらない"),
+        )
+        st.caption(
+            "対象ラベル: "
+            + ", ".join(settings.RE_CLASSIFICATION_CANDIDATES)
+            + "（config の RE_CLASSIFICATION_CANDIDATES で指定）"
+        )
+
 # ------------------------------------------------------------------
 # Run / progress
 # ------------------------------------------------------------------
@@ -211,6 +244,12 @@ def _build_payload() -> dict:
         "nms_cross_class_iou": nms_cross,
         # サブラベル -> ラベルの逆引き（ラベル体系は webapp 側の設定）
         "sublabel_to_label": sublabel_to_label(),
+        # SigLIP2 によるラベル再判定（設定のスナップショット）
+        "re_classification_candidates": {
+            label: dict(mapping)
+            for label, mapping in settings.RE_CLASSIFICATION_CANDIDATES.items()
+        },
+        "reclassification_crop_margin_ratio": float(reclassify_margin),
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
     }
 
@@ -249,7 +288,8 @@ def _save_completed_job(job: dict) -> None:
     # 保存した run を「表示中の run」にし、手修正の反映結果を読み直す
     st.session_state[VIEW_RUN_ID] = params_id
     clear_caches()
-    st.session_state[RESULTS] = load_detection_run_boxes(params_id)
+    st.session_state[RESULTS] = load_detection_run_boxes(params_id, show_deleted)
+    st.session_state[RESULTS_SHOW_DELETED] = show_deleted
 
 
 with param_col:
@@ -361,7 +401,10 @@ with param_col:
                 if st.button("この run を表示", width="content",
                              disabled=selected_run == current):
                     st.session_state[VIEW_RUN_ID] = selected_run
-                    st.session_state[RESULTS] = load_detection_run_boxes(selected_run)
+                    st.session_state[RESULTS] = load_detection_run_boxes(
+                        selected_run, show_deleted
+                    )
+                    st.session_state[RESULTS_SHOW_DELETED] = show_deleted
                     st.rerun()
             with delete_col:
                 target = next(r for r in runs if r["id"] == selected_run)
@@ -419,13 +462,13 @@ results = st.session_state[RESULTS]
 # 表示オプションは正規キーに保存しておく。
 # 「Run Inference」で st.rerun() が走ると、その下のウィジェットは
 # その実行で生成されず、Streamlit に状態を破棄されてしまうため
-OPT_SHOW_BOXES, W_SHOW_BOXES = "det2d_show_boxes", "_w_det2d_show_boxes"
-OPT_SHOW_GT,    W_SHOW_GT    = "det2d_show_gt",    "_w_det2d_show_gt"
+OPT_SHOW_GT, W_SHOW_GT = "det2d_show_gt", "_w_det2d_show_gt"
 OPT_MIN_SCORE,  W_MIN_SCORE  = "det2d_min_score",  "_w_det2d_min_score"
 OPT_TEXT_MODE,  W_TEXT_MODE  = "det2d_text_mode",  "_w_det2d_text_mode"
 
 # GT との並列表示。チェックすると 1 カメラ 1 行で左右に並べる
 show_gt = S.sticky_value(OPT_SHOW_GT, False)
+
 
 items = []
 for sensor in cam_sensors:
@@ -447,16 +490,18 @@ for sensor in cam_sensors:
     items.append(item)
 
 with opt_col:
-    S.init_sticky(W_SHOW_BOXES, OPT_SHOW_BOXES, True)
-    show_boxes = st.checkbox(
-        "Show boxes", key=W_SHOW_BOXES,
-        on_change=S.sync_sticky, args=(W_SHOW_BOXES, OPT_SHOW_BOXES),
-    )
     S.init_sticky(W_SHOW_GT, OPT_SHOW_GT, False)
     st.checkbox(
         "Compare with GT", key=W_SHOW_GT,
         on_change=S.sync_sticky, args=(W_SHOW_GT, OPT_SHOW_GT),
         help="1カメラ1行で、左に Ground truth・右に推論結果を並べる",
+    )
+    S.init_sticky(W_SHOW_DELETED, OPT_SHOW_DELETED, False)
+    st.checkbox(
+        "Show deleted", key=W_SHOW_DELETED,
+        on_change=S.sync_sticky, args=(W_SHOW_DELETED, OPT_SHOW_DELETED),
+        help=("SigLIP2 のラベル再判定で削除されたボックスも表示する。"
+              "Box text が Label のときは \"deleted\" と表示される"),
     )
     S.init_sticky(W_MIN_SCORE, OPT_MIN_SCORE, 0.0)
     min_score = st.slider(
@@ -498,7 +543,6 @@ with view_col:
             items,
             min_score=min_score,
             enabled_labels=enabled_labels,
-            show_boxes=show_boxes,
             text_mode=text_mode,
         )
     else:
@@ -507,7 +551,6 @@ with view_col:
             columns=2,
             min_score=min_score,
             enabled_labels=enabled_labels,
-            show_boxes=show_boxes,
             text_mode=text_mode,
         )
 

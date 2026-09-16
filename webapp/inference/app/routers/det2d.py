@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -39,6 +40,8 @@ from app.schemas.det2d import (
     Detection2DRequest,
     JobResponse,
 )
+from PIL import Image
+
 from app.services.postprocess import cross_class_nms
 
 logger = get_logger(__name__)
@@ -59,13 +62,21 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
     sample_indices = sorted(by_sample)
 
     groups = req.label_groups
-    total_inferences = sum(len(by_sample[i]) for i in sample_indices) * max(1, len(groups))
+    num_frames_total = sum(len(by_sample[i]) for i in sample_indices)
+    total_inferences = num_frames_total * max(1, len(groups))
+    # 再判定は検出が全フレーム終わったあとに、別フェーズとして走らせる。
+    # MAX_RESIDENT_MODELS=1 なので GroundingDINO と SigLIP2 は同時に載せられない
+    reclassify_enabled = bool(req.re_classification_candidates)
+    if reclassify_enabled:
+        total_inferences += num_frames_total
     job.set_progress(0, total_inferences, "モデルを準備中...")
 
     done = 0
     total_time = 0.0
     num_boxes = 0
     all_frames: list[Detection2DFrameResult] = []
+    # (画像パス, フレーム結果) の控え。再判定フェーズで使う
+    pending_reclassify: list[tuple[Any, Detection2DFrameResult]] = []
 
     with model_registry.use_gpu("grounding_dino") as detector:
         for sample_idx in sample_indices:
@@ -136,12 +147,53 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                 )
                 num_boxes += len(kept)
                 all_frames.append(result)
-                # カメラ1枚終わるごとに UI へ流す
+                if reclassify_enabled:
+                    # 再判定フェーズで画像を開き直すため、パスを覚えておく
+                    pending_reclassify.append((path, result))
+                else:
+                    # 再判定しない場合はここで UI へ流す
+                    job.append_partial(result.model_dump())
+
+    # --- 再判定フェーズ -------------------------------------------------
+    # GroundingDINO を解放してから SigLIP2 を載せる（VRAM の都合）
+    num_reclassified = 0
+    num_deleted = 0
+    if reclassify_enabled and not job.cancel_requested():
+        from app.services.reclassify import reclassify_boxes
+
+        with model_registry.use_gpu("siglip2") as classifier:
+            for path, result in pending_reclassify:
+                if job.cancel_requested():
+                    break
+                started = time.perf_counter()
+                try:
+                    with Image.open(path) as opened:
+                        image = opened.convert("RGB")
+                    boxes = [b.model_dump() for b in result.boxes]
+                    num_reclassified += reclassify_boxes(
+                        classifier, image, boxes,
+                        req.re_classification_candidates,
+                        margin_ratio=req.reclassification_crop_margin_ratio,
+                    )
+                    result.boxes = [BBox2D(**b) for b in boxes]
+                    num_deleted += sum(1 for b in boxes if b.get("is_deleted"))
+                except Exception as exc:  # noqa: BLE001
+                    # 1 フレームの失敗で全体を止めない。元のラベルが残る
+                    logger.warning("re-classification failed for %s: %s", path, exc)
+                    result.error = result.error or f"{type(exc).__name__}: {exc}"
+                finally:
+                    elapsed = time.perf_counter() - started
+                    total_time += elapsed
+                    done += 1
+                    job.set_progress(done, message="ラベル再判定")
+                # 再判定まで終わったフレームを UI へ流す
                 job.append_partial(result.model_dump())
 
     return {
         "num_frames": len(all_frames),
         "num_boxes": num_boxes,
+        "num_reclassified": num_reclassified,
+        "num_deleted": num_deleted,
         "inference_time": round(total_time, 3),
         "frames": [f.model_dump() for f in all_frames],
     }

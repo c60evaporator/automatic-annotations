@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     SAM2_CONFIG_PATH: str = "configs/sam2.1/sam2.1_hiera_l.yaml"
     SAM2_CHECKPOINT_PATH: Path = Path("/opt/checkpoints/sam2.1_hiera_large.pt")
 
+    # --- SigLIP2（ラベル再判定）--------------------------------------------
+    # transformers 実装を使うので Dockerfile の変更は不要。
+    # 初回実行時に HuggingFace からのダウンロードが走る（数 GB）
+    SIGLIP2_MODEL: str = "google/siglip2-so400m-patch16-naflex"
+
     # --- Depth-Anything-3（公式リポジトリ版）-------------------------------
     # 重みは HuggingFace から自動ダウンロードされる（手動配置は不要）。
     # compose が ~/.cache/huggingface をマウントしてホストと共有する

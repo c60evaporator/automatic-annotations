@@ -119,9 +119,19 @@ def resolve_display_run(dataset_id: str, scene_token: str) -> tuple[str | None, 
         )
 
 
-def load_run_boxes(params_id: str) -> dict[str, list[dict[str, Any]]]:
+def load_run_boxes(
+    params_id: str, *, include_deleted: bool = False
+) -> dict[str, list[dict[str, Any]]]:
+    """run の検出結果を読む.
+
+    Args:
+        include_deleted: SigLIP2 の再判定で論理削除されたボックスも含めるか。
+            表示で「削除分も見る」ときだけ True にする
+    """
     with read_only_session() as session:
-        return Detection2DRepository(session).list_boxes_by_run(params_id)
+        return Detection2DRepository(session).list_boxes_by_run(
+            params_id, include_deleted=include_deleted
+        )
 
 
 def list_runs(dataset_id: str, scene_token: str) -> list[dict[str, Any]]:
