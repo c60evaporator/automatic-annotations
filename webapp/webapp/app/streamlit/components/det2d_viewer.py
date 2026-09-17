@@ -69,6 +69,8 @@ BOX_TEXT_MARGIN = 2
 TEXT_MODE_NONE = "None"
 # GroundingDINO が付けたラベル（SigLIP2 の再判定前）
 TEXT_MODE_DETECTION_LABEL = "Detection Label"
+# SigLIP2 が返した候補ラベル（対応表を通す前の値）
+TEXT_MODE_RECLASSIFIED = "Re-Classification"
 # 再判定後に最終的に割り当てたラベル
 TEXT_MODE_LABEL = "Label"
 # GroundingDINO が実際に返した語。label は畳み込み後なので、
@@ -78,7 +80,7 @@ TEXT_MODE_SCORE = "Score"
 # 表示順は「検出 → プロンプト語 → 最終」の流れに合わせる
 TEXT_MODES = (
     TEXT_MODE_NONE, TEXT_MODE_DETECTION_LABEL, TEXT_MODE_SUBLABEL,
-    TEXT_MODE_LABEL, TEXT_MODE_SCORE,
+    TEXT_MODE_RECLASSIFIED, TEXT_MODE_LABEL, TEXT_MODE_SCORE,
 )
 
 
@@ -176,6 +178,10 @@ def box_text(box: dict[str, Any], text_mode: str) -> str:
     if text_mode == TEXT_MODE_SUBLABEL:
         # 古い run には sublabel が無いので label へ落とす
         return str(box.get("sublabel") or box.get("label", ""))
+    if text_mode == TEXT_MODE_RECLASSIFIED:
+        # 再判定の対象外だったボックスは空（何も表示しない）。
+        # 元ラベルへ落とすと「再判定された」ように見えてしまう
+        return str(box.get("reclassified_as") or "")
     if text_mode == TEXT_MODE_LABEL:
         if box.get("is_deleted"):
             return DELETED_TEXT

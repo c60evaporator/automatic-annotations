@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     }
     # 切り出し時にボックスを広げる比率。
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
-    DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.1
+    DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.2
     RECLASSIFICATION_CROP_MARGIN_RATIO_MAX: float = 1.0
 
     # --- 2D Object Detection ---------------------------------------------
