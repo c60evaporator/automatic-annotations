@@ -503,3 +503,179 @@ def dominant_sensor_origin(
     )
     origin = instances[best].get("sensor_origin_xy") or (0.0, 0.0)
     return (float(origin[0]), float(origin[1]))
+
+
+# ── パス 2 のオーケストレーション ────────────────────────────────────────
+
+def _channel_of(entry: dict[str, Any]) -> str:
+    """entry からカメラ名を取り出す.
+
+    パイプラインの戻り値には channel が含まれないため、呼び出し側が
+    ``_channel`` として付ける。どちらでも読めるようにしておく。
+    """
+    return entry.get("channel") or entry.get("_channel") or ""
+
+
+def track_key(channel: str, track_id: Any) -> str:
+    """トラックの一意キー。track_id はカメラ内でのみ一意なので channel を含める."""
+    return f"{channel}:{track_id}"
+
+
+def _as_xyz(hull_xy: np.ndarray) -> np.ndarray:
+    """凸包の頂点を (N, 3) にする（重なり判定は XY しか見ない）."""
+    hull_xy = np.asarray(hull_xy, dtype=np.float64)
+    return np.column_stack([hull_xy, np.zeros(len(hull_xy))])
+
+
+def merge_and_fit(
+    entries_by_sample: dict[str, list[dict[str, Any]]],
+    *,
+    merge_params: dict[str, Any],
+    box_fitting_params: dict[str, Any],
+    label_to_category_group: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """カメラ跨ぎで結合し、グループごとに 3D ボックスを当てはめる.
+
+    Args:
+        entries_by_sample: ``{sample_token: [entry, ...]}``。
+            entry は ``channel`` / ``track_id`` / ``label`` / ``score`` /
+            ``_summary`` を持つ（パイプラインが fit_boxes=False で返したもの）
+        merge_params: ``overlap_threshold`` / ``max_centroid_distance`` /
+            ``min_match_frames`` / ``label_match``
+
+    Returns:
+        ``{"num_groups", "num_merged"}``。entry は **その場で書き換える**
+        （``global_track_id`` / ``label`` / ``status`` / ボックスの各値）。
+
+    ## 流れ
+
+    1. sample ごとにカメラ対で照合（BEV 凸包の IoS）
+    2. トラック単位で集計し、global_track_id を割り当てる
+    3. グローバルトラック全体でラベルを多数決
+    4. sample ごとに、グループの要約を結合して当てはめる
+       （ボックスは代表 1 行にだけ入れ、他は status="merged"）
+    """
+    from app.services.box_fitting import fit_box
+
+    overlap_threshold = float(merge_params.get("overlap_threshold", 0.3))
+    max_distance = float(merge_params.get("max_centroid_distance", 3.0))
+    min_frames = int(merge_params.get("min_match_frames", 1))
+    label_match = merge_params.get("label_match", LABEL_MATCH_CATEGORY_GROUP)
+
+    # --- 1) sample ごとの照合 ---------------------------------------------
+    # 判定は各トラックの多数決ラベルで行うので、先にラベルを集める
+    labels_by_track: dict[str, list[tuple[str, float]]] = {}
+    for entries in entries_by_sample.values():
+        for entry in entries:
+            if entry.get("_summary") is None:
+                continue
+            key = track_key(_channel_of(entry), entry["track_id"])
+            labels_by_track.setdefault(key, []).append(
+                (entry.get("label"), float(entry.get("score") or 0.0))
+            )
+    track_label = {
+        key: majority_label([l for l, _ in items], [s for _, s in items])
+        for key, items in labels_by_track.items()
+    }
+
+    frame_matches: list[dict[tuple[str, str], float]] = []
+    for entries in entries_by_sample.values():
+        usable = [e for e in entries if e.get("_summary") is not None]
+        if len(usable) < 2:
+            continue
+        instances = [
+            {
+                "channel": _channel_of(e),
+                # 多数決ラベルで判定する（トラック内で揺れることがある）
+                "label": track_label.get(track_key(_channel_of(e), e["track_id"])),
+                "points": _as_xyz(e["_summary"]["hull_xy"]),
+            }
+            for e in usable
+        ]
+        edges = match_frame(
+            instances,
+            overlap_threshold=overlap_threshold,
+            max_centroid_distance=max_distance,
+            label_match=label_match,
+            label_to_category_group=label_to_category_group,
+        )
+        frame_matches.append({
+            (
+                track_key(_channel_of(usable[i]), usable[i]["track_id"]),
+                track_key(_channel_of(usable[j]), usable[j]["track_id"]),
+            ): value
+            for (i, j), value in edges.items()
+        })
+
+    # --- 2) トラック単位の集計 -------------------------------------------
+    tracks = [
+        {"key": key, "channel": key.rsplit(":", 1)[0]}
+        for key in sorted(labels_by_track)
+    ]
+    global_ids = assign_global_track_ids(
+        tracks, frame_matches, min_match_frames=min_frames
+    )
+
+    # --- 3) グローバルトラック単位でラベルを多数決 -----------------------
+    by_global: dict[str, list[tuple[str, float]]] = {}
+    for key, items in labels_by_track.items():
+        by_global.setdefault(global_ids.get(key, key), []).extend(items)
+    global_label = {
+        gid: majority_label([l for l, _ in items], [s for _, s in items])
+        for gid, items in by_global.items()
+    }
+
+    # --- 4) sample ごとに結合して当てはめる ------------------------------
+    num_merged = 0
+    for entries in entries_by_sample.values():
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for entry in entries:
+            summary = entry.get("_summary")
+            key = track_key(_channel_of(entry), entry["track_id"])
+            global_id = global_ids.get(key, key)
+            entry["global_track_id"] = global_id
+            # 最終ラベルはグローバルトラック全体の多数決
+            entry["label"] = global_label.get(global_id) or entry.get("label")
+            if summary is not None:
+                groups.setdefault(global_id, []).append(entry)
+
+        for global_id, members in groups.items():
+            summaries = [m["_summary"] for m in members]
+            combined = combine_summaries(summaries)
+            if len(members) > 1:
+                num_merged += len(members)
+
+            # 点数が最も多いカメラの位置を原点にする
+            origin = dominant_sensor_origin(
+                [{"points": np.empty((s["num_points"], 3)),
+                  "sensor_origin_xy": s.get("sensor_origin_xy")} for s in summaries],
+                list(range(len(summaries))),
+            )
+            fit = fit_box(
+                combined["points"],
+                box_fitting_params.get("method", "convex_hull_moa"),
+                box_fitting_params,
+                sensor_origin_xy=origin,
+                z_range=combined["z_range"],
+            )
+            # ボックスは代表 1 行だけに入れる。全行へ入れると BEV 表示で
+            # 同じ箱が重なって見える
+            primary = max(members, key=lambda m: m["_summary"]["num_points"])
+            for member in members:
+                member.pop("_summary", None)
+                if member is primary and fit is not None:
+                    member.update(fit)
+                    member["status"] = "fitted"
+                    member["is_primary"] = True
+                elif member is primary:
+                    member["status"] = "not_fitted"
+                    member["is_primary"] = True
+                else:
+                    # 代表行のボックスに含まれる（点群は自分のものを保持）
+                    member["status"] = "merged"
+                    member["is_primary"] = False
+
+    return {
+        "num_groups": len(set(global_ids.values())),
+        "num_merged": num_merged,
+    }

@@ -75,6 +75,7 @@ def build_boxfitting_payload(
     depth_params: dict[str, Any],
     lidar_params: dict[str, Any],
     box_fitting_params: dict[str, Any] | None = None,
+    merge_params: dict[str, Any] | None = None,
     stub_delay_sec: float | None = None,
 ) -> dict[str, Any]:
     """推論サーバーへ送るリクエストを組み立てる.
@@ -170,6 +171,9 @@ def build_boxfitting_payload(
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
         "reference_ego_poses": reference_ego_poses,
+        # カメラ跨ぎの結合。空なら結合しない
+        "merge_params": merge_params or {},
+        "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         # 保存する点群の上限（間引き後）。推論サーバー側で間引いて返す
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
         # 派生ファイルの出力先（推論サーバーも /derived を共有マウントしている）。
@@ -195,6 +199,7 @@ def create_pending_run(
     depth_params: dict[str, Any],
     lidar_params: dict[str, Any],
     box_fitting_params: dict[str, Any] | None = None,
+    merge_params: dict[str, Any] | None = None,
     model_name: str = "",
 ) -> str:
     """推論を投げる前に run を作成して id を返す（status='running'）.
@@ -582,6 +587,9 @@ def refilter_sample(
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
         "reference_ego_poses": reference_ego_poses,
+        # カメラ跨ぎの結合。空なら結合しない
+        "merge_params": merge_params or {},
+        "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
     })
     logger.info(

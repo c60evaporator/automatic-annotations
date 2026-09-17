@@ -714,6 +714,18 @@ class BoxFitting3D(Base):
     depth_align_scale: Mapped[float | None] = mapped_column(Float, nullable=True)
     depth_align_shift: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # カメラ跨ぎで結合した後のトラック ID。
+    # track_id はカメラ内でのみ一意なので、同一物体が複数カメラに
+    # 写ると別トラックになる。それを束ねた ID がこちら。
+    # エクスポートの Instance はこの単位で作る
+    global_track_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # グループの代表行か。結合したグループの 3D ボックスは
+    # **代表 1 行にだけ**入れる（全行に入れると BEV 表示で同じ箱が重なる）。
+    # 点群は各行が自分のカメラのものを保持する
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("1")
+    )
+
     # 推定に使った凸包（BEV の XY 平面）。{"points": [[x, y], ...]}
     # UI で「hull を重ねる」表示に使う。点群から再計算もできるが、
     # webapp 側に凸包の実装を増やさず、当時の推定過程をそのまま残す

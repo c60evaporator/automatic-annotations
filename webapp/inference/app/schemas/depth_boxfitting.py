@@ -81,6 +81,10 @@ class BoxFittingRequest(BaseModel):
     # カメラ間でずれる。カメラを跨いで点群を比べる前に、ここへ揃える。
     # 空なら変換しない（従来どおりカメラ自身の ego 座標のまま）
     reference_ego_poses: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # カメラ跨ぎの結合。空なら結合しない（カメラごとに当てはめる）
+    merge_params: dict[str, Any] = Field(default_factory=dict)
+    # merge_params の label_match='category_group' で使う
+    label_to_category_group: dict[str, str] = Field(default_factory=dict)
 
     # DB へ保存する点群の上限（間引き後）
     stored_points_max: int = 500
@@ -145,6 +149,10 @@ class BoxFittingResult(BaseModel):
     hull_xy: dict[str, Any] | None = None
     # 手法固有の指標（occlusion_area など）
     fit_metrics: dict[str, Any] | None = None
+    # カメラ跨ぎで結合した後のトラック ID
+    global_track_id: str | None = None
+    # グループの代表行か（ボックスは代表 1 行にだけ入る）
+    is_primary: bool = True
     error: str | None = None
 
 
@@ -216,6 +224,9 @@ class BoxFittingJobResult(BaseModel):
     num_depth_frames: int
     num_lidar_frames: int
     num_box_fittings: int
+    # カメラ跨ぎの結合結果
+    num_merged_groups: int = 0
+    num_merged_instances: int = 0
     num_fitted: int
     inference_time: float
     depth_estimations: list[DepthEstimationResult]

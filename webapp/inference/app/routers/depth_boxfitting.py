@@ -54,6 +54,10 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
     total = len(req.camera_frames) + len(req.lidar_frames) + len(req.instances)
     job.set_progress(0, total, "モデルを準備中...")
 
+    # カメラ跨ぎの結合を行うか。結合するときは当てはめをパス 2 へ回す
+    merge_enabled = bool(req.merge_params)
+    entries_by_sample: dict[str, list[dict[str, Any]]] = {}
+
     done = 0
     started_all = time.perf_counter()
     depth_results: list[dict[str, Any]] = []
@@ -176,6 +180,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         nb_points_ratio=req.nb_points_ratio,
                         box_fitting_params=req.box_fitting_params,
                         reference_ego_poses=req.reference_ego_poses,
+                        # 結合する場合は当てはめを後回しにする
+                        fit_boxes=not merge_enabled,
                         stub_delay_sec=req.stub_delay_sec,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -190,15 +196,49 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
             for result in results:
                 box_results.append(result)
-                job.append_partial({"kind": "box", "data": result})
+                if merge_enabled:
+                    # 結合の判定にカメラ名が必要。パイプラインの戻り値には
+                    # 含まれないので、ここで付ける（API へは出さない）
+                    result["_channel"] = frame.channel
+                    # 結合後に当てはめるので、確定してから UI へ流す
+                    entries_by_sample.setdefault(
+                        frame.sample_token, []
+                    ).append(result)
+                else:
+                    job.append_partial({"kind": "box", "data": result})
             done += len(payloads)
             job.set_progress(done, message="インスタンス点群")
+
+    # --- パス 2: カメラ跨ぎで結合してから当てはめる ----------------------
+    merge_stats: dict[str, Any] = {}
+    if merge_enabled and not job.cancel_requested():
+        from app.services.inter_cam_merge import merge_and_fit
+
+        job.set_progress(done, message="カメラ間の結合")
+        try:
+            merge_stats = merge_and_fit(
+                entries_by_sample,
+                merge_params=req.merge_params,
+                box_fitting_params=req.box_fitting_params or {},
+                label_to_category_group=req.label_to_category_group,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # 結合に失敗しても点群は残す（当てはめだけ諦める）
+            logger.exception("inter-camera merge failed")
+            merge_stats = {"error": f"{type(exc).__name__}: {exc}"}
+        for result in box_results:
+            # 内部用のキーは API へ出さない（numpy を含むうえ、表示に使わない）
+            result.pop("_summary", None)
+            result.pop("_channel", None)
+            job.append_partial({"kind": "box", "data": result})
 
     return {
         "num_depth_frames": len(depth_results),
         "num_lidar_frames": len(lidar_results),
         "num_box_fittings": len(box_results),
         "num_fitted": sum(1 for b in box_results if b.get("status") == "fitted"),
+        "num_merged_groups": merge_stats.get("num_groups", 0),
+        "num_merged_instances": merge_stats.get("num_merged", 0),
         "inference_time": round(time.perf_counter() - started_all, 3),
         "depth_estimations": depth_results,
         "lidar_pointclouds": lidar_results,

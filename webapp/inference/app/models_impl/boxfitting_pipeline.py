@@ -191,12 +191,23 @@ class BoxFittingPipeline:
         nb_points_ratio: dict[str, float] | None = None,
         box_fitting_params: dict[str, Any] | None = None,
         reference_ego_poses: dict[str, dict[str, Any]] | None = None,
+        fit_boxes: bool = True,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1 フレーム分のインスタンスを処理する.
 
         深度マップと空マスクはここで 1 回だけ読み、
         全インスタンスで使い回す。
+
+        Args:
+            fit_boxes: False なら当てはめを行わず、代わりに各エントリへ
+                ``"_summary"``（凸包の頂点と z 範囲）を入れて返す。
+                カメラ跨ぎの結合では、結合してから当てはめるため
+                ここでは当てはめない。
+
+        NOTE: **ROR / DBSCAN はここで実行される**（カメラごと・結合前）。
+        各カメラの視点で個別にノイズを落とすので混入に強い一方、
+        結合後の再クラスタリングは行わない。
         """
         results: list[dict[str, Any]] = []
         if not instances:
@@ -289,6 +300,25 @@ class BoxFittingPipeline:
 
             # 3D ボックスの当てはめ。間引き前の点群を使う
             # （表示用に間引いた点で当てると形が粗くなる）
+            origin_xy = _camera_origin_xy(
+                calib, frame.get("ego_pose") or {}, reference_pose
+            )
+            if not fit_boxes:
+                # 結合してから当てはめる。BEV は凸包の頂点だけで厳密に
+                # 扱えるため（凸包の和集合＝結合後の凸包）、全点は持ち越さない
+                from app.services.inter_cam_merge import summarize_instance
+
+                percentiles = (box_fitting_params or {}).get("z_percentiles") \
+                    or (1.0, 99.0)
+                entry["status"] = "pending_merge"
+                entry["_summary"] = summarize_instance(
+                    points_ego,
+                    z_percentiles=(float(percentiles[0]), float(percentiles[1])),
+                )
+                entry["_summary"]["sensor_origin_xy"] = origin_xy
+                results.append(entry)
+                continue
+
             # MOA はセンサーから見た隠れ方を使うため、ego 座標での
             # カメラ位置を渡す（(0,0) はセンサー座標系のときの値）
             fit = fit_box(
@@ -297,9 +327,7 @@ class BoxFittingPipeline:
                 box_fitting_params,
                 # 原点も同じ座標系へ移す。点群だけ変換して原点を
                 # 据え置くと、MOA のオクルージョン判定が崩れる
-                sensor_origin_xy=_camera_origin_xy(
-                    calib, frame.get("ego_pose") or {}, reference_pose
-                ),
+                sensor_origin_xy=origin_xy,
             )
             if fit is None:
                 entry["status"] = "not_fitted"

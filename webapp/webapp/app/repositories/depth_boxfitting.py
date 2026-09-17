@@ -182,6 +182,8 @@ class DepthBoxFittingRepository:
             "num_points_lidar_kept": int(item.get("num_points_lidar_kept", 0)),
             "depth_align_scale": item.get("depth_align_scale"),
             "depth_align_shift": item.get("depth_align_shift"),
+            "global_track_id": item.get("global_track_id"),
+            "is_primary": bool(item.get("is_primary", True)),
             "hull_xy": item.get("hull_xy"),
             "fit_metrics": item.get("fit_metrics"),
             "center_ego": item.get("center_ego"),
@@ -377,6 +379,7 @@ class DepthBoxFittingRepository:
             BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
             BoxFitting3D.depth_align_scale, BoxFitting3D.depth_align_shift,
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh, BoxFitting3D.yaw_ego,
+            BoxFitting3D.global_track_id, BoxFitting3D.is_primary,
             BoxFitting3D.fitting_score, BoxFitting3D.fit_metrics,
             BoxFitting3D.manually_modified,
         ]
@@ -410,6 +413,8 @@ class DepthBoxFittingRepository:
             BoxFitting3D.yaw_ego, BoxFitting3D.fitting_score,
             BoxFitting3D.num_points_depth, BoxFitting3D.num_points_lidar,
             BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
+            # エクスポートの Instance はカメラ跨ぎで束ねた単位で作る
+            BoxFitting3D.global_track_id, BoxFitting3D.is_primary,
         ).where(
             BoxFitting3D.depth_estimation_params_id == params_id,
             BoxFitting3D.status == BOXFIT_STATUS_FITTED,

@@ -171,6 +171,9 @@ class BoxFittingStub:
         # 本実装と引数を揃えるために受け取る。スタブは ego 座標を
         # 合成しているだけなので、変換しても意味がない
         reference_ego_poses: dict[str, dict[str, Any]] | None = None,
+        # 本実装と引数を揃える。False なら当てはめず要約だけ返す
+        # （カメラ跨ぎの結合をスタブでも確認できるように）
+        fit_boxes: bool = True,
         stub_delay_sec: float | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
@@ -224,6 +227,34 @@ class BoxFittingStub:
             # （点群自体は保存しない）
             raw_depth_count = num_depth + max(1, num_depth // 4)
             raw_lidar_count = num_lidar + max(1, num_lidar // 4) if num_lidar else 0
+            if not fit_boxes:
+                from app.services.inter_cam_merge import summarize_instance
+
+                summary = summarize_instance(depth_points)
+                translation = (
+                    (frame or {}).get("calibrated_sensor", {}).get("translation")
+                    or [0.0, 0.0, 0.0]
+                )
+                summary["sensor_origin_xy"] = (
+                    float(translation[0]), float(translation[1])
+                )
+                results.append({
+                    **base,
+                    "status": "pending_merge",
+                    "points_depth_ego": points_to_json(
+                        downsample_to_max(depth_points, stored_points_max)
+                    ),
+                    "points_lidar_ego": points_to_json(
+                        downsample_to_max(lidar_points, stored_points_max)
+                    ) if num_lidar else None,
+                    "num_points_depth": raw_depth_count,
+                    "num_points_lidar": raw_lidar_count,
+                    "num_points_depth_kept": num_depth,
+                    "num_points_lidar_kept": num_lidar,
+                    "_summary": summary,
+                })
+                continue
+
             results.append({
                 **base,
                 "status": "fitted",

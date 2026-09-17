@@ -17,6 +17,7 @@ import numpy as np
 import streamlit as st
 
 from app.core.config import get_settings
+from app.models.ann_intermediate import IOU_LABEL_MATCHES
 from app.services.camera_service import order_cameras
 from app.services.depth_boxfitting_service import (
     build_boxfitting_payload,
@@ -181,8 +182,10 @@ with param_col:
             label_visibility="collapsed",
         )
 
-        general_tab, depth_tab, lidar_tab, fitting_tab = st.tabs(
-            ["General", "Depth Estimation", "LiDAR Pointcloud", "Box Fitting"]
+        (general_tab, depth_tab, lidar_tab, fitting_tab,
+         merge_tab) = st.tabs(
+            ["General", "Depth Estimation", "LiDAR Pointcloud", "Box Fitting",
+             "Inter-cam Merge"]
         )
 
         with general_tab:
@@ -283,7 +286,70 @@ with param_col:
                       "はみ出した 1 点で箱が縦に伸びる"),
             )
 
+        with merge_tab:
+            st.caption(
+                "同じ物体が複数カメラに写ると別トラックになるため、"
+                "点群化してから結合する。結合したグループには共通の "
+                "global_track_id が付き、3D ボックスは結合後の点群に当てる"
+            )
+            enable_merge = st.checkbox(
+                "カメラ間の結合を行う", value=True, key="_w_boxfit_enable_merge",
+                help="オフにすると、従来どおりカメラごとに当てはめる",
+            )
+            merge_method = st.selectbox(
+                "Match Method", settings.MERGE_METHODS,
+                index=settings.MERGE_METHODS.index(settings.DEFAULT_MERGE_METHOD)
+                if settings.DEFAULT_MERGE_METHOD in settings.MERGE_METHODS else 0,
+                disabled=not enable_merge,
+                help=("BEV convex-hull: BEV に落とした凸包の重なり率で判定する。"
+                      "カメラごとに物体の違う面しか見えないため、和集合ではなく"
+                      "小さい方の面積で割った値（IoS）を使う"),
+            )
+            merge_label_match = st.radio(
+                "Label Match", IOU_LABEL_MATCHES,
+                index=IOU_LABEL_MATCHES.index(settings.DEFAULT_MERGE_LABEL_MATCH)
+                if settings.DEFAULT_MERGE_LABEL_MATCH in IOU_LABEL_MATCHES else 0,
+                horizontal=True, disabled=not enable_merge,
+                help=("結合してよいラベルの条件。判定にはトラック内で"
+                      "多数決したラベルを使う"),
+            )
+            merge_cols = st.columns(3)
+            with merge_cols[0]:
+                merge_overlap = st.slider(
+                    "Overlap Threshold", 0.0,
+                    settings.MERGE_OVERLAP_THRESHOLD_MAX,
+                    value=settings.DEFAULT_MERGE_OVERLAP_THRESHOLD, step=0.05,
+                    disabled=not enable_merge,
+                    help="凸包の重なり率（IoS）の下限",
+                )
+            with merge_cols[1]:
+                merge_distance = st.slider(
+                    "Max Centroid Distance [m]", 0.5,
+                    settings.MERGE_MAX_CENTROID_DISTANCE_MAX,
+                    value=settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE, step=0.5,
+                    disabled=not enable_merge,
+                    help="重心がこれ以上離れた組は、凸包を作る前に捨てる",
+                )
+            with merge_cols[2]:
+                merge_min_frames = st.slider(
+                    "Min Match Frames", 1,
+                    settings.MERGE_MIN_MATCH_FRAMES_MAX,
+                    value=settings.DEFAULT_MERGE_MIN_MATCH_FRAMES, step=1,
+                    disabled=not enable_merge,
+                    help=("何フレームでマッチしたら結合するか。同じ物体が"
+                          "複数カメラに写るキーフレームは高々 1〜2 なので、"
+                          "割合ではなくフレーム数で判定する"),
+                )
+
 mask_params = {"dilation": int(mask_dilation), "erosion": int(mask_erosion)}
+# 結合しない場合は空の dict を渡す（推論側が結合を飛ばす）
+merge_params = {
+    "method": merge_method,
+    "label_match": merge_label_match,
+    "overlap_threshold": float(merge_overlap),
+    "max_centroid_distance": float(merge_distance),
+    "min_match_frames": int(merge_min_frames),
+} if enable_merge else {}
 box_fitting_params = {
     "method": boxfit_method,
     "angle_step_deg": float(angle_step_deg),
@@ -362,6 +428,7 @@ with param_col:
                             mask_params=mask_params, depth_params=depth_params,
                             lidar_params=lidar_params,
                             box_fitting_params=box_fitting_params,
+                            merge_params=merge_params,
                         )
                         payload = build_boxfitting_payload(
                             dataset_id, scene_token, dataset["dataroot"],
@@ -372,6 +439,7 @@ with param_col:
                             mask_params=mask_params, depth_params=depth_params,
                             lidar_params=lidar_params,
                             box_fitting_params=box_fitting_params,
+                            merge_params=merge_params,
                             stub_delay_sec=settings.BOXFIT_STUB_DELAY_SEC,
                         )
                         job = submit_boxfitting(payload)
