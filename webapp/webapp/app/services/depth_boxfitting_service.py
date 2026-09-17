@@ -302,10 +302,16 @@ def materialize_annotations(dataset_id: str, params_id: str) -> int:
             )
         }
 
-        # (channel, track_id) ごとに Instance を 1 つ作る。
-        # track_id はカメラ内でのみ一意なので、channel を鍵に含めないと
-        # 別カメラの別物体が同じ Instance にまとまってしまう
-        instance_tokens: dict[tuple[str, str], str] = {}
+        # 物体 1 つにつき Instance を 1 つ作る。
+        #
+        # 鍵は **global_track_id**（カメラ跨ぎで結合した後のトラック）。
+        # track_id はカメラ内でのみ一意なので、同じ物体が複数カメラに
+        # 写ると別トラックになる。それを束ねた ID を使う。
+        #
+        # 結合を行っていない run（global_track_id が無い）では
+        # (channel, track_id) に落とす。こちらも channel は必須で、
+        # 抜くと別カメラの別物体が同じ Instance にまとまってしまう
+        instance_tokens: dict[str, str] = {}
         # (box_fitting_id, annotation_token) を溜めておき、flush 後にまとめて更新する。
         # sessionmaker は autoflush=False なので、add した直後に Core の UPDATE を
         # 流すと参照先の行がまだ INSERT されておらず FK 違反になる
@@ -329,7 +335,7 @@ def materialize_annotations(dataset_id: str, params_id: str) -> int:
                 )
                 continue
 
-            key = (frame["channel"], str(fit["track_id"]))
+            key = _instance_key(fit, frame)
             if key not in instance_tokens:
                 token = str(uuid.uuid4())
                 session.add(Instance(
@@ -403,6 +409,18 @@ def _category_lookup_stmt(dataset_id: str):
     return select(Category.token, Category.name).where(
         Category.dataset_id == dataset_id
     )
+
+
+def _instance_key(fit: dict[str, Any], frame: dict[str, Any]) -> str:
+    """Instance をまとめる鍵を返す.
+
+    カメラ跨ぎの結合を行った run では global_track_id を使い、
+    行っていない run では (channel, track_id) に落とす。
+    """
+    global_track_id = fit.get("global_track_id")
+    if global_track_id:
+        return f"g:{global_track_id}"
+    return f"c:{frame['channel']}:{fit['track_id']}"
 
 
 def _update_instance_chains(session, instance_tokens: list[str]) -> None:

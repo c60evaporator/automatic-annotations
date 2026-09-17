@@ -124,6 +124,44 @@ PC_VIEW_REVISION = "boxfit_pc_view_rev"
 PC_REFILTER_PARAMS = "boxfit_refilter_params"
 # Box Fitting タブの表示オプション
 OPT_BF_COLOR, W_BF_COLOR = "boxfit_bf_color", "_w_boxfit_bf_color"
+
+# カメラ跨ぎの結合を目で確かめるための色分け。
+# global_track_id で塗ると、結合されたインスタンスが別カメラでも同色になる
+COLOR_MODE_GLOBAL = "Global Track"
+BOXFIT_COLOR_MODES = (*COLOR_MODES, COLOR_MODE_GLOBAL)
+
+
+def instance_color(item: dict, color_mode: str) -> str:
+    """インスタンスの表示色を決める（3D ボックスと点群で共通）."""
+    if color_mode == COLOR_MODE_GLOBAL:
+        # 結合していない run では global_track_id が無いので track_id へ落とす
+        key = str(item.get("global_track_id") or item.get("track_id", ""))
+        return color_for_track(key)
+    if color_mode == COLOR_MODE_TRACK:
+        return color_for_track(str(item.get("track_id", "")))
+    return color_for_label(str(item.get("label", "")))
+
+
+def instance_legend_key(item: dict, color_mode: str) -> str:
+    """色分けの単位となるキー（凡例フィルタと揃える）."""
+    if color_mode == COLOR_MODE_GLOBAL:
+        return str(item.get("global_track_id") or item.get("track_id", ""))
+    if color_mode == COLOR_MODE_TRACK:
+        return str(item.get("track_id", ""))
+    return str(item.get("label", ""))
+
+
+def has_box(item: dict) -> bool:
+    """3D ボックスを描く対象か.
+
+    結合したグループはボックスを **代表 1 行にだけ**持つ
+    （非代表行は status="merged" で center/size が無い）。
+    is_primary も併せて見て、意図を明示しておく
+    """
+    return bool(
+        item.get("center_ego") and item.get("size_wlh")
+        and item.get("is_primary", True)
+    )
 # Box on Cam タブの表示オプション
 OPT_CAM_COLOR, W_CAM_COLOR = "boxfit_cam_color", "_w_boxfit_cam_color"
 OPT_CAM_TEXT, W_CAM_TEXT = "boxfit_cam_text", "_w_boxfit_cam_text"
@@ -770,7 +808,7 @@ with pointcloud_tab_view:
 
         S.init_sticky(W_PC_COLOR, OPT_PC_COLOR, COLOR_MODE_LABEL)
         pc_color_mode = st.radio(
-            "Instance Color", COLOR_MODES, key=W_PC_COLOR,
+            "Instance Color", BOXFIT_COLOR_MODES, key=W_PC_COLOR,
             on_change=S.sync_sticky, args=(W_PC_COLOR, OPT_PC_COLOR),
         )
 
@@ -859,27 +897,32 @@ with pointcloud_tab_view:
 
             if show_depth_instances:
                 instance_groups += group_instance_points(
-                    flat, color_mode=pc_color_mode, points_key=depth_key
+                    flat, color_mode=pc_color_mode, points_key=depth_key,
+                    key_fn=lambda f: instance_legend_key(f, pc_color_mode),
+                    color_fn=lambda k: instance_color(
+                        {"global_track_id": k, "track_id": k, "label": k},
+                        pc_color_mode),
                 )
             if show_lidar_instances and lidar_key:
                 instance_groups += group_instance_points(
-                    flat, color_mode=pc_color_mode, points_key=lidar_key
+                    flat, color_mode=pc_color_mode, points_key=lidar_key,
+                    key_fn=lambda f: instance_legend_key(f, pc_color_mode),
+                    color_fn=lambda k: instance_color(
+                        {"global_track_id": k, "track_id": k, "label": k},
+                        pc_color_mode),
                 )
 
             if show_fitted_boxes:
                 for fit in (f for items_ in box_source.values() for f in items_):
-                    if not (fit.get("center_ego") and fit.get("size_wlh")):
+                    if not has_box(fit):
                         continue
-                    key = (str(fit["track_id"]) if pc_color_mode == COLOR_MODE_TRACK
-                           else str(fit["label"]))
+                    key = instance_legend_key(fit, pc_color_mode)
                     if enabled_keys is not None and key not in enabled_keys:
                         continue
                     fitted_boxes.append({
                         "key": f"{fit['label']}#{fit['track_id']}",
                         # 点群と同じ色にして、どの点群に当てた箱かを分かるようにする
-                        "color": (color_for_track(key)
-                                  if pc_color_mode == COLOR_MODE_TRACK
-                                  else color_for_label(key)),
+                        "color": instance_color(fit, pc_color_mode),
                         "center": fit["center_ego"],
                         "size_wlh": fit["size_wlh"],
                         "yaw": fit["yaw_ego"],
@@ -1061,7 +1104,7 @@ with fitting_tab_view:
             help="当てはめに使った凸包を重ねる")
         S.init_sticky(W_BF_COLOR, OPT_BF_COLOR, COLOR_MODE_LABEL)
         bf_color_mode = st.radio(
-            "Instance Color", COLOR_MODES, key=W_BF_COLOR,
+            "Instance Color", BOXFIT_COLOR_MODES, key=W_BF_COLOR,
             on_change=S.sync_sticky, args=(W_BF_COLOR, OPT_BF_COLOR),
         )
 
@@ -1077,10 +1120,7 @@ with fitting_tab_view:
         bf_flat = [fit for items_ in bf_fittings.values() for fit in items_]
 
         def _bf_color(item: dict) -> str:
-            key = (str(item.get("track_id")) if bf_color_mode == COLOR_MODE_TRACK
-                   else str(item.get("label")))
-            return (color_for_track(key) if bf_color_mode == COLOR_MODE_TRACK
-                    else color_for_label(key))
+            return instance_color(item, bf_color_mode)
 
         # 推定ボックス（当てはめできたものだけ）
         est_boxes = [
@@ -1092,7 +1132,7 @@ with fitting_tab_view:
                 "length": fit["size_wlh"][1],
                 "yaw": fit["yaw_ego"] or 0.0,
             }
-            for fit in bf_flat if fit.get("center_ego") and fit.get("size_wlh")
+            for fit in bf_flat if has_box(fit)
         ]
         hulls = [
             {"key": f"{fit['label']}#{fit['track_id']}", "color": _bf_color(fit),
@@ -1104,7 +1144,11 @@ with fitting_tab_view:
         bf_groups = []
         if show_bf_depth:
             bf_groups += group_instance_points(
-                bf_flat, color_mode=bf_color_mode, points_key="points_depth_ego")
+                bf_flat, color_mode=bf_color_mode, points_key="points_depth_ego",
+                key_fn=lambda f: instance_legend_key(f, bf_color_mode),
+                color_fn=lambda k: instance_color(
+                    {"global_track_id": k, "track_id": k, "label": k},
+                    bf_color_mode))
         if show_bf_lidar:
             bf_groups += group_instance_points(
                 bf_flat, color_mode=bf_color_mode, points_key="points_lidar_ego")
@@ -1176,7 +1220,7 @@ with cam_tab_view:
         )
         S.init_sticky(W_CAM_COLOR, OPT_CAM_COLOR, COLOR_MODE_LABEL)
         cam_color_mode = st.radio(
-            "Instance Color", COLOR_MODES, key=W_CAM_COLOR,
+            "Instance Color", BOXFIT_COLOR_MODES, key=W_CAM_COLOR,
             on_change=S.sync_sticky, args=(W_CAM_COLOR, OPT_CAM_COLOR),
         )
         S.init_sticky(W_CAM_TEXT, OPT_CAM_TEXT, TEXT_MODE_TRACK)
@@ -1191,7 +1235,7 @@ with cam_tab_view:
     else:
         cam_fittings = load_box_fittings(view_run_id, frame_tokens)
         cam_flat = [f for items_ in cam_fittings.values() for f in items_
-                    if f.get("center_ego") and f.get("size_wlh")]
+                    if has_box(f)]
 
         # 凡例は config のラベル定義から出す。検出結果に含まれるものだけを
         # 出すと、推論のたびに並びとチェック状態が変わってしまう

@@ -10,7 +10,7 @@ Plotly の 3D 散布図はブラウザへ JSON で送られるため、点数が
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 import plotly.graph_objects as go
@@ -360,20 +360,31 @@ def group_instance_points(
     color_mode: str,
     points_key: str,
     enabled_keys: set[str] | None = None,
+    key_fn: Callable[[dict[str, Any]], str] | None = None,
+    color_fn: Callable[[str], str] | None = None,
 ) -> list[dict[str, Any]]:
     """Box Fitting の結果を、色分けの単位ごとの点群にまとめる.
+
+    Args:
+        key_fn / color_fn: 色分けの単位と色を差し替える。
+            呼び出し側で色分けの軸を増やしたいとき（global_track_id など）に使う。
+            省略時は color_mode に従う
 
     トレース数が増えると Plotly が重くなるので、
     同じ色になるものは 1 トレースへ結合する。
     """
     from common.point_ops import points_from_json
 
+    if key_fn is None:
+        def key_fn(fit: dict[str, Any]) -> str:
+            return (
+                str(fit.get("track_id")) if color_mode == COLOR_MODE_TRACK
+                else str(fit.get("label"))
+            )
+
     buckets: dict[str, list[np.ndarray]] = {}
     for fit in fittings:
-        key = (
-            str(fit.get("track_id")) if color_mode == COLOR_MODE_TRACK
-            else str(fit.get("label"))
-        )
+        key = key_fn(fit)
         if enabled_keys is not None and key not in enabled_keys:
             continue
         points = points_from_json(fit.get(points_key))
@@ -381,9 +392,10 @@ def group_instance_points(
             continue
         buckets.setdefault(key, []).append(points)
 
-    color_fn = (
-        color_for_track if color_mode == COLOR_MODE_TRACK else color_for_label
-    )
+    if color_fn is None:
+        color_fn = (
+            color_for_track if color_mode == COLOR_MODE_TRACK else color_for_label
+        )
     return [
         {"key": key, "color": color_fn(key), "points": np.vstack(chunks)}
         for key, chunks in buckets.items()

@@ -110,7 +110,17 @@ def box_center_in_fov(
     return bool(valid[0])
 
 
+# カメラ跨ぎで結合したトラックで色分けするモード。
+# 別カメラの同一物体が同色になるので、結合の妥当性を目で確かめられる
+COLOR_MODE_GLOBAL = "Global Track"
+
+
 def color_for_box(box: dict[str, Any], color_mode: str) -> str:
+    if color_mode == COLOR_MODE_GLOBAL:
+        # 結合していない run では global_track_id が無いので track_id へ落とす
+        return color_for_track(
+            str(box.get("global_track_id") or box.get("track_id", ""))
+        )
     if color_mode == COLOR_MODE_TRACK:
         return color_for_track(str(box.get("track_id", "")))
     return color_for_label(str(box.get("label", "")))
