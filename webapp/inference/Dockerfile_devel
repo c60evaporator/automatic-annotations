@@ -69,9 +69,11 @@ RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/g
 ############################
 # Other dependencies
 ############################
-# Patchwork++
+# Patchwork++ and Open3D dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev \
+    libegl1 \
+    libusb-1.0-0 \
     cmake \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install pypatchworkpp
@@ -97,6 +99,7 @@ assert numpy.__version__.startswith('1.'), f'numpy が 1.x ではありません
 import matplotlib.pyplot; \
 import groundingdino.util.inference; \
 import sam2; \
+import open3d; \
 print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
 
 ############################
