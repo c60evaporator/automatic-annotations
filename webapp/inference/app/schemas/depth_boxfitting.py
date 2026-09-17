@@ -76,6 +76,11 @@ class BoxFittingRequest(BaseModel):
     # ROR の nb_points にかけるラベルごとの倍率。
     # ラベル体系は webapp 側の設定なので、解決済みのものを受け取る
     nb_points_ratio: dict[str, float] = Field(default_factory=dict)
+    # sample ごとの基準 ego_pose（{sample_token: ego_pose}）。
+    # カメラごとに sample_data の時刻が違うため、点群の「ego 座標」の基準も
+    # カメラ間でずれる。カメラを跨いで点群を比べる前に、ここへ揃える。
+    # 空なら変換しない（従来どおりカメラ自身の ego 座標のまま）
+    reference_ego_poses: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     # DB へ保存する点群の上限（間引き後）
     stored_points_max: int = 500

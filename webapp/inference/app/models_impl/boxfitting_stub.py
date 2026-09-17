@@ -168,6 +168,9 @@ class BoxFittingStub:
         depth_params: dict[str, Any] | None = None,
         use_lidar: bool = False,
         stored_points_max: int = 500,
+        # 本実装と引数を揃えるために受け取る。スタブは ego 座標を
+        # 合成しているだけなので、変換しても意味がない
+        reference_ego_poses: dict[str, dict[str, Any]] | None = None,
         stub_delay_sec: float | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:

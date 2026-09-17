@@ -32,7 +32,7 @@ from app.services.depth_ops import (
 )
 from common.mask_rle import encode_rle
 from common.point_ops import downsample_to_max, points_to_json
-from common.transform3d import camera_to_ego
+from common.transform3d import camera_to_ego, ego_to_ego
 
 logger = get_logger(__name__)
 
@@ -190,6 +190,7 @@ class BoxFittingPipeline:
         max_depth: float | None = None,
         nb_points_ratio: dict[str, float] | None = None,
         box_fitting_params: dict[str, Any] | None = None,
+        reference_ego_poses: dict[str, dict[str, Any]] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1 フレーム分のインスタンスを処理する.
@@ -269,6 +270,13 @@ class BoxFittingPipeline:
             points_ego = camera_to_ego(
                 points_camera, calib["translation"], calib["rotation"]
             )
+            # カメラ自身の時刻の ego 座標から、sample の基準 ego 座標へ移す。
+            # これをやらないとカメラ間で点群がずれ、結合判定が成立しない
+            reference_pose = (reference_ego_poses or {}).get(frame["sample_token"])
+            if reference_pose:
+                points_ego = ego_to_ego(
+                    points_ego, frame.get("ego_pose") or {}, reference_pose
+                )
             entry = {
                 **base,
                 # フィルタ前は保存しない。深度マップとクロージング後マスクから
@@ -287,8 +295,10 @@ class BoxFittingPipeline:
                 points_ego,
                 (box_fitting_params or {}).get("method", BOXFIT_METHOD_CONVEX_HULL_MOA),
                 box_fitting_params,
-                sensor_origin_xy=(
-                    float(calib["translation"][0]), float(calib["translation"][1])
+                # 原点も同じ座標系へ移す。点群だけ変換して原点を
+                # 据え置くと、MOA のオクルージョン判定が崩れる
+                sensor_origin_xy=_camera_origin_xy(
+                    calib, frame.get("ego_pose") or {}, reference_pose
                 ),
             )
             if fit is None:
@@ -337,3 +347,15 @@ def _resize_depth(
     scaled = scale_intrinsic(intrinsic, width / src_width, height / src_height)
     resized_sky = non_sky[rows][:, cols] if non_sky is not None else None
     return resized, scaled, resized_sky
+
+
+def _camera_origin_xy(
+    calib: dict[str, Any],
+    camera_ego_pose: dict[str, Any],
+    reference_pose: dict[str, Any] | None,
+) -> tuple[float, float]:
+    """カメラ位置を、点群と同じ座標系での XY で返す."""
+    origin = np.asarray([[*calib["translation"][:3]]], dtype=np.float64)
+    if reference_pose:
+        origin = ego_to_ego(origin, camera_ego_pose, reference_pose)
+    return (float(origin[0][0]), float(origin[0][1]))

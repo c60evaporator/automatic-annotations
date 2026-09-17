@@ -284,6 +284,7 @@ def fit_convex_hull_moa(
     angle_step_deg: float = 0.5,
     sensor_origin_xy: tuple[float, float] = (0.0, 0.0),
     z_percentiles: tuple[float, float] | None = None,
+    z_range: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """凸包 + 最小オクルージョン面積で 3D ボックスを当てはめる.
 
@@ -294,6 +295,11 @@ def fit_convex_hull_moa(
             **点群が ego 座標なら、カメラ／LiDAR の取り付け位置を渡すこと**
             （(0, 0) はセンサー座標系のときの値）
         z_percentiles: 高さを決めるパーセンタイル。None なら min/max
+        z_range: 高さを外から与える ``(下限, 上限)``。
+            **カメラ跨ぎの結合で使う。** 結合後の点群は BEV の凸包だけを
+            引き継ぐ（凸包の和集合＝結合後の凸包なので厳密）ため、
+            z は各インスタンスの分位点範囲の和集合を渡す。
+            指定すると points_xyz の z は無視する
 
     Returns:
         DB / API にそのまま載る dict。
@@ -337,7 +343,9 @@ def fit_convex_hull_moa(
     extent_u, extent_v = u_max - u_min, v_max - v_min
     center_xy = ((u_min + u_max) / 2.0) * u + ((v_min + v_max) / 2.0) * v
 
-    if z_percentiles is None:
+    if z_range is not None:
+        z_min, z_max = float(z_range[0]), float(z_range[1])
+    elif z_percentiles is None:
         z_min, z_max = float(np.min(points[:, 2])), float(np.max(points[:, 2]))
     else:
         z_min, z_max = (float(z) for z in np.percentile(points[:, 2], z_percentiles))

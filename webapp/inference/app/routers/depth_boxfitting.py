@@ -175,6 +175,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         max_depth=max_depth,
                         nb_points_ratio=req.nb_points_ratio,
                         box_fitting_params=req.box_fitting_params,
+                        reference_ego_poses=req.reference_ego_poses,
                         stub_delay_sec=req.stub_delay_sec,
                     )
                 except Exception as exc:  # noqa: BLE001

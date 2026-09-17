@@ -40,6 +40,7 @@ def fit_box(
     params: dict[str, Any] | None = None,
     *,
     sensor_origin_xy: tuple[float, float] = (0.0, 0.0),
+    z_range: tuple[float, float] | None = None,
 ) -> dict[str, Any] | None:
     """設定された手法でボックスを当てはめる.
 
@@ -47,6 +48,7 @@ def fit_box(
         points_ego: ego 座標のインスタンス点群
         sensor_origin_xy: ego 座標でのセンサー位置。
             MOA はセンサーから見た隠れ方を使うため、これを誤ると向きが崩れる
+        z_range: 高さを外から与える（カメラ跨ぎの結合時に使う）
 
     Returns:
         当てはめ結果。点が少ない・破綻した場合は None
@@ -65,6 +67,7 @@ def fit_box(
             angle_step_deg=float(params.get("angle_step_deg", 0.5)),
             sensor_origin_xy=sensor_origin_xy,
             z_percentiles=(float(percentiles[0]), float(percentiles[1])),
+            z_range=z_range,
         )
     except (ValueError, RuntimeError, FloatingPointError):
         # 点が少ない・向きが決まらない等。呼び出し側で not_fitted にする

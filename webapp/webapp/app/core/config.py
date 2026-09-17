@@ -154,15 +154,11 @@ class Settings(BaseSettings):
         "construction_vehicle": {"construction vehicle": "construction_vehicle",
                                  "truck": "truck"},
         "bus": {"bus": "bus",
-                "truck": "truck",
                 "building": None},
         "motorcycle": {"motorcycle": "motorcycle",
                        "painting": None},
         "pedestrian": {"pedestrian": "pedestrian",
-                       "painting": None,
                        "rider": None},
-        "traffic_cone": {"traffic cone": "traffic_cone",
-                         "road marking": None},
     }
     # 切り出し時にボックスを広げる比率。
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
@@ -252,6 +248,38 @@ class Settings(BaseSettings):
     LIDAR_DBSCAN_EPS_MAX: float = 5.0
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
+
+    # --- カメラ間の結合 ----------------------------------------------------
+    # 点群を揃える基準の座標系を決めるセンサー。
+    # カメラごとに sample_data のタイムスタンプが違うため、
+    # 「ego 座標」の基準がカメラ間でずれている。カメラを跨いで点群を
+    # 比べる前に、このセンサーの ego_pose へ全部揃える。
+    #
+    # LiDAR を使わない構成へ移す場合は、常に存在するカメラ
+    # （CAM_FRONT など）を指定すれば同じ仕組みで動く
+    EGO_REFERENCE_CHANNEL: str = "LIDAR_TOP"
+
+    # カメラ間の同一インスタンス結合の判定方法
+    MERGE_METHOD_BEV_HULL: str = "BEV convex-hull"
+    MERGE_METHODS: list[str] = ["BEV convex-hull"]
+    DEFAULT_MERGE_METHOD: str = "BEV convex-hull"
+    # BEV 凸包の重なり率の下限。
+    # IoS（小さい方の面積で割る）なので、IoU より高めに取れる。
+    # カメラごとに物体の違う面しか観測できないため、同一物体でも
+    # IoU は 0.3 程度まで落ちる（IoS なら 0.5 前後）
+    DEFAULT_MERGE_OVERLAP_THRESHOLD: float = 0.3
+    MERGE_OVERLAP_THRESHOLD_MAX: float = 1.0
+    # 重心距離の上限 [m]。これを超える組は凸包を作る前に捨てる
+    DEFAULT_MERGE_MAX_CENTROID_DISTANCE: float = 3.0
+    MERGE_MAX_CENTROID_DISTANCE_MAX: float = 10.0
+    # 何フレームでマッチしたら結合するか。
+    # 同じ物体が複数カメラに写るキーフレームは高々 1〜2 なので、
+    # 割合ではなくフレーム数で判定する（割合だと 0/0.5/1 の 3 値しか取れない）
+    DEFAULT_MERGE_MIN_MATCH_FRAMES: int = 1
+    MERGE_MIN_MATCH_FRAMES_MAX: int = 5
+    # 結合してよいラベルの条件（label / category_group / none）。
+    # 判定にはトラック内で多数決したラベルを使う
+    DEFAULT_MERGE_LABEL_MATCH: str = "category_group"
 
     # --- Box Fitting -------------------------------------------------------
     # 当てはめ手法。convex_hull_moa は BEV の凸包に対し、角度を刻んで

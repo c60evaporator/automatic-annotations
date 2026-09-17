@@ -101,6 +101,22 @@ def build_boxfitting_payload(
 
     camera_frames = [f for f in frames if f["modality"] == "camera"]
     lidar_frames = [f for f in frames if f["modality"] == "lidar"]
+
+    # sample ごとの基準 ego_pose。カメラごとに sample_data の時刻が違うため、
+    # 点群の「ego 座標」の基準もカメラ間でずれる。ここへ揃えて比較できるようにする。
+    # 基準センサーが無い sample は変換しない（カメラ自身の ego 座標のまま）
+    reference_ego_poses = {
+        f["sample_token"]: f["ego_pose"]
+        for f in frames
+        if f["channel"] == settings.EGO_REFERENCE_CHANNEL and f["ego_pose"]
+    }
+    missing = {f["sample_token"] for f in camera_frames} - set(reference_ego_poses)
+    if missing:
+        logger.warning(
+            "基準センサー %s のフレームが無い sample が %d 件あります"
+            "（その sample はカメラ間の座標系が揃いません）",
+            settings.EGO_REFERENCE_CHANNEL, len(missing),
+        )
     # sample ごとに直近 num_lidar_sweeps 件（末尾がキーフレーム）
     sweeps_by_sample = select_lidar_sweeps(all_frames, num_lidar_sweeps)
 
@@ -152,6 +168,8 @@ def build_boxfitting_payload(
         "box_fitting_params": box_fitting_params or {},
         # ROR の nb_points にかけるラベルごとの倍率（設定のスナップショット）
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
+        # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
+        "reference_ego_poses": reference_ego_poses,
         # 保存する点群の上限（間引き後）。推論サーバー側で間引いて返す
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
         # 派生ファイルの出力先（推論サーバーも /derived を共有マウントしている）。
@@ -562,6 +580,8 @@ def refilter_sample(
         "depth_params": depth_params,
         "lidar_params": lidar_params or {},
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
+        # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
+        "reference_ego_poses": reference_ego_poses,
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
     })
     logger.info(

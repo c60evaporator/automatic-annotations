@@ -71,6 +71,39 @@ def camera_to_ego(points_camera: np.ndarray, translation, quaternion) -> np.ndar
     return transform_points(points_camera, make_transform(quaternion, translation))
 
 
+def ego_to_ego(
+    points_ego: np.ndarray,
+    source_ego_pose: dict,
+    target_ego_pose: dict,
+) -> np.ndarray:
+    """ある時刻の ego 座標を、別の時刻の ego 座標へ移す.
+
+    Args:
+        source_ego_pose / target_ego_pose: ``{"translation", "rotation"}``
+            （ego → global の姿勢）
+
+    カメラごとに sample_data のタイムスタンプが違うため、
+    「ego 座標」の基準そのものがカメラ間でずれている。
+    カメラを跨いで点群を比べる前に、必ず共通の基準へ揃えること。
+    自車 10 m/s・時刻差 25 ms で 0.25 m ずれ、対象物体の移動分も加わる。
+
+    どちらかの姿勢が欠けている場合は変換せず、そのまま返す
+    （変換できないのに黙って別座標系の点を混ぜるより安全）。
+    """
+    if not source_ego_pose or not target_ego_pose:
+        return np.asarray(points_ego, dtype=np.float64)
+
+    source_to_global = make_transform(
+        source_ego_pose["rotation"], source_ego_pose["translation"]
+    )
+    target_to_global = make_transform(
+        target_ego_pose["rotation"], target_ego_pose["translation"]
+    )
+    return transform_points(
+        points_ego, invert_transform(target_to_global) @ source_to_global
+    )
+
+
 def scale_intrinsic(intrinsic, scale_x: float, scale_y: float) -> np.ndarray:
     """リサイズ後の画像に対応する内部パラメータを返す（入力は破壊しない）.
 
