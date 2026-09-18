@@ -25,6 +25,8 @@ from app.core.logging import get_logger
 from app.services.box_fitting import BOXFIT_METHOD_CONVEX_HULL_MOA, fit_box
 from app.services.depth_ops import (
     close_mask,
+    filter_outliers,
+    scaled_nb_points,
     depth_map_to_point_cloud,
     instance_points_from_depth,
     resize_mask_nearest,
@@ -176,6 +178,23 @@ class BoxFittingPipeline:
 
     # ── 3. インスタンスごとの点群 ────────────────────────────────────────
 
+    @staticmethod
+    def _load_lidar_points(
+        lidar_path: Path | None, *, exclude_ground: bool = True
+    ) -> np.ndarray:
+        """保存済みの LiDAR .npz を読む（基準 ego 座標）.
+
+        地面の点はインスタンスのマスクにも入り込むので、既定で除く。
+        """
+        if lidar_path is None or not Path(lidar_path).exists():
+            return np.empty((0, 3))
+        with np.load(lidar_path) as data:
+            points = np.asarray(data["points"], dtype=np.float64)
+            if exclude_ground and "ground_mask" in data.files:
+                points = points[~np.asarray(data["ground_mask"], dtype=bool)]
+        return points[:, :3]
+
+
     def process_frame_instances(
         self,
         instances: list[dict[str, Any]],
@@ -185,12 +204,15 @@ class BoxFittingPipeline:
         frame: dict[str, Any],
         mask_params: dict[str, Any],
         depth_params: dict[str, Any],
+        lidar_params: dict[str, Any] | None = None,
         use_lidar: bool = False,
         stored_points_max: int = 500,
         max_depth: float | None = None,
         nb_points_ratio: dict[str, float] | None = None,
         box_fitting_params: dict[str, Any] | None = None,
         reference_ego_poses: dict[str, dict[str, Any]] | None = None,
+        lidar_path: Path | str | None = None,
+        min_lidar_points: int = 0,
         fit_boxes: bool = True,
         **_: Any,
     ) -> list[dict[str, Any]]:
@@ -200,6 +222,10 @@ class BoxFittingPipeline:
         全インスタンスで使い回す。
 
         Args:
+            lidar_path: そのサンプルの LiDAR .npz（load_lidar が保存したもの）。
+                渡すとインスタンスごとの LiDAR 点群も作る
+            min_lidar_points: LiDAR 点がこの数に届かないインスタンスは
+                LiDAR 点群を持たせない（少なすぎる点は補正に使えない）
             fit_boxes: False なら当てはめを行わず、代わりに各エントリへ
                 ``"_summary"``（凸包の頂点と z 範囲）を入れて返す。
                 カメラ跨ぎの結合では、結合してから当てはめるため
@@ -238,6 +264,15 @@ class BoxFittingPipeline:
         calib = frame.get("calibrated_sensor") or {}
         dilation = int(mask_params.get("dilation", 1))
         erosion = int(mask_params.get("erosion", 1))
+
+        # LiDAR は 1 フレームにつき 1 回だけ読み、全インスタンスで使い回す。
+        # 地面の点はマスクにも入り込むので除いてある
+        lidar_points = self._load_lidar_points(
+            Path(lidar_path) if lidar_path else None
+        )
+        reference_pose_for_lidar = (reference_ego_poses or {}).get(
+            frame["sample_token"]
+        )
 
         for instance in instances:
             mask = rle_to_depth_mask(
@@ -300,6 +335,59 @@ class BoxFittingPipeline:
 
             # 3D ボックスの当てはめ。間引き前の点群を使う
             # （表示用に間引いた点で当てると形が粗くなる）
+            # --- インスタンスごとの LiDAR 点群 ---------------------------
+            # マスクへ投影して選ぶ。侵食側のマスクを使うと、輪郭付近で
+            # 奥の物体を拾う混入が減る
+            lidar_instance = np.empty((0, 3))
+            if lidar_points.shape[0] and calib.get("camera_intrinsic"):
+                from app.services.lidar_ops import instance_lidar_points
+
+                selected = instance_lidar_points(
+                    lidar_points,
+                    # 深度マップ解像度のマスクを画像解像度へ戻す。
+                    # LiDAR の投影は元画像の画素で行うため
+                    resize_mask_nearest(
+                        closed, int(frame["height"]), int(frame["width"])
+                    ),
+                    camera_calib=calib,
+                    intrinsic=np.asarray(
+                        calib["camera_intrinsic"], dtype=np.float64
+                    ),
+                    image_width=int(frame["width"]),
+                    image_height=int(frame["height"]),
+                    camera_ego_pose=frame.get("ego_pose"),
+                    reference_ego_pose=reference_pose_for_lidar,
+                )
+                raw_lidar_count = int(selected.shape[0])
+                if raw_lidar_count:
+                    # 深度点群と同じく ROR / DBSCAN を通す。
+                    # LiDAR は密度が桁違いに低いので、専用のパラメータを使う
+                    lidar_instance = filter_outliers(
+                        selected,
+                        ror_nb_points=scaled_nb_points(
+                            int((lidar_params or {}).get("ror_nb_points", 0)),
+                            instance.get("label"), nb_points_ratio,
+                        ),
+                        ror_radius=float(
+                            (lidar_params or {}).get("ror_radius", 0.0)
+                        ),
+                        dbscan_eps=float(
+                            (lidar_params or {}).get("dbscan_eps", 0.0)
+                        ),
+                        dbscan_min_samples=int(
+                            (lidar_params or {}).get("dbscan_min_samples", 0)
+                        ),
+                    )
+                if lidar_instance.shape[0] < min_lidar_points:
+                    # 少なすぎる点は補正に使えない。表示もしない
+                    lidar_instance = np.empty((0, 3))
+
+            entry["points_lidar_ego"] = points_to_json(
+                downsample_to_max(lidar_instance, stored_points_max)
+            ) if lidar_instance.shape[0] else None
+            entry["num_points_lidar"] = int(lidar_instance.shape[0])
+            entry["num_points_lidar_kept"] = int(lidar_instance.shape[0])
+
             origin_xy = _camera_origin_xy(
                 calib, frame.get("ego_pose") or {}, reference_pose
             )

@@ -173,6 +173,31 @@ def largest_dbscan_cluster(
     return points[labels == int(np.argmax(counts))]
 
 
+def filter_outliers(
+    points: np.ndarray,
+    *,
+    ror_nb_points: int = 0,
+    ror_radius: float = 0.0,
+    dbscan_eps: float = 0.0,
+    dbscan_min_samples: int = 0,
+) -> np.ndarray:
+    """点群に ROR と DBSCAN を適用する（点群の作り方には依存しない）.
+
+    深度由来でも LiDAR 由来でも同じ処理を使う。
+    LiDAR は密度が桁違いに低いので、**パラメータは別に持つこと**
+    （深度側の値をそのまま使うと全部消える）。
+    """
+    points = np.asarray(points, dtype=np.float64)
+    if points.shape[0] == 0:
+        return points
+
+    if ror_nb_points >= 1 and ror_radius > 0:
+        points = remove_radius_outliers(points, ror_nb_points, ror_radius)
+    if dbscan_eps > 0 and dbscan_min_samples >= 2:
+        points = largest_dbscan_cluster(points, dbscan_eps, dbscan_min_samples)
+    return points
+
+
 def instance_points_from_depth(
     all_points: np.ndarray,
     mask: np.ndarray,
@@ -201,13 +226,14 @@ def instance_points_from_depth(
     if raw.shape[0] == 0:
         return raw, raw
 
-    points = raw
-    if ror_nb_points >= 1 and ror_radius > 0:
+    points = filter_outliers(
+        raw,
         # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める
-        nb_points = scaled_nb_points(ror_nb_points, label, nb_points_ratio)
-        points = remove_radius_outliers(points, nb_points, ror_radius)
-    if dbscan_eps > 0 and dbscan_min_samples >= 2:
-        points = largest_dbscan_cluster(points, dbscan_eps, dbscan_min_samples)
+        ror_nb_points=scaled_nb_points(ror_nb_points, label, nb_points_ratio),
+        ror_radius=ror_radius,
+        dbscan_eps=dbscan_eps,
+        dbscan_min_samples=dbscan_min_samples,
+    )
     return points, raw
 
 

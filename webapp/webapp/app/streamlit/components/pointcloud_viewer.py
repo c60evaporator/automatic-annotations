@@ -32,6 +32,13 @@ COLOR_RAW_DEPTH = "#9fd8e8"    # 薄い水色
 MARKER_SIZE_BACKGROUND = 1
 MARKER_SIZE_INSTANCE = 2
 
+# インスタンス点群の形。色は Instance Color で決まるので、
+# **深度由来と LiDAR 由来は形で見分ける**（色は使えない）
+SYMBOL_DEPTH = "circle"
+SYMBOL_LIDAR = "diamond"
+# LiDAR は点数が桁違いに少ないので、少し大きく描かないと埋もれる
+MARKER_SIZE_LIDAR = 4
+
 # 自車の姿勢を示す軸の色（x=前方 / y=左方 / z=上方）
 AXIS_COLORS = ("red", "green", "blue")
 AXIS_NAMES = ("X", "Y", "Z")
@@ -143,6 +150,7 @@ def _add_points(
     size: int,
     max_points: int,
     opacity: float = 1.0,
+    symbol: str = SYMBOL_DEPTH,
 ) -> int:
     """点群を 1 トレースとして追加する（上限まで間引く）.
 
@@ -156,7 +164,7 @@ def _add_points(
     fig.add_trace(go.Scatter3d(
         x=reduced[:, 0], y=reduced[:, 1], z=reduced[:, 2],
         mode="markers", name=name,
-        marker=dict(size=size, color=color, opacity=opacity),
+        marker=dict(size=size, color=color, opacity=opacity, symbol=symbol),
         hoverinfo="name",
     ))
     return reduced.shape[0]
@@ -320,7 +328,10 @@ def build_pointcloud_figure(
     for group in instance_groups:
         drawn = _add_points(
             fig, group["points"], name=group["key"], color=group["color"],
-            size=MARKER_SIZE_INSTANCE, max_points=max_points_per_trace,
+            size=group.get("size", MARKER_SIZE_INSTANCE),
+            max_points=max_points_per_trace,
+            # 深度由来と LiDAR 由来を形で見分ける
+            symbol=group.get("symbol", SYMBOL_DEPTH),
         )
         counts[group["key"]] = counts.get(group["key"], 0) + drawn
 
@@ -362,10 +373,15 @@ def group_instance_points(
     enabled_keys: set[str] | None = None,
     key_fn: Callable[[dict[str, Any]], str] | None = None,
     color_fn: Callable[[str], str] | None = None,
+    symbol: str = SYMBOL_DEPTH,
+    size: int = MARKER_SIZE_INSTANCE,
 ) -> list[dict[str, Any]]:
     """Box Fitting の結果を、色分けの単位ごとの点群にまとめる.
 
     Args:
+        symbol / size: マーカーの形と大きさ。**LiDAR 由来には
+            SYMBOL_LIDAR を渡して形で見分けられるようにする**
+            （色は Instance Color に予約されているので使えない）
         key_fn / color_fn: 色分けの単位と色を差し替える。
             呼び出し側で色分けの軸を増やしたいとき（global_track_id など）に使う。
             省略時は color_mode に従う
@@ -397,7 +413,10 @@ def group_instance_points(
             color_for_track if color_mode == COLOR_MODE_TRACK else color_for_label
         )
     return [
-        {"key": key, "color": color_fn(key), "points": np.vstack(chunks)}
+        {
+            "key": key, "color": color_fn(key), "points": np.vstack(chunks),
+            "symbol": symbol, "size": size,
+        }
         for key, chunks in buckets.items()
     ]
 

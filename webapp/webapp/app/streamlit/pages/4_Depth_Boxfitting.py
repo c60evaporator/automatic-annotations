@@ -64,6 +64,8 @@ from app.streamlit.components.bev_viewer import (
     render_bev,
 )
 from app.streamlit.components.pointcloud_viewer import (
+    MARKER_SIZE_LIDAR,
+    SYMBOL_LIDAR,
     CAMERA_PRESETS,
     VIEWS,
     VIEW_GLOBAL,
@@ -230,7 +232,7 @@ with param_col:
             # LiDAR の統合・地面除去・混合は未実装。
             # 実装するまでチェックできないようにしておく
             use_lidar = st.checkbox(
-                "Use LiDAR", value=False, disabled=True,
+                "Use LiDAR", value=False, disabled=False,
                 help="LiDAR を使った点群の混合は未実装です（深度推定のみで動作します）",
             )
             st.markdown("**Mask Closing**")
@@ -275,7 +277,8 @@ with param_col:
             min_lidar_points = st.slider(
                 "Min LiDAR Points", 1, settings.LIDAR_MIN_POINTS_MAX,
                 value=settings.LIDAR_MIN_POINTS_DEFAULT, step=1,
-                help="これ未満のインスタンスは深度点群だけでフィッティングする",
+                help=("これ未満のインスタンスは LiDAR 点群を持たせない。"
+                      "深度点群だけでフィッティングし、表示もされない"),
             )
             st.markdown("**ROR**")
             lidar_ror_nb = st.slider(
@@ -906,6 +909,9 @@ with pointcloud_tab_view:
             if show_lidar_instances and lidar_key:
                 instance_groups += group_instance_points(
                     flat, color_mode=pc_color_mode, points_key=lidar_key,
+                    # 色は Instance Color に予約されているので、
+                    # 深度由来との区別は形で付ける
+                    symbol=SYMBOL_LIDAR, size=MARKER_SIZE_LIDAR,
                     key_fn=lambda f: instance_legend_key(f, pc_color_mode),
                     color_fn=lambda k: instance_color(
                         {"global_track_id": k, "track_id": k, "label": k},

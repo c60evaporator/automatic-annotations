@@ -171,3 +171,85 @@ def lidar_to_ego(points: np.ndarray, calib: dict[str, Any]) -> np.ndarray:
     return transform_points(
         points, make_transform(calib["rotation"], calib["translation"])
     )
+
+
+def ego_to_camera(
+    points_ego: np.ndarray, calib: dict[str, Any]
+) -> np.ndarray:
+    """ego 座標の点群をカメラ座標へ移す（camera_to_ego の逆）."""
+    from common.transform3d import invert_transform, make_transform, transform_points
+
+    camera_to_ego = make_transform(calib["rotation"], calib["translation"])
+    return transform_points(points_ego, invert_transform(camera_to_ego))
+
+
+def instance_lidar_points(
+    points_ego_reference: np.ndarray,
+    mask: np.ndarray,
+    *,
+    camera_calib: dict[str, Any],
+    intrinsic: np.ndarray,
+    image_width: int,
+    image_height: int,
+    camera_ego_pose: dict[str, Any] | None = None,
+    reference_ego_pose: dict[str, Any] | None = None,
+    near_plane: float = 0.1,
+) -> np.ndarray:
+    """LiDAR 点群から、1 インスタンスのマスクに入る点を抜き出す.
+
+    Args:
+        points_ego_reference: **基準 ego 座標**の LiDAR 点群 ``(N, 3)``
+        mask: そのインスタンスのマスク（画像解像度、bool）
+        camera_ego_pose / reference_ego_pose: 時刻合わせに使う。
+            省略すると変換しない
+
+    Returns:
+        マスクに入った点（**基準 ego 座標のまま**）``(M, 3)``
+
+    ## 時刻合わせ
+
+    LiDAR 点は基準 ego 座標（= LiDAR キーフレームの時刻）にある。
+    マスクへ投影するには **カメラ時刻の ego 座標**を経由する必要がある。
+    ここを省くと自車が動いているぶん投影がずれ（10 m/s・25 ms で 0.25 m）、
+    マスク選択が狂う。
+
+    返す点は基準 ego 座標のまま。深度由来の点群と同じ座標系に揃えておく。
+    """
+    from common.transform3d import ego_to_ego
+
+    points_ego_reference = np.asarray(points_ego_reference, dtype=np.float64)
+    if points_ego_reference.shape[0] == 0:
+        return np.empty((0, 3))
+
+    # 基準 ego（LiDAR 時刻）→ カメラ時刻の ego
+    points_camera_time = ego_to_ego(
+        points_ego_reference[:, :3],
+        reference_ego_pose or {},
+        camera_ego_pose or {},
+    )
+    points_camera = ego_to_camera(points_camera_time, camera_calib)
+
+    # カメラ前方の点だけを投影する
+    in_front = points_camera[:, 2] > near_plane
+    if not np.any(in_front):
+        return np.empty((0, 3))
+
+    visible = points_camera[in_front]
+    projected = visible @ np.asarray(intrinsic, dtype=np.float64).T
+    uv = projected[:, :2] / projected[:, 2:3]
+
+    us = np.rint(uv[:, 0]).astype(int)
+    vs = np.rint(uv[:, 1]).astype(int)
+    inside = (
+        (us >= 0) & (us < image_width) & (vs >= 0) & (vs < image_height)
+    )
+    if not np.any(inside):
+        return np.empty((0, 3))
+
+    selected = np.zeros(points_camera.shape[0], dtype=bool)
+    front_indices = np.flatnonzero(in_front)
+    hit = front_indices[inside][mask[vs[inside], us[inside]]]
+    selected[hit] = True
+
+    # 返すのは基準 ego 座標（投影は選別のためだけに使う）
+    return points_ego_reference[selected][:, :3]

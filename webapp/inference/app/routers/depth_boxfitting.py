@@ -62,6 +62,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
     started_all = time.perf_counter()
     depth_results: list[dict[str, Any]] = []
     lidar_results: list[dict[str, Any]] = []
+    # {sample_token: LiDAR .npz のパス}。インスタンスごとの抽出で使う
+    lidar_paths: dict[str, Any] = {}
     box_results: list[dict[str, Any]] = []
 
     mask_params = req.mask_params or {}
@@ -138,6 +140,12 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             lidar_results.append(result)
+            # インスタンスごとの LiDAR 点群を作るのに使う。
+            # pointcloud_path は DERIVED_ROOT からの相対パスで返る
+            if result.get("pointcloud_path"):
+                lidar_paths[frame.sample_token] = (
+                    settings.DERIVED_ROOT / result["pointcloud_path"]
+                )
             job.append_partial({"kind": "lidar", "data": result})
             done += 1
             job.set_progress(done, message="LiDAR 統合")
@@ -180,6 +188,13 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         nb_points_ratio=req.nb_points_ratio,
                         box_fitting_params=req.box_fitting_params,
                         reference_ego_poses=req.reference_ego_poses,
+                        lidar_params=req.lidar_params,
+                        # そのサンプルの LiDAR。load_lidar が保存したもの
+                        lidar_path=lidar_paths.get(frame.sample_token),
+                        # 下限は lidar_params.min_points で渡ってくる
+                        min_lidar_points=int(
+                            (req.lidar_params or {}).get("min_points", 0)
+                        ),
                         # 結合する場合は当てはめを後回しにする
                         fit_boxes=not merge_enabled,
                         stub_delay_sec=req.stub_delay_sec,
