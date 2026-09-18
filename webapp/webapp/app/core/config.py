@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     }
     # 切り出し時にボックスを広げる比率。
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
-    DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.2
+    DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.1
     RECLASSIFICATION_CROP_MARGIN_RATIO_MAX: float = 1.0
 
     # --- 2D Object Detection ---------------------------------------------
@@ -249,6 +249,10 @@ class Settings(BaseSettings):
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
 
+    # Use LiDAR の既定。インスタンスごとの LiDAR 点群を作るかどうか。
+    # 深度点群との混合（座標補正）は未実装で、現在は表示と外れ値除去まで
+    BOXFIT_USE_LIDAR_DEFAULT: bool = True
+
     # --- カメラ間の結合 ----------------------------------------------------
     # 点群を揃える基準の座標系を決めるセンサー。
     # カメラごとに sample_data のタイムスタンプが違うため、
@@ -267,7 +271,7 @@ class Settings(BaseSettings):
     # IoS（小さい方の面積で割る）なので、IoU より高めに取れる。
     # カメラごとに物体の違う面しか観測できないため、同一物体でも
     # IoU は 0.3 程度まで落ちる（IoS なら 0.5 前後）
-    DEFAULT_MERGE_OVERLAP_THRESHOLD: float = 0.3
+    DEFAULT_MERGE_OVERLAP_THRESHOLD: float = 0.15
     MERGE_OVERLAP_THRESHOLD_MAX: float = 1.0
     # 重心距離の上限 [m]。これを超える組は凸包を作る前に捨てる
     DEFAULT_MERGE_MAX_CENTROID_DISTANCE: float = 3.0

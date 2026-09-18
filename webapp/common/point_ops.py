@@ -43,6 +43,30 @@ def voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
     return points[np.sort(first_indices)]
 
 
+def dedupe_points(points: np.ndarray, decimals: int = 3) -> np.ndarray:
+    """同一座標の点を 1 つにまとめる.
+
+    Args:
+        decimals: 同一とみなす丸め桁数（既定はミリメートル）
+
+    カメラを跨いで LiDAR 点群を集めると、**共可視の点が重複する**。
+    両カメラは同じ LiDAR sweep から点を選ぶので、同じ物理点が
+    2 回入ってくる。点数の集計が実際の観測数より多くなり、
+    描画も無駄になる。
+
+    入力の順序は保つ（先に現れたものを残す）。丸めるのは、
+    間引きや座標変換を経た値が完全一致しない場合に備えるため。
+    """
+    points = np.asarray(points, dtype=np.float64)
+    if points.shape[0] < 2:
+        return points
+
+    _, index = np.unique(
+        np.round(points[:, :3], decimals), axis=0, return_index=True
+    )
+    return points[np.sort(index)]
+
+
 def find_voxel_size(
     points: np.ndarray, max_points: int, *, initial_voxel_size: float | None = None
 ) -> float | None:

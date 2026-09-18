@@ -466,6 +466,8 @@ def combine_summaries(summaries: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ``points`` は当てはめへ渡す ``(N, 3)``（XY は凸包の頂点の集合、
         z は範囲の中央で埋める。実際の高さは z_range で渡す）。
     """
+    from common.point_ops import dedupe_points
+
     hulls = [
         s["hull_xy"] for s in summaries
         if s.get("hull_xy") is not None and len(s["hull_xy"])
@@ -473,7 +475,12 @@ def combine_summaries(summaries: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not hulls:
         return {"points": np.empty((0, 3)), "z_range": None, "num_points": 0}
 
-    hull_xy = np.vstack(hulls)
+    # 凸包の頂点も、カメラ跨ぎで同じ点が入りうるのでまとめる
+    # （LiDAR 点は両カメラが同じ sweep から選ぶため重複する）。
+    # 凸包の計算結果は変わらないが、点数の集計が実態に合う
+    hull_xy = dedupe_points(
+        np.column_stack([np.vstack(hulls), np.zeros(len(np.vstack(hulls)))])
+    )[:, :2]
     ranges = [s["z_range"] for s in summaries if s.get("z_range")]
     if ranges:
         z_low = min(r[0] for r in ranges)

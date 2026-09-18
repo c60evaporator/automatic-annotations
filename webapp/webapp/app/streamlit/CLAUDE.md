@@ -42,7 +42,7 @@
         - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
     - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`instance_tracking_2d_params`から参照されていない`detection_2d_params`レコードが`Settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `detection_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。選択中のレコードが参照している`instance_tracking_2d_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
+- `detection_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`instance_tracking_2d_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
     - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
     - 「削除」ボタン: 押すと選択した`detection_2d_params`テーブルのレコードと、CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される。CASCADEで紐づくInstance Tracking、Depth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。このスライダはSample Intervalパラメータの間隔に基づく選択したサンプルのリスト（推論もこのサンプルのみ実施される）をselect_sliderで表示する
@@ -85,14 +85,10 @@
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
     - 推論が完了したら、即時に自動保存
-        - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
-        - マッチングしたIoUが閾値（`Settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
-        - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
-        - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
     - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`Settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `instance_tracking_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
-    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
+- `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「このrunを表示」ボタン: 押すと後述のview_colで表示されるインスタンスマスク等の情報をラジオボタン選択したレコードのものに切り替える
     - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。CASCADEで紐づくDepth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。Detection2D画面と異なり、全てのSampleを選択できるようにする（トラッキングはIntervalの間のフレームにも実行されるため）。Sample選択だとキーフレーム以外は選択できなくなるが、これで特に問題ない（キーフレーム以外のフレームは推論のトラッキング伝播には使用するが、結果自体は使用しないため表示できなくとも良い）
 - map_colにはDetection2D画面と同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
@@ -150,21 +146,17 @@
     - Inter-cam Merge: 複数カメラ間での同一インスタンス結合に使用するパラメータ
         - 
 
-- 推論container: Detection2D画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
-- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
-- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
+- 推論container: Detection2D・Instance Tracking画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
+- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
+- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`depth_estimation_params`、`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルに保存する
     - 推論が完了したら、即時に自動保存
-        - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
-        - マッチングしたIoUが閾値（`Settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
-        - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
-        - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`Settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`レコードが`Settings.DEPTH_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `instance_tracking_2d_params`テーブルに当該Sceneの`status='succeeded'`のレコードがあれば（推論を成功裏に実施・保存済みであれば）、param_col中央下部のexpanderにラジオボタン付きでレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
-    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
-    - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。CASCADEで紐づくDepth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
-- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。Detection2D画面と異なり、全てのSampleを選択できるようにする（トラッキングはIntervalの間のフレームにも実行されるため）。Sample選択だとキーフレーム以外は選択できなくなるが、これで特に問題ない（キーフレーム以外のフレームは推論のトラッキング伝播には使用するが、結果自体は使用しないため表示できなくとも良い）
-- map_colにはDetection2D画面と同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
+- `depth_estimation_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される点群や3Dバウンディングボックス等の情報をラジオボタン選択したレコードのものに切り替える
+    - 「削除」ボタン: 押すと選択した`depth_estimation_params`テーブルのレコードと、CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される
+- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置し、全てのSampleを選択できるようにする
+- map_colにはDetection2Dページ・Instance Trakcingページと同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
 - 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
     - Compare propagation: track_idの引き継ぎ時のインスタンス同士のマッチングを確認するモード。チェックの有無により以下のように表示が変わる
         - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる。Track ID Inheritance="forward_backward_matching"のとき、各インスタンスの表示マスクは以下のように決める

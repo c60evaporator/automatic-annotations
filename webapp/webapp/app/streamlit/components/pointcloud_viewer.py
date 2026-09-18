@@ -35,9 +35,14 @@ MARKER_SIZE_INSTANCE = 2
 # インスタンス点群の形。色は Instance Color で決まるので、
 # **深度由来と LiDAR 由来は形で見分ける**（色は使えない）
 SYMBOL_DEPTH = "circle"
-SYMBOL_LIDAR = "diamond"
-# LiDAR は点数が桁違いに少ないので、少し大きく描かないと埋もれる
-MARKER_SIZE_LIDAR = 4
+# LiDAR は **中抜き**にする。
+# 両カメラは同じ LiDAR sweep から点を選ぶので、共可視の点は
+# 座標が完全に一致する（同一の物理点）。塗りつぶしだと後から描いた側が
+# 完全に覆ってしまい、片方のカメラの点群が消えたように見える。
+# 中抜きなら輪郭が重なるだけで、両方を判別できる
+SYMBOL_LIDAR = "diamond-open"
+# LiDAR は点数が桁違いに少なく、中抜きは視認性が落ちるので大きめに描く
+MARKER_SIZE_LIDAR = 5
 
 # 自車の姿勢を示す軸の色（x=前方 / y=左方 / z=上方）
 AXIS_COLORS = ("red", "green", "blue")
@@ -375,10 +380,14 @@ def group_instance_points(
     color_fn: Callable[[str], str] | None = None,
     symbol: str = SYMBOL_DEPTH,
     size: int = MARKER_SIZE_INSTANCE,
+    dedupe: bool = False,
 ) -> list[dict[str, Any]]:
     """Box Fitting の結果を、色分けの単位ごとの点群にまとめる.
 
     Args:
+        dedupe: 同一座標の点を 1 つにまとめる。**LiDAR 由来では有効にする**。
+            カメラを跨いで集めると共可視の点が重複する（両カメラが
+            同じ LiDAR sweep から選ぶため、同じ物理点が 2 回入る）
         symbol / size: マーカーの形と大きさ。**LiDAR 由来には
             SYMBOL_LIDAR を渡して形で見分けられるようにする**
             （色は Instance Color に予約されているので使えない）
@@ -389,7 +398,7 @@ def group_instance_points(
     トレース数が増えると Plotly が重くなるので、
     同じ色になるものは 1 トレースへ結合する。
     """
-    from common.point_ops import points_from_json
+    from common.point_ops import dedupe_points, points_from_json
 
     if key_fn is None:
         def key_fn(fit: dict[str, Any]) -> str:
@@ -412,9 +421,13 @@ def group_instance_points(
         color_fn = (
             color_for_track if color_mode == COLOR_MODE_TRACK else color_for_label
         )
+    def stack(chunks: list[np.ndarray]) -> np.ndarray:
+        points = np.vstack(chunks)
+        return dedupe_points(points) if dedupe else points
+
     return [
         {
-            "key": key, "color": color_fn(key), "points": np.vstack(chunks),
+            "key": key, "color": color_fn(key), "points": stack(chunks),
             "symbol": symbol, "size": size,
         }
         for key, chunks in buckets.items()

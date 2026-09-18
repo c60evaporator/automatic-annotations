@@ -10,7 +10,8 @@
 インスタンスごとに読み直すと、同じ .npz を何度も展開することになる。
 
 現時点の制約:
-  - LiDAR を使った混合は未実装（use_lidar=True でも深度点群のみ）
+  - use_lidar=True でインスタンスごとの LiDAR 点群を作る。
+    深度点群との混合（座標補正）は未実装で、当てはめには深度点群を使う
   - Box Fitting のアルゴリズムは未実装（点群までを保存する）
 """
 from __future__ import annotations
@@ -339,7 +340,14 @@ class BoxFittingPipeline:
             # マスクへ投影して選ぶ。侵食側のマスクを使うと、輪郭付近で
             # 奥の物体を拾う混入が減る
             lidar_instance = np.empty((0, 3))
-            if lidar_points.shape[0] and calib.get("camera_intrinsic"):
+            # use_lidar が UI の「Use LiDAR」に対応する。
+            # off ならインスタンスごとの LiDAR 点群は作らない
+            # （生 LiDAR の読み込み自体は常に行い、比較表示に使う）
+            if (
+                use_lidar
+                and lidar_points.shape[0]
+                and calib.get("camera_intrinsic")
+            ):
                 from app.services.lidar_ops import instance_lidar_points
 
                 selected = instance_lidar_points(

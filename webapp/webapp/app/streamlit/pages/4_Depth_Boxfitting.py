@@ -232,8 +232,11 @@ with param_col:
             # LiDAR の統合・地面除去・混合は未実装。
             # 実装するまでチェックできないようにしておく
             use_lidar = st.checkbox(
-                "Use LiDAR", value=False, disabled=False,
-                help="LiDAR を使った点群の混合は未実装です（深度推定のみで動作します）",
+                "Use LiDAR", value=settings.BOXFIT_USE_LIDAR_DEFAULT,
+                help=("LiDAR 点をインスタンスマスクへ投影して、"
+                      "インスタンスごとの LiDAR 点群を作る。"
+                      "深度点群との混合（座標補正）は未実装で、"
+                      "現在は表示と外れ値除去までが動く"),
             )
             st.markdown("**Mask Closing**")
             mask_dilation = st.slider(
@@ -912,6 +915,10 @@ with pointcloud_tab_view:
                     # 色は Instance Color に予約されているので、
                     # 深度由来との区別は形で付ける
                     symbol=SYMBOL_LIDAR, size=MARKER_SIZE_LIDAR,
+                    # **表示では重複除去しない。**
+                    # カメラ間で点群がどう重なっているかを見るのが目的なので、
+                    # 重複したまま描く（重なりは中抜きマーカーで判別する）。
+                    # 重複除去は結合（combine_summaries）の側だけで行う
                     key_fn=lambda f: instance_legend_key(f, pc_color_mode),
                     color_fn=lambda k: instance_color(
                         {"global_track_id": k, "track_id": k, "label": k},
