@@ -18,6 +18,8 @@ import numpy as np
 from app.core.logging import get_logger
 from app.services.depth_ops import (
     depth_map_to_point_cloud,
+    filter_outliers,
+    scaled_nb_points,
     instance_points_from_depth,
     resize_mask_nearest,
     rle_to_depth_mask,
@@ -55,6 +57,11 @@ def refilter_frame(
     camera_intrinsic: Any | None = None,
     image_width: int | None = None,
     image_height: int | None = None,
+    lidar_path: Path | None = None,
+    lidar_params: dict[str, Any] | None = None,
+    min_lidar_points: int = 0,
+    camera_ego_pose: dict[str, Any] | None = None,
+    reference_ego_pose: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """1 フレーム分のインスタンスを、新しいパラメータで作り直す.
 
@@ -63,9 +70,18 @@ def refilter_frame(
             .npz に内部パラメータが入っていない場合のフォールバック。
             元画像の K を深度マップの解像度へスケールして使う
 
+    Args:
+        lidar_path: そのサンプルの LiDAR .npz。渡すと LiDAR 側も作り直す
+        min_lidar_points: この数に届かない LiDAR 点群は捨てる
+
     Returns:
         インスタンスごとの ``{id, num_points_raw, num_points_kept,
-        points_raw_ego, points_filtered_ego}``
+        points_raw_ego, points_filtered_ego,
+        num_lidar_raw, num_lidar_kept,
+        points_lidar_raw_ego, points_lidar_filtered_ego}``
+
+    NOTE: LiDAR 側は **深度マップとは独立**に作り直す。
+    点の出所が違うので、外れ値除去のパラメータも別に渡すこと。
     """
     depth, intrinsic, non_sky = _load_depth(depth_path)
     depth_height, depth_width = depth.shape
@@ -87,6 +103,15 @@ def refilter_frame(
 
     # 全画素の点群は 1 回だけ作り、各インスタンスのマスクで切り出す
     all_points = depth_map_to_point_cloud(depth, intrinsic, depth_threshold=max_depth)
+
+    # LiDAR は 1 フレームにつき 1 回だけ読む（地面は除く）
+    lidar_points = np.empty((0, 3))
+    if lidar_path is not None and Path(lidar_path).exists():
+        with np.load(lidar_path) as data:
+            points = np.asarray(data["points"], dtype=np.float64)
+            if "ground_mask" in data.files:
+                points = points[~np.asarray(data["ground_mask"], dtype=bool)]
+            lidar_points = points[:, :3]
 
     results: list[dict[str, Any]] = []
     for instance in instances:
@@ -116,7 +141,54 @@ def refilter_frame(
             raw_ego, filtered_ego, stored_points_max
         )
 
+        # --- LiDAR 側 -----------------------------------------------
+        lidar_raw = np.empty((0, 3))
+        lidar_kept = np.empty((0, 3))
+        if lidar_points.shape[0] and calibrated_sensor.get("camera_intrinsic"):
+            from app.services.lidar_ops import instance_lidar_points
+
+            lidar_raw = instance_lidar_points(
+                lidar_points,
+                resize_mask_nearest(mask, int(image_height), int(image_width))
+                if image_height and image_width else mask,
+                camera_calib=calibrated_sensor,
+                intrinsic=np.asarray(
+                    calibrated_sensor["camera_intrinsic"], dtype=np.float64
+                ),
+                image_width=int(image_width or 0),
+                image_height=int(image_height or 0),
+                camera_ego_pose=camera_ego_pose,
+                reference_ego_pose=reference_ego_pose,
+            )
+            if lidar_raw.shape[0]:
+                lidar_kept = filter_outliers(
+                    lidar_raw,
+                    ror_nb_points=scaled_nb_points(
+                        int((lidar_params or {}).get("ror_nb_points", 0)),
+                        instance.get("label"), nb_points_ratio,
+                    ),
+                    ror_radius=float((lidar_params or {}).get("ror_radius", 0.0)),
+                    dbscan_eps=float((lidar_params or {}).get("dbscan_eps", 0.0)),
+                    dbscan_min_samples=int(
+                        (lidar_params or {}).get("dbscan_min_samples", 0)
+                    ),
+                )
+                if lidar_kept.shape[0] < min_lidar_points:
+                    lidar_kept = np.empty((0, 3))
+
+        lidar_raw_reduced, lidar_kept_reduced = downsample_pair(
+            lidar_raw, lidar_kept, stored_points_max
+        )
+
         results.append({
+            "num_lidar_raw": int(lidar_raw.shape[0]),
+            "num_lidar_kept": int(lidar_kept.shape[0]),
+            "points_lidar_raw_ego": (
+                points_to_json(lidar_raw_reduced) if lidar_raw.shape[0] else None
+            ),
+            "points_lidar_filtered_ego": (
+                points_to_json(lidar_kept_reduced) if lidar_kept.shape[0] else None
+            ),
             "id": instance["id"],
             "track_id": instance.get("track_id"),
             "label": instance.get("label"),
@@ -134,6 +206,8 @@ def refilter(
     *,
     depth_params: dict[str, Any],
     nb_points_ratio: dict[str, float] | None = None,
+    lidar_params: dict[str, Any] | None = None,
+    min_lidar_points: int = 0,
     stored_points_max: int = 500,
     max_depth: float | None = None,
 ) -> tuple[list[dict[str, Any]], float]:
@@ -156,6 +230,15 @@ def refilter(
                 calibrated_sensor=frame["calibrated_sensor"],
                 depth_params=depth_params,
                 nb_points_ratio=nb_points_ratio,
+                lidar_params=lidar_params,
+                min_lidar_points=min_lidar_points,
+                # LiDAR は sample 単位。フレームごとに渡ってくる
+                lidar_path=(
+                    derived_root / frame["lidar_path"]
+                    if frame.get("lidar_path") else None
+                ),
+                camera_ego_pose=frame.get("ego_pose"),
+                reference_ego_pose=frame.get("reference_ego_pose"),
                 stored_points_max=stored_points_max,
                 max_depth=max_depth,
                 camera_intrinsic=(frame.get("calibrated_sensor") or {}).get(

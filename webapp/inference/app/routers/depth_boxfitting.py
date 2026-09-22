@@ -320,6 +320,8 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
             settings.DERIVED_ROOT, frames,
             depth_params=req.depth_params,
             nb_points_ratio=req.nb_points_ratio,
+            lidar_params=req.lidar_params,
+            min_lidar_points=req.min_lidar_points,
             stored_points_max=req.stored_points_max,
             max_depth=(
                 req.max_depth if req.max_depth is not None

@@ -557,6 +557,8 @@ def refilter_sample(
     with read_only_session() as session:
         repo = DepthBoxFittingRepository(session)
         depth_info = repo.list_depth_estimations_by_run(params_id)
+        # LiDAR は sample 単位。再フィルタでも同じ .npz を使う
+        lidar_info = repo.list_lidar_pointclouds_by_run(params_id)
         frames = SensorRepository(session).list_frames_by_sample(
             sample_token, keyframe_only=True
         )
@@ -587,12 +589,17 @@ def refilter_sample(
         ]
         if not instances:
             continue
+        lidar = lidar_info.get(frame["sample_token"]) or {}
         payload_frames.append({
             "depth_path": info["depth_path"],
             "calibrated_sensor": frame["calibrated_sensor"],
             "width": frame["width"],
             "height": frame["height"],
             "instances": instances,
+            # LiDAR 側を作り直すのに要る。投影の時刻合わせに姿勢も渡す
+            "lidar_path": lidar.get("pointcloud_path"),
+            "ego_pose": frame.get("ego_pose"),
+            "reference_ego_pose": reference_ego_pose,
         })
 
     if not payload_frames:
@@ -601,13 +608,10 @@ def refilter_sample(
     response = refilter_boxfitting({
         "frames": payload_frames,
         "depth_params": depth_params,
+        # LiDAR 側は深度とは別のパラメータで作り直す
         "lidar_params": lidar_params or {},
+        "min_lidar_points": int((lidar_params or {}).get("min_points", 0)),
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
-        # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
-        "reference_ego_poses": reference_ego_poses,
-        # カメラ跨ぎの結合。空なら結合しない
-        "merge_params": merge_params or {},
-        "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
     })
     logger.info(

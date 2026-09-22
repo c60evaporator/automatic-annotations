@@ -9,6 +9,7 @@
 |pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出|
 |pages/3_Instance_Tracking.py|2_Detection2D.pyで検出したボックスをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得|
 |pages/4_Depth_Boxfitting.py|Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionして3D bounding boxを割り当てる|
+|pages/5_Export.py|アノテーション結果をJSON形式で出力する|
 
 ## 各ページの仕様
 ### main.py
@@ -157,23 +158,73 @@
     - 「削除」ボタン: 押すと選択した`depth_estimation_params`テーブルのレコードと、CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置し、全てのSampleを選択できるようにする
 - map_colにはDetection2Dページ・Instance Trakcingページと同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
-- 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
-    - Compare propagation: track_idの引き継ぎ時のインスタンス同士のマッチングを確認するモード。チェックの有無により以下のように表示が変わる
-        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる。Track ID Inheritance="forward_backward_matching"のとき、各インスタンスの表示マスクは以下のように決める
-            - そのインスタンスがBackward・Forwardどちらかの伝播にのみ存在（マッチング成立せず）: 伝播が存在するインスタンスマスクをそのまま表示
-            - そのインスタンスがBackward・Forward両方の伝播に存在（マッチング成立）: 最終的に採用するマスクの決め方と同じく、そのフレームからプロンプトボックスが近い方のインスタンスマスクを表示（例. ForwardがSample4から、BackwardがSample8から伝播している場合、Sample4〜6ではForwardのマスクを、Sample7〜8ではBackwardのマスクを表示）
-        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、track_idの引き継ぎに使用する2種類のインスタンスマスクを比較する。Track ID Inheritanceに応じて以下のように表示が変わる
-            - continuous_idのとき: 左側の画像には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合、ボックスは表示しない）。右側の画像には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
-            - forward_backward_matchingのとき: 左側の画像にはForward方向トラッキングで伝播されたマスクを、右側の画像にはBackward方向トラッキングで伝播されたマスクを表示する。プロンプトボックスを与えるフレーム（Sample Interval間隔で存在）は2つのブロックに重複して所属するため、2種類のBackwardおよびForwardマスクが存在することとなるが、左側の画像（Forward）にはプロンプトを与えて得られたマスク（前のブロックからForward伝播されたマスクではない）を、右側の画像（Backward）にはそのブロックの最後のフレームからBackward伝播されてきたマスク（プロントを与えて得られたマスクではない）を表示する。Show boxesラジオボタンでPromptを選択している場合、左側の画像（Forward）にプロンプトボックスを表示する。
-    - Show boxesラジオボタン: 画像上でのバウンディングボックスの表示方法を指定する。以下の選択肢を持つ（デフォルトはPrompt）
-        - Prompt: プロンプトとして与えたbox（Sample Intervalで選ばれたSampleでしか表示されないことになる）
-        - Instance: インスタンスマスクの外接矩形（全Sampleにおいて表示される）
-        - None: バウンディングボックスを表示しない
-    - Colorラジオボタン: マスクとバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
-        - Label: ラベルで色分け
-        - Track ID: Track IDで色分け
-    - Instance textラジオボタン: 画像上でインスタンスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
-        - None: 何も表示しない
-        - Label: ラベル文字を表示（文字色はマスクの色と一致）
-        - Track ID: Track IDを表示（文字色はマスクの色と一致）
-    - 凡例のリスト表示: Colorで選択した色に応じてチェックボックス付き凡例をリスト表示（レイアウトはDetection2D画面のものを踏襲）
+- 画面下部は、Depth Estimation, Pointcloud, Box Fitting, Box on Camの4つのタブで分割した上で、view_col, opt_colで左右に分割する。view_colは各種推論結果をカメラ・LiDAR点群等のセンサデータと重ねて描画し、opt_colに配置した表示条件を指定するためのウィジェットに基づき表示を変化させる。各タブの詳細は以下
+    - Depth Estimationタブ: 各カメラの単眼深度推定結果をヒートマップとして表示する。opt_colには以下ウィジェットを持つ
+        - Show masksラジオボタン: 深度画像に重ねて表示するインスタンスマスクの表示方法を指定する。以下の選択肢を持つ（デフォルトはNone）
+            - None: インスタンスマスク表示なし
+            - Original: クロージング処理適用前のマスクを表示
+            - Closed: クロージング処理適用後のマスクを表示
+        - Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - Label: ラベルで色分け
+            - Track ID: Track IDで色分け
+        - Instance textラジオボタン: インスタンスマスクの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
+            - None: 何も表示しない
+            - Label: ラベル文字を表示（文字色はマスクの色と一致）
+            - Track ID: Track IDを表示（文字色はマスクの色と一致）
+    - PountCloudタブ: 単眼深度推定およびLiDARから作成したインスタンスごと点群を3D散布図で表示する。opt_colには以下ウィジェットを持つ
+        - Raw LiDARチェックボックス: チェックすると生のLiDAR点群（全点表示だと重すぎるのでボクセル間引き済。PatchWork++で地面判定された部分は表示しない）を薄い灰色で表示
+        - LiDAR Groundチェックボックス: チェックするとLiDAR点群のうちPatchWork++で地面判定された部分（全点表示だと重すぎるのでボクセル間引き済）を茶色で表示
+        - Raw LiDARチェックボックス: チェックすると生のDepth点群（全点表示だと重すぎるのでボクセル間引き済）を薄い水色で表示
+        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Pointsラジオボタンで指定したノイズ除去を適用し、Instance Colorで指定した色で表示）
+        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Pointsラジオボタンで指定したノイズ除去を適用し、Instance Colorで指定した色で表示）
+        - Instance Pointsラジオボタン: 表示するインスタンスごと点群（LiDAR Instances/Depth Instancesチェックボックスで表示）にROR/DBSCANによるノイズ除去を適用するかを指定。以下の選択肢を持つ（デフォルト状態では選択無効で、推論サーバーでの推論実行時の処理結果をそのまま適用し、後述のFilter Paramsエクスパンダーで再フィルタを実行した後のみこのラジオボタンを選択できる）
+            - Raw: ノイズ除去適用前のインスタンスごと点群を表示
+            - ROR/DBSCAN: ノイズ除去適用後のインスタンスごと点群を表示
+        - Fitted Boxesチェックボックス: チェックするとBox Fittingでフィッティングされた3Dバウンディングボックスを重ねて表示
+        - Instance Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - Label: ラベルで色分け
+            - Track ID: Track IDで色分け
+            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
+        - カメラごとの表示指定チェックボックス: チェックされているカメラに紐づくインスタンスごと点群のみを表示する
+    - Box Fittingタブ: 3Dバウンディングボックスのフィッティング結果をBEV視点で表示する。現状は[こちらの論文](https://arxiv.org/abs/2302.01034)の手法（Method="convex_hull_moa"）を前提とした表示にしている
+        - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
+            - チェックしていない場合: インスタンスごと点群とフィッティングした3Dバウンディングボックスを表示するキャンバスのみを設置
+            - チェックしている場合: 左右にキャンバスを並べ、左側のキャンバスにはGround truthのバウンディングボックスを、右側のキャンバスにはインスタンスごと点群とフィッティングしたバウンディングボックスを重ねて表示
+        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Colorで指定した色で表示）
+        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Colorで指定した色で表示）
+        - Convex-Hullチェックボックス: チェックすると当てはめに使った凸包を重ねて表示
+        - Instance Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - Label: ラベルで色分け
+            - Track ID: Track IDで色分け
+            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
+    - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。
+        - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
+            - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる
+            - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthのバウンディングボックスを、右側の画像にはフィッティングしたバウンディングボックスを重ねて表示
+        - Instance Colorラジオボタン: 3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - Label: ラベルで色分け
+            - Track ID: Track IDで色分け
+            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
+        - Instance textラジオボタン: 画像上でインスタンスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
+            - None: 何も表示しない
+            - Label: ラベル文字を表示（文字色はマスクの色と一致）
+            - Track ID: Track IDを表示（文字色はマスクの色と一致）
+- PointCloudタブを選択しているとき、view_colには点群表示用のキャンバス以外にも、上から順番に以下のウィジェットを表示する（点群表示用のキャンバスが一番下）
+    - ビュー指定ボタン: クリックすると点群が規定の視点方向で再表示される。以下の3種類の視点を選択できる
+        - Global Viewボタン: 押すと、グローバル座標に対して固定された方向の視点（config.pyの`DEFAULT_GLOBAL_POINTCLOUD_EYE`と`DEFAULT_GLOBAL_POINTCLOUD_UP`で指定）となる
+        - Top Viewボタン: 押すと真上から見た視点にする（X軸=前方が右、Y軸=左方が上となるように表示される）
+        - Forward Viewボタン: 押すと真後ろから見た視点にする（Y軸=左方が左、Z軸=上方が上になるように表示される）
+    - Filter Paramsエクスパンダー: ROR/DBSCANによる点群のノイズ除去を再実行してパラメータ調整するための以下ウィジェットを設置
+        - 上の行: インスタンスごとLiDAR点群に適用する以下のROR/DBSCANパラメータを指定
+            - ROR nb_points
+            - ROR radius
+            - DBSCAN eps
+            - DBSCAN min_samples
+        - 真ん中の行: インスタンスごとDepth点群に適用する以下のROR/DBSCANパラメータを指定
+            - ROR nb_points
+            - ROR radius
+            - DBSCAN eps
+            - DBSCAN min_samples
+        - 下の行: 以下のボタンを設置
+            - Applyボタン: 上で指定したパラメータに基づきROR/DBSCANによる外れ値除去を再実行してキャンバスに表示する
+            - Resetボタン: 推論サーバーでの推論実行時の点群表示に戻す

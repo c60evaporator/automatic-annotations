@@ -785,9 +785,16 @@ with pointcloud_tab_view:
         has_lidar_instances = bool(run_info and run_info["use_lidar"])
         show_lidar_instances = st.checkbox(
             "LiDAR Instances", value=has_lidar_instances,
-            key="_w_pc_lidar_inst", disabled=not has_lidar_instances,
+            # **key に run を含める。** 固定キーだと、LiDAR ありの run で
+            # チェックした状態が LiDAR なしの run へ持ち越され、
+            # 無効化されたまま前の run の点群が表示され続ける。
+            # run ごとに別ウィジェットにすれば、切り替え時に既定値へ戻る
+            key=f"_w_pc_lidar_inst_{view_run_id}",
+            disabled=not has_lidar_instances,
             help=None if has_lidar_instances else "この run は Use LiDAR=False で実行されています",
         )
+        # 状態が残った場合の保険。無効な run では必ず表示しない
+        show_lidar_instances = show_lidar_instances and has_lidar_instances
         show_raw_depth = st.checkbox(
             "Raw Depth", value=settings.SHOW_RAW_DEPTH_POINTCLOUD,
             key="_w_pc_raw_depth",
@@ -830,7 +837,7 @@ with pointcloud_tab_view:
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
     fitted_boxes: list[dict] = []
-    refilter_summary: tuple[int, int, int] | None = None
+    refilter_summary: tuple[int, int, int, int, int] | None = None
 
     if view_run_id:
         info = lidar_info.get(selected_sample["token"])
@@ -881,15 +888,19 @@ with pointcloud_tab_view:
                 box_source = load_box_fittings(view_run_id, tokens) if (
                     show_fitted_boxes and tokens) else {}
                 # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）
-                depth_key = (
-                    "points_raw_ego" if points_mode == POINTS_MODE_RAW
-                    else "points_filtered_ego"
+                raw = points_mode == POINTS_MODE_RAW
+                depth_key = "points_raw_ego" if raw else "points_filtered_ego"
+                # LiDAR 側も同じ Instance Points の指定に従う
+                lidar_key = (
+                    "points_lidar_raw_ego" if raw
+                    else "points_lidar_filtered_ego"
                 )
-                lidar_key = None
                 refilter_summary = (
                     sum(i["num_points_raw"] for i in flat),
                     sum(i["num_points_kept"] for i in flat),
                     len(flat),
+                    sum(i.get("num_lidar_raw", 0) for i in flat),
+                    sum(i.get("num_lidar_kept", 0) for i in flat),
                 )
             else:
                 fittings = load_box_fittings(
@@ -1087,11 +1098,16 @@ with pointcloud_tab_view:
             )
             render_pointcloud(fig, counts)
             if refilter_summary is not None:
-                raw_total, kept_total, n_inst = refilter_summary
+                raw_total, kept_total, n_inst, lidar_raw, lidar_kept = refilter_summary
                 ratio = kept_total / raw_total * 100 if raw_total else 0.0
+                lidar_text = (
+                    f" / LiDAR {lidar_raw:,} → {lidar_kept:,} 点"
+                    if lidar_raw else ""
+                )
                 st.caption(
                     f"再フィルタ適用中: {n_inst} インスタンス / "
-                    f"{raw_total:,} → {kept_total:,} 点 ({ratio:.0f}% 残存)。"
+                    f"深度 {raw_total:,} → {kept_total:,} 点 ({ratio:.0f}% 残存)"
+                    f"{lidar_text}。"
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
 
@@ -1106,10 +1122,15 @@ with fitting_tab_view:
             "Compare with GT", value=False, key="_w_bf_compare_gt",
             help="GT ボックスの BEV を左に並べて表示する",
         )
+        bf_has_lidar = bool(run_info and run_info["use_lidar"])
         show_bf_lidar = st.checkbox(
-            "LiDAR Instances", value=False, key="_w_bf_lidar",
-            disabled=not (run_info and run_info["use_lidar"]),
+            "LiDAR Instances", value=False,
+            # PointCloud タブと同じ理由で run ごとにキーを分ける
+            key=f"_w_bf_lidar_{view_run_id}",
+            disabled=not bf_has_lidar,
+            help=None if bf_has_lidar else "この run は Use LiDAR=False で実行されています",
         )
+        show_bf_lidar = show_bf_lidar and bf_has_lidar
         show_bf_depth = st.checkbox(
             "Depth Instances", value=True, key="_w_bf_depth")
         show_hull = st.checkbox(

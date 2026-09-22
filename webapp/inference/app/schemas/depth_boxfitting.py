@@ -174,6 +174,10 @@ class RefilterFrame(BaseModel):
     # .npz に内部パラメータが無い run 向けのフォールバック
     width: int | None = None
     height: int | None = None
+    # LiDAR 側の再フィルタに使う（DERIVED_ROOT からの相対パス）
+    lidar_path: str | None = None
+    ego_pose: dict[str, Any] | None = None
+    reference_ego_pose: dict[str, Any] | None = None
 
 
 class RefilterRequest(BaseModel):
@@ -185,8 +189,9 @@ class RefilterRequest(BaseModel):
     """
     frames: list[RefilterFrame] = Field(min_length=1)
     depth_params: dict[str, Any] = Field(default_factory=dict)
-    # LiDAR 側は未実装（use_lidar の混合を入れるときに使う）
+    # LiDAR 側の外れ値除去。深度とは別のパラメータを使う
     lidar_params: dict[str, Any] = Field(default_factory=dict)
+    min_lidar_points: int = 0
     # ROR の nb_points にかけるラベルごとの倍率
     nb_points_ratio: dict[str, float] = Field(default_factory=dict)
     stored_points_max: int = 500
@@ -203,6 +208,11 @@ class RefilterInstanceResult(BaseModel):
     # 間引き後の座標。前後で同じボクセルサイズを使う
     points_raw_ego: dict[str, Any] | None = None
     points_filtered_ego: dict[str, Any] | None = None
+    # LiDAR 側
+    num_lidar_raw: int = 0
+    num_lidar_kept: int = 0
+    points_lidar_raw_ego: dict[str, Any] | None = None
+    points_lidar_filtered_ego: dict[str, Any] | None = None
 
 
 class RefilterResponse(BaseModel):
