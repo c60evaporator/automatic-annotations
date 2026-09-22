@@ -572,6 +572,13 @@ def refilter_sample(
         )
 
     frame_by_token = {f["token"]: f for f in frames}
+    # 基準センサーの ego_pose。LiDAR 点をカメラへ投影するときの時刻合わせに使う。
+    # frames はこの sample のキーフレームなので、基準センサーの行が 1 つある
+    reference_ego_pose = next(
+        (f["ego_pose"] for f in frames
+         if f["channel"] == settings.EGO_REFERENCE_CHANNEL and f.get("ego_pose")),
+        None,
+    )
     payload_frames = []
     for token, items in fittings.items():
         info = depth_info.get(token)
