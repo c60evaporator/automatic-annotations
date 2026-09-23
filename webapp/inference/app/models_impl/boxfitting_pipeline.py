@@ -214,6 +214,7 @@ class BoxFittingPipeline:
         reference_ego_poses: dict[str, dict[str, Any]] | None = None,
         lidar_path: Path | str | None = None,
         min_lidar_points: int = 0,
+        depth_correction_method: str | None = None,
         fit_boxes: bool = True,
         **_: Any,
     ) -> list[dict[str, Any]]:
@@ -227,6 +228,9 @@ class BoxFittingPipeline:
                 渡すとインスタンスごとの LiDAR 点群も作る
             min_lidar_points: LiDAR 点がこの数に届かないインスタンスは
                 LiDAR 点群を持たせない（少なすぎる点は補正に使えない）
+            depth_correction_method: 指定すると、LiDAR を基準に深度点群を補正し、
+                **補正後の深度点群と LiDAR 点群を混ぜて**当てはめに使う。
+                None なら補正せず、従来どおり深度点群のみで当てはめる
             fit_boxes: False なら当てはめを行わず、代わりに各エントリへ
                 ``"_summary"``（凸包の頂点と z 範囲）を入れて返す。
                 カメラ跨ぎの結合では、結合してから当てはめるため
@@ -396,6 +400,51 @@ class BoxFittingPipeline:
             entry["num_points_lidar"] = int(lidar_instance.shape[0])
             entry["num_points_lidar_kept"] = int(lidar_instance.shape[0])
 
+            # --- LiDAR を基準に深度点群を補正し、混ぜる ------------------
+            # 当てはめ・結合に使う点群。補正できなければ深度点群のまま
+            fit_points = points_ego
+            if depth_correction_method and lidar_instance.shape[0]:
+                from app.services.depth_correction import (
+                    apply_correction,
+                    fit_correction,
+                    sample_depth_at,
+                )
+                from app.services.lidar_ops import ego_to_camera
+
+                # LiDAR 点をカメラ座標へ（時刻合わせのため基準 ego → カメラ時刻 ego）
+                lidar_camera = ego_to_camera(
+                    ego_to_ego(
+                        lidar_instance,
+                        reference_pose_for_lidar or {},
+                        frame.get("ego_pose") or {},
+                    ) if reference_pose_for_lidar else lidar_instance,
+                    calib,
+                )
+                # 深度マップの画素で対応を取る。深度マップと同じ解像度の
+                # 内部パラメータとマスクを使う
+                z_lidar, z_pred = sample_depth_at(
+                    lidar_camera, depth, intrinsic, mask=closed,
+                )
+                correction = fit_correction(
+                    z_lidar, z_pred, depth_correction_method
+                )
+                if correction is not None:
+                    corrected_camera = apply_correction(points_camera, correction)
+                    corrected_ego = camera_to_ego(
+                        corrected_camera, calib["translation"], calib["rotation"]
+                    )
+                    if reference_pose:
+                        corrected_ego = ego_to_ego(
+                            corrected_ego, frame.get("ego_pose") or {}, reference_pose
+                        )
+                    entry["depth_correction"] = correction
+                    entry["points_depth_corrected_ego"] = points_to_json(
+                        downsample_to_max(corrected_ego, stored_points_max)
+                    )
+                    # 補正後の深度点群と LiDAR 点群を混ぜる。
+                    # 深度点群は面を密に、LiDAR は距離を正確に与える
+                    fit_points = np.vstack([corrected_ego, lidar_instance])
+
             origin_xy = _camera_origin_xy(
                 calib, frame.get("ego_pose") or {}, reference_pose
             )
@@ -408,7 +457,7 @@ class BoxFittingPipeline:
                     or (1.0, 99.0)
                 entry["status"] = "pending_merge"
                 entry["_summary"] = summarize_instance(
-                    points_ego,
+                    fit_points,
                     z_percentiles=(float(percentiles[0]), float(percentiles[1])),
                 )
                 entry["_summary"]["sensor_origin_xy"] = origin_xy
@@ -418,7 +467,7 @@ class BoxFittingPipeline:
             # MOA はセンサーから見た隠れ方を使うため、ego 座標での
             # カメラ位置を渡す（(0,0) はセンサー座標系のときの値）
             fit = fit_box(
-                points_ego,
+                fit_points,
                 (box_fitting_params or {}).get("method", BOXFIT_METHOD_CONVEX_HULL_MOA),
                 box_fitting_params,
                 # 原点も同じ座標系へ移す。点群だけ変換して原点を

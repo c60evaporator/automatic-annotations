@@ -81,6 +81,9 @@ class BoxFittingRequest(BaseModel):
     # カメラ間でずれる。カメラを跨いで点群を比べる前に、ここへ揃える。
     # 空なら変換しない（従来どおりカメラ自身の ego 座標のまま）
     reference_ego_poses: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # LiDAR を基準に深度点群を補正する方式（scale / shift / affine）。
+    # None なら補正せず、深度点群のみで当てはめる
+    depth_correction_method: str | None = None
     # カメラ跨ぎの結合。空なら結合しない（カメラごとに当てはめる）
     merge_params: dict[str, Any] = Field(default_factory=dict)
     # merge_params の label_match='category_group' で使う
@@ -149,6 +152,9 @@ class BoxFittingResult(BaseModel):
     hull_xy: dict[str, Any] | None = None
     # 手法固有の指標（occlusion_area など）
     fit_metrics: dict[str, Any] | None = None
+    # LiDAR を基準に補正した深度点群と、その係数
+    points_depth_corrected_ego: dict[str, Any] | None = None
+    depth_correction: dict[str, Any] | None = None
     # カメラ跨ぎで結合した後のトラック ID
     global_track_id: str | None = None
     # グループの代表行か（ボックスは代表 1 行にだけ入る）

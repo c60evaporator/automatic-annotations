@@ -174,6 +174,8 @@ class BoxFittingStub:
         # 本実装と引数を揃える。False なら当てはめず要約だけ返す
         # （カメラ跨ぎの結合をスタブでも確認できるように）
         fit_boxes: bool = True,
+        # 本実装と引数を揃える（スタブは補正しない）
+        depth_correction_method: str | None = None,
         stub_delay_sec: float | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:

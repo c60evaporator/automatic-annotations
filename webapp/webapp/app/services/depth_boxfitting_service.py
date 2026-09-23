@@ -76,6 +76,7 @@ def build_boxfitting_payload(
     lidar_params: dict[str, Any],
     box_fitting_params: dict[str, Any] | None = None,
     merge_params: dict[str, Any] | None = None,
+
     stub_delay_sec: float | None = None,
 ) -> dict[str, Any]:
     """推論サーバーへ送るリクエストを組み立てる.
@@ -173,6 +174,9 @@ def build_boxfitting_payload(
         "reference_ego_poses": reference_ego_poses,
         # カメラ跨ぎの結合。空なら結合しない
         "merge_params": merge_params or {},
+        # LiDAR を基準に深度点群を補正する方式（use_lidar のときだけ効く）。
+        # lidar_params に入れて run に記録し、後から見返せるようにしている
+        "depth_correction_method": (lidar_params or {}).get("depth_correction"),
         "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         # 保存する点群の上限（間引き後）。推論サーバー側で間引いて返す
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,

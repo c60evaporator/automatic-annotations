@@ -253,6 +253,13 @@ class Settings(BaseSettings):
     # 深度点群との混合（座標補正）は未実装で、現在は表示と外れ値除去まで
     BOXFIT_USE_LIDAR_DEFAULT: bool = True
 
+    # LiDAR を基準に深度点群を補正する方式。
+    # インスタンス単位では深度の範囲が狭く（車 1 台で 4〜5 m）、
+    # スケールとオフセットがほぼ区別できないため 1 パラメータで足りる。
+    # 実測（LiDAR 3 点）: scale 0.16 m / shift 0.15〜0.22 m / affine 0.22〜0.25 m
+    DEPTH_CORRECTION_METHODS: list[str] = ["scale", "shift", "affine"]
+    DEFAULT_DEPTH_CORRECTION_METHOD: str = "scale"
+
     # --- カメラ間の結合 ----------------------------------------------------
     # 点群を揃える基準の座標系を決めるセンサー。
     # カメラごとに sample_data のタイムスタンプが違うため、

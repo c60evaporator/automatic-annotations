@@ -195,6 +195,10 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         min_lidar_points=int(
                             (req.lidar_params or {}).get("min_points", 0)
                         ),
+                        # LiDAR を基準に深度点群を補正し、混ぜて当てはめる
+                        depth_correction_method=(
+                            req.depth_correction_method if req.use_lidar else None
+                        ),
                         # 結合する場合は当てはめを後回しにする
                         fit_boxes=not merge_enabled,
                         stub_delay_sec=req.stub_delay_sec,

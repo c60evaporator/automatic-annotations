@@ -124,6 +124,11 @@ PC_VIEW = "boxfit_pc_view"
 PC_VIEW_REVISION = "boxfit_pc_view_rev"
 # Apply で確定した再フィルタのパラメータ。None なら run 保存時の点群を使う
 PC_REFILTER_PARAMS = "boxfit_refilter_params"
+# 深度点群を補正前・補正後のどちらで表示するか
+OPT_PC_DEPTH_INST, W_PC_DEPTH_INST = "boxfit_pc_depth_inst", "_w_boxfit_pc_depth_inst"
+DEPTH_INSTANCE_RAW = "raw"
+DEPTH_INSTANCE_CORRECTED = "LiDAR corrected"
+DEPTH_INSTANCE_MODES = (DEPTH_INSTANCE_RAW, DEPTH_INSTANCE_CORRECTED)
 # Box Fitting タブの表示オプション
 OPT_BF_COLOR, W_BF_COLOR = "boxfit_bf_color", "_w_boxfit_bf_color"
 
@@ -273,6 +278,16 @@ with param_col:
             )
 
         with lidar_tab:
+            depth_correction_method = st.selectbox(
+                "Depth Correction", settings.DEPTH_CORRECTION_METHODS,
+                index=settings.DEPTH_CORRECTION_METHODS.index(
+                    settings.DEFAULT_DEPTH_CORRECTION_METHOD
+                ),
+                help=("LiDAR を基準に深度点群を補正する方式（Use LiDAR のときだけ効く）。"
+                      "scale: 視線方向の伸縮（既定）/ shift: 距離のずれ / "
+                      "affine: 伸縮＋ずれ（点数が少ないと scale へ落ちる）。"
+                      "インスタンス単位では深度の範囲が狭いため、1 パラメータで足りる"),
+            )
             num_lidar_sweeps = st.number_input(
                 "LiDAR Sweeps", min_value=1, max_value=settings.SWEEPS_PER_SAMPLE,
                 value=settings.LIDAR_NUM_SWEEPS_DEFAULT, step=1,
@@ -405,6 +420,8 @@ depth_params = {
 }
 lidar_params = {
     "min_points": int(min_lidar_points),
+    # LiDAR を基準に深度点群を補正する方式。run に記録するため lidar_params に入れる
+    "depth_correction": depth_correction_method,
     "ror_nb_points": int(lidar_ror_nb), "ror_radius": float(lidar_ror_radius),
     "dbscan_eps": float(lidar_dbscan_eps), "dbscan_min_samples": int(lidar_dbscan_min),
 }
@@ -813,6 +830,15 @@ with pointcloud_tab_view:
                   "下の Filter Params で Apply すると選べるようになる"),
         )
 
+        S.init_sticky(W_PC_DEPTH_INST, OPT_PC_DEPTH_INST, DEPTH_INSTANCE_RAW)
+        depth_instance_mode = st.radio(
+            "Depth Instance", DEPTH_INSTANCE_MODES, key=W_PC_DEPTH_INST,
+            on_change=S.sync_sticky, args=(W_PC_DEPTH_INST, OPT_PC_DEPTH_INST),
+            help=("深度点群を補正前（raw）と、LiDAR を基準に補正した後"
+                  "（LiDAR corrected）のどちらで表示するか。"
+                  "補正できなかったインスタンスは補正前で表示する"),
+        )
+
         show_fitted_boxes = st.checkbox(
             "Fitted Boxes", value=False, key="_w_pc_fitted_boxes",
             help=("Box Fitting で推定した 3D ボックスを点群に重ねる。"
@@ -909,6 +935,18 @@ with pointcloud_tab_view:
                 ) if tokens else {}
                 flat = [fit for items_ in fittings.values() for fit in items_]
                 depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_FILTERED]
+                if depth_instance_mode == DEPTH_INSTANCE_CORRECTED:
+                    # 補正後の点群で表示する。補正できなかったインスタンス
+                    # （LiDAR 点が足りない等）は補正前のまま表示する。
+                    # 元の dict は書き換えない（キャッシュを共有しているため）
+                    flat = [
+                        {**fit, "_depth_display": (
+                            fit.get("points_depth_corrected_ego")
+                            or fit.get("points_depth_ego")
+                        )}
+                        for fit in flat
+                    ]
+                    depth_key = "_depth_display"
                 refilter_summary = None
                 box_source = fittings
 
