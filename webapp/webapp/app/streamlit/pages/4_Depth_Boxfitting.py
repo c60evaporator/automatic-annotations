@@ -227,10 +227,12 @@ with param_col:
             label_visibility="collapsed",
         )
 
-        (general_tab, depth_tab, lidar_tab, fitting_tab,
-         merge_tab) = st.tabs(
-            ["General", "Depth Estimation", "LiDAR Pointcloud", "Box Fitting",
-             "Inter-cam Merge"]
+        # 並びは実際の適用順。点群を作る → カメラ間で結合する →
+        # 結合した点群にボックスを当てはめる
+        (general_tab, depth_tab, lidar_tab, merge_tab,
+         fitting_tab) = st.tabs(
+            ["General", "Depth Estimation", "LiDAR Pointcloud",
+             "Inter-cam Merge", "Box Fitting"]
         )
 
         with general_tab:
@@ -321,30 +323,6 @@ with param_col:
                 key="_w_lidar_dbscan_min",
             )
 
-        with fitting_tab:
-            boxfit_method = st.selectbox(
-                "Method", settings.BOXFIT_METHODS,
-                index=settings.BOXFIT_METHODS.index(settings.BOXFIT_METHOD_DEFAULT)
-                if settings.BOXFIT_METHOD_DEFAULT in settings.BOXFIT_METHODS else 0,
-                help=("convex_hull_moa: BEV の凸包に対し、センサーから見た"
-                      "オクルージョン面積が最小になる向きを探す"),
-            )
-            angle_step_deg = st.slider(
-                "angle_step_deg",
-                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
-                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
-                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
-                help="向きの探索刻み。細かいほど遅くなる",
-            )
-            z_percentiles = st.slider(
-                "z_percentiles", 0.0, 100.0,
-                value=(settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT,
-                       settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT),
-                step=0.5,
-                help=("高さを決めるパーセンタイル。0/100 にすると"
-                      "はみ出した 1 点で箱が縦に伸びる"),
-            )
-
         with merge_tab:
             st.caption(
                 "同じ物体が複数カメラに写ると別トラックになるため、"
@@ -399,6 +377,30 @@ with param_col:
                           "複数カメラに写るキーフレームは高々 1〜2 なので、"
                           "割合ではなくフレーム数で判定する"),
                 )
+
+        with fitting_tab:
+            boxfit_method = st.selectbox(
+                "Method", settings.BOXFIT_METHODS,
+                index=settings.BOXFIT_METHODS.index(settings.BOXFIT_METHOD_DEFAULT)
+                if settings.BOXFIT_METHOD_DEFAULT in settings.BOXFIT_METHODS else 0,
+                help=("convex_hull_moa: BEV の凸包に対し、センサーから見た"
+                      "オクルージョン面積が最小になる向きを探す"),
+            )
+            angle_step_deg = st.slider(
+                "angle_step_deg",
+                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
+                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
+                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
+                help="向きの探索刻み。細かいほど遅くなる",
+            )
+            z_percentiles = st.slider(
+                "z_percentiles", 0.0, 100.0,
+                value=(settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT,
+                       settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT),
+                step=0.5,
+                help=("高さを決めるパーセンタイル。0/100 にすると"
+                      "はみ出した 1 点で箱が縦に伸びる"),
+            )
 
 mask_params = {"dilation": int(mask_dilation), "erosion": int(mask_erosion)}
 # 結合しない場合は空の dict を渡す（推論側が結合を飛ばす）
@@ -641,6 +643,18 @@ frames = [
 ]
 frames_by_channel = {f["channel"]: f for f in frames}
 frame_tokens = tuple(f["token"] for f in frames)
+
+# 基準センサーの ego_pose。パイプラインが点群を揃えている座標系はこれ。
+# 表示でも同じ基準に揃えないと、カメラごとの時刻差ぶん（自車 10 m/s・
+# 時刻差 25 ms で 0.25 m）ずれて、継ぎ目が実際より悪く見える
+reference_ego_pose = next(
+    (
+        f["ego_pose"] for f in list_frames_by_scene(dataset_id, scene_token)
+        if f["sample_token"] == selected_sample["token"]
+        and f["channel"] == settings.EGO_REFERENCE_CHANNEL and f.get("ego_pose")
+    ),
+    None,
+)
 
 depth_tab_view, pointcloud_tab_view, fitting_tab_view, cam_tab_view = st.tabs(
     ["Depth Estimation", "PointCloud", "Box Fitting", "Box on Cam"]
@@ -888,7 +902,10 @@ with pointcloud_tab_view:
                 depth = load_depth_map(meta["depth_path"])
                 if depth is None:
                     continue
-                chunks.append(depth_to_ego_points(depth, frame, stride=4))
+                chunks.append(depth_to_ego_points(
+                    depth, frame, stride=4,
+                    reference_ego_pose=reference_ego_pose,
+                ))
             if chunks:
                 raw_depth_points = np.vstack(chunks)
 
@@ -1005,8 +1022,8 @@ with pointcloud_tab_view:
 
         current_view = st.session_state[PC_VIEW]
         if current_view == VIEW_GLOBAL:
-            # ego_pose はどのカメラフレームでも同じ sample のものを使う
-            ego_pose = next(
+            # 点群は基準 ego 座標にあるので、視点も基準の姿勢で決める
+            ego_pose = reference_ego_pose or next(
                 (f["ego_pose"] for f in frames if f.get("ego_pose")), None
             )
             camera = global_camera(
@@ -1225,10 +1242,14 @@ with fitting_tab_view:
             bf_groups += group_instance_points(
                 bf_flat, color_mode=bf_color_mode, points_key="points_lidar_ego")
 
-        # GT は sample 単位。ego_pose はどのカメラフレームでも同じ
+        # GT は sample 単位。**基準 ego 座標へ変換する**。
+        # 推定ボックスが基準 ego にあるので、カメラごとの ego_pose を使うと
+        # 時刻差ぶんずれて並べた比較が成立しない
         gt_boxes = []
         if compare_gt:
-            ego_pose = next((f["ego_pose"] for f in frames if f.get("ego_pose")), None)
+            ego_pose = reference_ego_pose or next(
+                (f["ego_pose"] for f in frames if f.get("ego_pose")), None
+            )
             if ego_pose:
                 gt_boxes = [
                     {

@@ -19,7 +19,6 @@ class Settings(BaseSettings):
         case_sensitive=True,
     )
 
-    APP_NAME:  str = "automatic-annotation-app"
     LOG_LEVEL: str = "INFO"
 
     # --- データ配置 -------------------------------------------------------
@@ -36,8 +35,10 @@ class Settings(BaseSettings):
     SQLITE_BUSY_TIMEOUT_MS: int = 10_000
 
     # --- 推論サーバー -----------------------------------------------------
-    INFERENCE_BASE_URL:    str   = "http://inference:8000"
-    INFERENCE_TIMEOUT_SEC: float = 1800.0
+    # タイムアウトは用途ごとに差が大きいので、ここではなく
+    # services/inference_client.py の定数で持つ
+    # （投入・ポーリング・再フィルタでそれぞれ別の値）
+    INFERENCE_BASE_URL: str = "http://inference:8000"
 
     # --- ラベル変換 -----------------------------------------------------
     NUSC_CATEGORY_TO_LABEL: dict[str, str] = {  # nuScenes category -> 検出ラベル
@@ -270,8 +271,8 @@ class Settings(BaseSettings):
     # （CAM_FRONT など）を指定すれば同じ仕組みで動く
     EGO_REFERENCE_CHANNEL: str = "LIDAR_TOP"
 
-    # カメラ間の同一インスタンス結合の判定方法
-    MERGE_METHOD_BEV_HULL: str = "BEV convex-hull"
+    # カメラ間の同一インスタンス結合の判定方法。
+    # 手法を増やすときは MERGE_METHODS に足す（UI の Selectbox がこれを使う）
     MERGE_METHODS: list[str] = ["BEV convex-hull"]
     DEFAULT_MERGE_METHOD: str = "BEV convex-hull"
     # BEV 凸包の重なり率の下限。

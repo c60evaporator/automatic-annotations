@@ -31,17 +31,17 @@
 - 画面上部はparam_col, map_colで左右に分割
 - param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
     - Sample Interval: 推論を実施するsampleの間隔。number_inputで選択
-    - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なるDET2D_DEFAULT_SCORE_THRESHOLDSにここで選択した倍率を掛けたものとなる
-    - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`Settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`Settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
+    - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる
+    - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
     - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /detection2d/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /detection2d/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存する
     - 推論が完了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。ただし過去に手作業で修正したバウンディングボックスがあれば優先して使用するため、保存前に以下処理をsample_data_tokenごと（Sample＆カメラごと）に実行
         - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
-        - マッチングしたIoUが閾値（`Settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
+        - マッチングしたIoUが閾値（`settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
         - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
         - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`instance_tracking_2d_params`から参照されていない`detection_2d_params`レコードが`Settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`instance_tracking_2d_params`から参照されていない`detection_2d_params`レコードが`settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
 - `detection_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`instance_tracking_2d_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
     - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
@@ -71,9 +71,9 @@
 - SAM2を用いて、与えたラベルの2Dバウンディングボックスを検出する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Instance Tracking`参照
 - 画面上部はparam_col, map_colで左右に分割
 - param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
-    - Box Prompt: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブル内の`status='succeeded'`のレコードをラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
-    - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`Settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`Settings.SWEEPS_PER_SAMPLE`を上限としたnumber_input
-    - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`Settings.DEFAULT_TRACKING_IOU_THRESHOLD`
+    - Box Prompt: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブルのレコードをラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
+    - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`settings.SWEEPS_PER_SAMPLE`を上限としたnumber_input
+    - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`settings.DEFAULT_TRACKING_IOU_THRESHOLD`
     - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択。”Box”, “Mask”のselectboxで良さそう。デフォルトは”Box”
     - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。以下の選択肢を持つ
         - Label: ラベルが一致する場合のみマッチング対象とする
@@ -86,7 +86,7 @@
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
     - 推論が完了したら、即時に自動保存
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`Settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
 - `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
     - 「このrunを表示」ボタン: 押すと後述のview_colで表示されるインスタンスマスク等の情報をラジオボタン選択したレコードのものに切り替える
@@ -122,7 +122,7 @@
     - Generalタブ: Depth/LiDAR点群両方の処理に適用するパラメータ
         - Use LiDAR: LiDAR点群を使用するかどうかを指定するチェックボックス
         - Dilation: インスタンスマスクのクロージング処理の膨張カーネルサイズ
-        - Erosion: インスタンスマスクのクロージング処理の
+        - Erosion: インスタンスマスクのクロージング処理の収縮カーネルサイズ
     - Depth Estimation: 深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
@@ -132,7 +132,7 @@
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
     - LiDAR Pointcloud: LiDAR点群の結合・ノイズ除去・Depth点群とのに使用するパラメータ
         - LiDAR Sweeps: キーフレームあたりで結合するLiDAR点群のsweep数
-        - Min LiDAR Points: インスタンス点群として使用するための点数のしきい値（これを下回ったインスタンスはDepth点群のみ使用する）
+        - Min LiDAR Points: インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
             - radius: radiusパラメータ（注目する点を中心とした球の半径）
@@ -145,13 +145,21 @@
                 - angle_step_deg: 最もフィットするyaw角度を探索するステップ
                 - z_percentile: 高さの下限と上限として採用するパーセンタイル
     - Inter-cam Merge: 複数カメラ間での同一インスタンス結合に使用するパラメータ
-        - 
-
+        - Enable Merge: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス
+        - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン。以下の選択肢を持つ
+            - BEV convex-hull: XY平面での凸包の重なりがしきい値以上＆重心距離がしきい値以下なら同一判定。同一判定されたフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。以下のパラメータを使用
+                - Overlap Threshold: XY平面での凸包の重なりのしきい値
+                - Max Centroid Distance: インスタンス間の重心距離のしきい値。重心がこれ以上離れた組は、凸包を作る前に捨てる
+                - Min Match Frames: 同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する
+        - Label Match: 上記同一インスタンス結合判定にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。以下の選択肢を持つ
+            - Label: ラベルが一致する場合のみマッチング対象とする
+            - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
+            - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
 - 推論container: Detection2D・Instance Tracking画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`depth_estimation_params`、`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルに保存する
     - 推論が完了したら、即時に自動保存
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`レコードが`Settings.DEPTH_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される）
+    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`レコードが`settings.DEPTH_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
 - `depth_estimation_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
     - 「このrunを表示」ボタン: 押すと後述のview_colで表示される点群や3Dバウンディングボックス等の情報をラジオボタン選択したレコードのものに切り替える

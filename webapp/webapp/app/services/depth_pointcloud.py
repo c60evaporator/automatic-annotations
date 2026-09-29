@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from app.services.geometry.transform import make_transform
@@ -93,11 +95,14 @@ def depth_to_ego_points(
     *,
     stride: int = 4,
     max_depth: float | None = 60.0,
+    reference_ego_pose: dict[str, Any] | None = None,
 ) -> np.ndarray:
     """深度マップを ego 座標の点群にする（表示用の入口）.
 
     Args:
-        frame: calibrated_sensor と width/height を持つフレーム情報
+        frame: calibrated_sensor / width / height / ego_pose を持つフレーム情報
+        reference_ego_pose: 指定すると、この姿勢の ego 座標へ揃える
+            （カメラ間で点群を比べるときに必要）
     """
     calib = frame.get("calibrated_sensor") or {}
     intrinsic = calib.get("camera_intrinsic")
@@ -109,6 +114,17 @@ def depth_to_ego_points(
         full_width=frame["width"], full_height=frame["height"],
         stride=stride, max_depth=max_depth,
     )
-    return camera_points_to_ego(
+    points_ego = camera_points_to_ego(
         camera_points, calib["translation"], calib["rotation"]
     )
+    if reference_ego_pose:
+        # カメラ自身の時刻の ego 座標から、sample の基準 ego 座標へ移す。
+        # パイプラインが保存する点群は基準 ego なので、表示でも揃える。
+        # 揃えないとカメラ間で時刻差ぶんずれ（自車 10 m/s・25 ms で 0.25 m）、
+        # 継ぎ目が実際より悪く見える
+        from common.transform3d import ego_to_ego
+
+        points_ego = ego_to_ego(
+            points_ego, frame.get("ego_pose") or {}, reference_ego_pose
+        )
+    return points_ego

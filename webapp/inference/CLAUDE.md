@@ -2,7 +2,62 @@
 
 ## Detection2D
 
-GroundingDINOによるDetection2Dは、パラメータで指定したSample Intervalごとに実施する（間引き後のサンプル数N' × カメラ数C × カテゴリグループ数G回推論が実施される）。
+Detection2Dでは、カメラ画像を入力としてGroundingDINOによる2D物体検出とSigLIP2によるラベルの再判定を実施し、物体のバウンディングボックスとラベルを得ます
+
+### 推論の実施フロー
+
+Detection2Dは、以下のフローで行われます
+
+- Sample Interval間隔のキーフレーム → カメラ → カテゴリグループのループ（実行単位の詳細は後述）で以下手順でGroundingDINOによる推論を実施
+    - カテゴリグループ内のラベルを`settings.LABEL_TO_CATEGORY_GROUP`に基づき取得してリスト化
+    - カテゴリグループ内のラベルに紐づくサブラベルを`settings.LABEL_TO_SUBLABEL`に基づき取得してリスト化
+    - 各サブラベル名のアンダースコアをスペースに置き換えたのち、リストをピリオド区切りで結合したテキストをプロンプトとする
+    - プロンプトを渡してGrounding DINOで推論
+    - 推論で得られたサブラベルを`settings.LABEL_TO_SUBLABEL`で逆引きしてラベルに戻す
+- GroundingDINOで得られた各バウンディングボックスのラベルを、以下手順でSigLIP2により再判定
+    - GroundingDINOのラベルに応じて`settings.RE_CLASSIFICATION_CANDIDATES`から再判定のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）
+    - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
+    - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、最もスコアの大きいラベルを採用
+    - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
+
+### 推論に使用するパラメータ
+
+Detection2Dでは、以下のパラメータを指定できます
+
+#### UIで指定可能なパラメータ
+
+UI（Detection2Dページの画面上部のエクスパンダー）からは以下パラメータを指定できます
+
+|パラメータ名|型|内容|デフォルト値|
+|---|---|---|---|
+|Sample Interval|int|推論を実施するsample（キーフレーム）の間隔|`settings.DET2D_DEFAULT_SAMPLE_INTERVAL`で指定|
+|Score Threshold|float|検出したバウンディングボックスのscore閾値にかける倍率。実際に適用する閾値は、カテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる|1.0|
+|NMS Threshold|float|検出したバウンディングボックスでNMSを実施する際に、IoUの閾値にかける倍率。実際に適用する閾値は、同ラベル間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別ラベル間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる|1.0|
+|Re-Classification Crop Margin|float|SigLIP2の再判定用切り出し画像をGroudingDINOのバウンディングボックスから拡張する割合|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`で指定|
+
+#### 設定ファイルから指定するパラメータ
+
+設定ファイル`webapp/app/core/config.py`からは、以下のパラメータを設定できます
+
+|設定名|型|内容|
+|---|---|---|
+|`settings.NUSC_CATEGORY_TO_LABEL`|dict[str, str]|nuScenes形式データセットのcategoryをDetection2Dのラベルに変換するdict。keyがnuScenesのcagtegory名、valueがDetection2Dのラベル|
+|`settings.LABEL_TO_NUSC_CATEGORY`|dict[str, str]|Detection2DのラベルをnuScenes形式データセットのcategoryに変換するdict。keyがDetection2Dのラベル、valueがnuScenesのcagtegory名|
+|`settings.LABEL_TO_SUBLABEL`|dict[str, list[str]]|Detection2DのラベルをGroundingDINO推論で使用するサブラベルに変換するdict。keyがDetection2Dのラベル、valueがサブラベル|
+|`settings.LABEL_TO_CATEGORY_GROUP`|dict[str, str]|Detection2DのラベルをGrounidingDINO推論の実行単位であるカテゴリグループに変換するdict。keyがDetection2Dのラベル、valueがカテゴリグループ|
+|`settings.DET2D_DEFAULT_SAMPLE_INTERVAL`|int|Sample Intervalパラメータのデフォルト値|
+|`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`|dict[str, float]|GroundingDINOのスコア閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがスコア閾値のデフォルト値。実際の推論時はこの値に前述のScore Thresholdパラメータを掛けた値未満のバウンディングボックスを削除する|
+|`settings.DET2D_NMS_SAME_CLASS_IOUS`|dict[str, float]|GroundingDINOの同ラベルNMSで使用する閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の同ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意。またサブラベルではなくラベルで判定することにも注意）|
+|`settings.DET2D_NMS_CROSS_CLASS_IOU`|float|GroundingDINOの別ラベルNMSで使用する閾値のデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の別ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意）|
+|`settings.RE_CLASSIFICATION_CANDIDATES`|dict[str, dict[str,str]]|Detection2Dのラベルごとに、SigLIP2によるラベル再判定のラベル候補と最終ラベルを指定するdict。keyがDetection2Dが付けたラベル、valueのkeyがラベル候補、valueのvalueが最終的に割り当てるラベルとなる。最終的に割り当てるラベルがNoneの場合、そのボックスは削除する|
+|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`|float|前述のRe-Classification Crop Marginパラメータのデフォルト値|
+|`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|float|前述のRe-Classification Crop Marginパラメータの最大値|
+|`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
+|`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
+
+### 推論の実行単位
+
+Detection2Dは、パラメータで指定したSample Intervalごとに実施する（間引き後のサンプル数N' × カメラ数C × カテゴリグループ数G回推論が実施される）。
 例えばSample Interval=4、カテゴリグループ数3のとき、以下のように推論が行われる
 
 - 1回目の推論: Sample0の画像を入力データとして与え、カテゴリグループ1に含まれる複数ラベルをプロンプトとして与えて推論を実施
@@ -43,7 +98,7 @@ LABEL_TO_CATEGORY_GROUP: dict[str, str] = {
 }
 category_groups = set(list(LABEL_TO_CATEGORY_GROUP.values()))
 # ラベル -> GroundingDINOでプロンプトに使用するサブラベルの変換dict
-LABEL_TO_SUBLABEL: dict[str, str] = {  
+LABEL_TO_SUBLABEL: dict[str, str] = {
     "car": ["car", "van"],
     "truck": ["truck", "tank_truck"],
     "construction_vehicle": ["construction_vehicle"],
@@ -94,7 +149,59 @@ for sample_index in proc_sample_indices:
 
 ## Instance Tracking
 
-SAM2によるInstance Trackingは、`detection_2d_params`（Detection2Dでの推論実行単位でパラメータを保持するテーブル）のSample Intervalごとに実施する。このSample Interval間のフレームをまとめてトラッキングに利用する（キーフレームだけでなく、Sweeps per Sampleパラメータに応じて非キーフレームをほぼ等間隔となるよう選択して使用する。このトラッキングに利用するフレーム群をブロックと呼ぶこととする）。
+Instance Trackingでは、Detection2Dのバウンディングボックスとカメラ画像を入力として、SAM2によるインスタンスセグメンテーションとトラッキングを実施し、各物体のキーフレームごとのインスタンスマスクとtrack_idを得ます
+
+### 推論の実施フロー
+
+Instance Trackingは、以下のフローで行われます
+
+- 入力とするDetection2Dの結果を選択
+- カメラ → 選択したDetection2DのSample Interval間隔のキーフレームのループ（実行単位の詳細は後述）で、以下手順でSAM2による推論を実施
+    - 推論対象データとして、対象キーフレームからSample Interval後のキーフレームまで、各キーフレームあたりSweeps per Sampleフレームを使用する（例: Sample Interval=4, Sweeps per Samples=2のとき、全部で9フレームを推論用データとして使用。このひとまとまりの推論用フレームをブロックと呼ぶこととする）
+    - Track ID Inheritance="continuous_id"のとき: 以下フローでForward方向のトラッキング推論とtrack_idの継承を実施
+        - 最初のフレームにDetection2D推論結果をプロンプトとして与え、時間順方向（Forward方向）にSAM2のpropagation推論を実施
+        - 得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチングし、マッチングしたtrack_idを次のブロックに引き継ぐ
+    - Track ID Inheritance="forward_backward_matching"のとき: 以下フローでForward＆Backward方向のトラッキング推論とtrack_idの継承を実施
+        - 最初のフレームにDetection2D推論結果をプロンプトとして与え、時間順方向（Forward方向）にSAM2のpropagation推論を実施
+        - 最後のフレームにDetection2D推論結果をプロンプトとして与え、時間逆方向（Backward方向）にSAM2のpropagation推論を実施
+        - Forward/Backward両トラッキングの各インスタンスの全フレームでの時空間IoUマッチング（Hungarian algorithm）を実施し、マッチしたインスタンス同士のtrack_idを次のブロックに引き継ぐ
+
+### 推論に使用するパラメータ
+
+Instance Trackingでは、以下のパラメータを指定できます
+
+#### UIで指定可能なパラメータ
+
+UI（Instance Trackingページの画面上部のエクスパンダー）からは以下パラメータを指定できます
+
+|パラメータ名|型|内容|デフォルト値|
+|---|---|---|---|
+|Box Prompt|-|入力とするDetection2Dの結果を選択（`detection_2d_params`テーブルのレコードをラジオボタン付きでリスト表示）|`started_at`が最新のレコード|
+|Sweeps per Sample|float|トラッキングに使用する画像のキーフレームあたりフレーム数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定|
+|IoU Threshold|float|track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値|`settings.DEFAULT_TRACKING_IOU_THRESHOLD`で指定|
+|IoU Method|"Box" or "Mask"|上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択|`settings.DEFAULT_TRACKING_IOU_METHOD`で指定|
+|IoU Label Match|"Label", "Category Group", or None|上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するかを指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`で指定|
+|Track ID Inheritance|"continuous_id" or "forward_backward_matching"|IoUマッチングに使用する手法を指定する。両手法の詳細は後述の「推論モデルの実装」参照|`settings.DEFAULT_TRACK_ID_INHERITANCE`で指定|
+
+#### 設定ファイルから指定するパラメータ
+
+設定ファイル`webapp/app/core/config.py`からは、以下のパラメータを設定できます
+
+|設定名|型|内容|
+|---|---|---|
+|`settings.DEFAULT_TRACKING_NUM_SWEEPS`|int|Sweeps per Sampleパラメータのデフォルト値|
+|`settings.DEFAULT_TRACKING_IOU_THRESHOLD`|float|IoU Thresholdパラメータのデフォルト値|
+|`settings.DEFAULT_TRACKING_IOU_METHOD`|"box" or "mask"|IoU Methodパラメータのデフォルト値|
+|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`|"label", "category_group" or None|IoU Label Matchパラメータのデフォルト値|
+|`settings.DEFAULT_TRACK_ID_INHERITANCE`|"continuous_id" or "forward_backward_matching"|Track ID Inheritanceパラメータのデフォルト値|
+|`settings.TRACKING_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
+|`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
+|`settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD`|float|現状使用していない（将来的にマスクにスコアを付けるトラッキングアルゴリズムを使用する場合のために準備）|
+|`settings.TRACKING_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|
+
+### 推論の実行単位
+
+Instance Trackingは、Box Promptラジオボタンで指定した`detection_2d_params`（Detection2Dでの推論run単位でパラメータを保持するテーブル）のSample Intervalごとに実施する。このSample Interval間のフレームをまとめてトラッキングに利用する（キーフレームだけでなく、Sweeps per Sampleパラメータに応じて非キーフレームをほぼ等間隔となるよう選択して使用する。このトラッキングに利用するフレーム群をブロックと呼ぶこととする）。
 例えばSample Interval=4のとき、以下のように推論が行われる
 
 - 1つ目のブロック（Sample0から4）: Sample0からSample4までの画像をまとめたブロックを入力データとして与え、トラッキング推論を実施
@@ -210,3 +317,140 @@ k : F_i または B_j が存在するフレーム
 求めた全ての$(i, j)$に対する$score(i, j)$の行列から、Hungarian algorithmでForwardとBackwardのインスタンスをマッチングしてから`IoU Threshold`で閾値判定し、紐づいた場合はForwardのtrack_idをBackwardに引き継ぐことで、次のブロックのForwardにもtrack_idが引き継がれます（Backwardのプロンプトボックスは次のブロックのForwardと等しいため）
 
 この方法では間引き後のサンプル数N' × カメラ数C回 × 2回推論が実施されます（ForwardとBackward両方向で実施するため、track_id_inheritance="continuous_id"の2倍の推論数となる）。
+
+## Depth Boxfitting
+
+Depth Boxfittingでは、Instance Trackingのインスタンスマスクとtrack_id、およびカメラ画像・LiDAR点群を入力として、Depth-Anything-3による深度推定と、複数カメラ間での同一インスタンス結合、および[こちらの手法](https://arxiv.org/abs/2302.01034)によるボックス位置推定を実施し、各物体の3Dバウンディングボックスとinstance_idを得ます
+
+### 推論の実施フロー
+
+Depth Boxfittingは、以下のフローで行われます
+
+- 入力とするInstance Trackingの結果を選択
+- カメラ → キーフレームのループで、以下手順でカメラ画像からDepth-Anything-3による深度推定を実施
+    - 画像を入力してDepth-Anything-3で単眼深度推定推論
+    - sky_mask機能により空領域を保持
+    - 内部パラメータを深度画像のサイズに合わせて補正
+    - 補正後内部パラメータを用いて、深度画像をメートル単位に補正
+- キーフレームのループで、以下手順でカメラ間同一インスタンス結合・3Dバウンディングボックスのフィッティングを実施
+    - キーフレーム内の全インスタンスマスクを走査し、以下手順でインスタンスごとDepth点群を得る
+        - インスタンスマスクにクロージング処理を適用
+        - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
+        - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する
+    - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
+        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行する
+        - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
+        - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する
+        - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
+        - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
+    - 以下手順で複数カメラ間での同一インスタンス結合を実施
+        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値以上の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る
+        - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
+    - global_track_idごとに結合した点群に対して、[こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさと角度（yaw角）を推定する
+    - 3Dバウンディングボックスの高さは、global_track_idごと点群の分位点に基づき推定する
+
+### 推論に使用するパラメータ
+
+Depth Boxfittingでは、以下のパラメータを指定できます
+
+#### UIで指定可能なパラメータ
+
+UI（Depth Boxfittingページの画面上部のエクスパンダー）からは以下パラメータを指定できます
+
+|パラメータ名|型|内容|デフォルト値|
+|---|---|---|---|
+|Instance Tracking|-|入力とするInstance Trackingの結果を選択（`instance_tracking_2d_params`テーブルのレコードをラジオボタン付きでリスト表示）|`started_at`が最新のレコード|
+|Use LiDAR|bool|LiDAR点群を使用するかどうかを指定|`settings.BOXFIT_USE_LIDAR_DEFAULT`で指定|
+|Dilation|int|インスタンスマスクのクロージング処理の膨張カーネルサイズ||
+|Erosion|int|インスタンスマスクのクロージング処理の収縮カーネルサイズ||
+|Depth ROR nb_points|int|インスタンスごとDepth点群に適用するRORのnb_pointsパラメータ||
+|Depth ROR radius|float|インスタンスごとDepth点群に適用するRORのradiusパラメータ||
+|Depth DBSCAN eps|float|インスタンスごとDepth点群に適用するDBSCANのepsパラメータ||
+|Depth DBSCAN min_samples|int|インスタンスごとDepth点群に適用するDBSCANのmin_samplesパラメータ||
+|LiDAR Sweeps|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定||
+|Min LiDAR Points|int|インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）||
+|LiDAR ROR nb_points|int|インスタンスごとLiDAR点群に適用するRORのnb_pointsパラメータ||
+|LiDAR ROR radius|float|インスタンスごとLiDAR点群に適用するRORのradiusパラメータ||
+|LiDAR DBSCAN eps|float|インスタンスごとLiDAR点群に適用するDBSCANのepsパラメータ||
+|LiDAR DBSCAN min_samples|int|インスタンスごとLiDAR点群に適用するDBSCANのmin_samplesパラメータ||
+|Inter-cam Merge Enabled|bool|カメラ間の同一インスタンス結合を実施するかどうかを指定||
+|Inter-cam Merge Match Method|"BEV convex-hull"|カメラ間の同一インスタンス結合に使用する手法を選択|"BEV convex-hull"ならXY平面での凸包の重なりがしきい値以上＆重心距離がしきい値以下のフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。|`settings.DEFAULT_MERGE_METHOD`で指定|
+|Inter-cam Merge Overlap Threshold|float|Match Method="BEV convex-hull"のとき使用。XY平面での凸包の重なりのしきい値||
+|Inter-cam Merge Max Centroid Distance|float|Match Method="BEV convex-hull"のとき使用。インスタンス間の重心距離のしきい値||
+|Inter-cam Merge Min Match Frames|float|Match Method="BEV convex-hull"のとき使用。同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する||
+|Inter-cam Merge Label Match|"Label", "Category Group", or None|カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するかを指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`で指定|
+|Boxfitting Method|"convex_hull_moa"|3Dバウンディングボックスのフィッティングに使用するアルゴリズム。"convex_hull_moa"なら[こちらの論文](https://arxiv.org/abs/2302.01034)の手法を使用||
+|convex_hull_moa angle_step_deg|float|Boxfitting Method="convex_hull_moa"のとき使用。最もフィットするyaw角度を探索するステップ||
+|convex_hull_moa z_percentile|float|Boxfitting Method="convex_hull_moa"のとき使用。高さの下限と上限として採用するパーセンタイル||
+
+#### 設定ファイルから指定するパラメータ
+
+設定ファイル`webapp/app/core/config.py`からは、以下のパラメータを設定できます
+
+|設定名|型|内容|
+|---|---|---|
+|`settings.BOXFIT_USE_LIDAR_DEFAULT`|bool|Use LiDARパラメータのデフォルト値|
+|`settings.MASK_DILATION_DEFAULT`|int|Dilationパラメータのデフォルト値|
+|`settings.MASK_DILATION_MAX`|int|Dilationパラメータの最大値|
+|`settings.MASK_EROSION_DEFAULT`|int|Erosionパラメータのデフォルト値|
+|`settings.MASK_EROSION_MAX`|int|Erosionパラメータの最大値|
+|`settings.DEPTH_ROR_NB_POINTS_DEFAULT`|int|Depth ROR nb_pointsパラメータのデフォルト値|
+|`settings.DEPTH_ROR_NB_POINTS_MAX`|int|Depth ROR nb_pointsパラメータの最大値|
+|`settings.DEPTH_ROR_RADIUS_DEFAULT`|float|Depth ROR radiusパラメータのデフォルト値|
+|`settings.DEPTH_ROR_RADIUS_MAX`|float|Depth ROR radiusパラメータの最大値|
+|`settings.DEPTH_DBSCAN_EPS_DEFAULT`|float|Depth DBSCAN epsパラメータのデフォルト値|
+|`settings.DEPTH_DBSCAN_EPS_MAX`|float|Depth DBSCAN epsパラメータの最大値|
+|`settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT`|int|Depth DBSCAN min_samplesパラメータのデフォルト値|
+|`settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX`|int|Depth DBSCAN min_samplesパラメータの最大値|
+|`settings.LIDAR_NUM_SWEEPS_DEFAULT`|int|LiDAR Sweepsパラメータのデフォルト値|
+|`settings.LIDAR_MIN_POINTS_DEFAULT`|int|Min LiDAR Pointsパラメータのデフォルト値|
+|`settings.LIDAR_MIN_POINTS_MAX`|int|Min LiDAR Pointsパラメータの最大値|
+|`settings.LIDAR_ROR_NB_POINTS_DEFAULT`|int|LiDAR ROR nb_pointsパラメータのデフォルト値|
+|`settings.LIDAR_ROR_NB_POINTS_MAX`|int|LiDAR ROR nb_pointsパラメータの最大値|
+|`settings.LIDAR_ROR_RADIUS_DEFAULT`|float|LiDAR ROR radiusパラメータのデフォルト値|
+|`settings.LIDAR_ROR_RADIUS_MAX`|float|LiDAR ROR radiusパラメータの最大値|
+|`settings.LIDAR_DBSCAN_EPS_DEFAULT`|float|LiDAR DBSCAN epsパラメータのデフォルト値|
+|`settings.LIDAR_DBSCAN_EPS_MAX`|float|LiDAR DBSCAN epsパラメータの最大値|
+|`settings.LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT`|int|LiDAR DBSCAN min_samplesパラメータのデフォルト値|
+|`settings.LIDAR_DBSCAN_MIN_SAMPLES_MAX`|int|LiDAR DBSCAN min_samplesパラメータの最大値|
+|`settings.DEPTH_CORRECTION_METHODS`|list[str]|LiDAR を基準に深度点群を補正する方式一覧（現状`["scale", "shift", "affine"]`の3種類）|
+|`settings.DEFAULT_DEPTH_CORRECTION_METHOD`|list[str]|LiDAR を基準に深度点群を補正する方式。"scale"ならインスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて補正。|
+|`settings.EGO_REFERENCE_CHANNEL`|str|Depth点群の座標を揃えるための基準センサー名（各カメラごとに取得時のego_poseが異なるため、ここで指定したセンサのego_poseに揃えることで同一のグローバル座標に点群を移せる）|
+|`settings.MERGE_METHODS`|list[str]|Inter-cam Merge Match Methodパラメータ（カメラ間同一インスタンス結合の判定方法）の選択肢|
+|`settings.DEFAULT_MERGE_METHOD`|str|Inter-cam Merge Match Methodパラメータのデフォルト値|
+|`settings.DEFAULT_MERGE_OVERLAP_THRESHOLD`|float|Inter-cam Merge Overlap Thresholdパラメータのデフォルト値|
+|`settings.MERGE_OVERLAP_THRESHOLD_MAX`|float|Inter-cam Merge Overlap Thresholdパラメータの最大値|
+|`settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE`|float|Inter-cam Merge Max Centroid Distanceパラメータのデフォルト値|
+|`settings.MERGE_MAX_CENTROID_DISTANCE_MAX`|float|Inter-cam Merge Max Centroid Distanceパラメータの最大値|
+|`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`|int|Inter-cam Merge Min Match Framesパラメータのデフォルト値|
+|`settings.MERGE_MIN_MATCH_FRAMES_MAX`|int|Inter-cam Merge Min Match Framesパラメータの最大値|
+|`settings.DEFAULT_MERGE_LABEL_MATCH`|str|Inter-cam Merge Label Matchパラメータ（カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するか）のデフォルト値|
+
+|`settings.BOXFIT_METHODS`|list[str]|Boxfitting Methodパラメータ（3Dバウンディングボックスのフィッティングに使用するアルゴリズム）の選択肢|
+|`settings.BOXFIT_METHOD_DEFAULT`|str|Boxfitting Methodパラメータのデフォルト値|
+|`settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT`|float|convex_hull_moa angle_step_degパラメータのデフォルト値|
+|`settings.BOXFIT_ANGLE_STEP_DEG_MIN`|float|convex_hull_moa angle_step_degパラメータの最小値|
+|`settings.BOXFIT_ANGLE_STEP_DEG_MAX`|float|convex_hull_moa angle_step_degパラメータの最大値|
+|`settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT`|float|convex_hull_moa z_percentileの下側値のデフォルト値|
+|`settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT`|float|convex_hull_moa z_percentileパラメータの上側値のデフォルト値|
+|`settings.DEPTH_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
+|`settings.DEFAULT_GLOBAL_POINTCLOUD_EYE`|[float,float,float]|表示のみ使用。PointCloudタブでGlobal Viewボタンを押したときの視点方向|
+|`settings.DEFAULT_GLOBAL_POINTCLOUD_UP`|[float,float,float]|表示のみ使用。PointCloudタブでGlobal Viewボタンを押したときの視点方向|
+|`settings.POINTCLOUD_AXIS_LENGTH_M`|float|表示のみ使用。PointCloudタブの点群ビューに描く自車姿勢の軸の長さ|
+|`settings.SHOW_RAW_LIDAR`|bool|表示のみ使用。PointCloudタブのRaw LiDARチェックボックスのデフォルト値|
+|`settings.SHOW_RAW_LIDAR_GROUND`|bool|表示のみ使用。PointCloudタブのLiDAR Groundチェックボックスのデフォルト値|
+|`settings.SHOW_RAW_DEPTH_POINTCLOUD`|bool|表示のみ使用。PointCloudタブのRaw Depthチェックボックスのデフォルト値|
+|`settings.DEPTH_MAP_DOWNSCALE`|float|表示のみ使用。深度マップの保存解像度倍率。1/2にすると保存容量が1/4に削減できる|
+|`settings.BOXFIT_STORED_POINTS_MAX`|float|表示のみ使用。DBに保存するインスタンス点群の上限（ボクセル間引き後）|
+|`settings.POINTCLOUD_DISPLAY_MAX_POINTS`|float|表示のみ使用。Plotlyへ渡す総点群数の上限。これ以上の数の点群は間引かれる|
+|`settings.DEPTH_MODEL_NAME`|str|runの記録に残す深度推定のモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
+|`settings.BOXFIT_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|
+
+### 推論の実行単位
+
+Depth Boxfittingは、キーフレームごとに実施する。
+
+ただし前述のように、LiDAR点群はキーフレームのsweepに加え、LiDAR Sweepsパラメータで指定したsweep数分だけ結合した点群を使用することに注意（キーフレームから直近LiDAR Sweepsで指定した数だけのsweepを結合）。
+
+### 推論モデルの実装
+
