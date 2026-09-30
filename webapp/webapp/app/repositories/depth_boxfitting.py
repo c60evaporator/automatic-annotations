@@ -60,6 +60,7 @@ class DepthBoxFittingRepository:
         depth_params: dict[str, Any],
         lidar_params: dict[str, Any],
         box_fitting_params: dict[str, Any] | None = None,
+        merge_params: dict[str, Any] | None = None,
         sample_interval: int = 1,
         status: str = RUN_STATUS_RUNNING,
     ) -> str:
@@ -82,6 +83,7 @@ class DepthBoxFittingRepository:
             "depth_params": depth_params,
             "lidar_params": lidar_params,
             "box_fitting_params": box_fitting_params or {},
+            "merge_params": merge_params or {},
             "status": status,
             "num_inferences": 0,
             "num_boxes": 0,
@@ -97,17 +99,22 @@ class DepthBoxFittingRepository:
         num_inferences: int = 0,
         num_boxes: int = 0,
         inference_time: float | None = None,
+        merge_diagnostics: dict[str, Any] | None = None,
     ) -> None:
+        values: dict[str, Any] = {
+            "status": status,
+            "num_inferences": num_inferences,
+            "num_boxes": num_boxes,
+            "inference_time": inference_time,
+            "ended_at": _utcnow(),
+        }
+        if merge_diagnostics is not None:
+            # 結合しなかった run では None のまま（列を上書きしない）
+            values["merge_diagnostics"] = merge_diagnostics
         self.session.execute(
             update(DepthEstimationParams.__table__)
             .where(DepthEstimationParams.__table__.c.id == params_id)
-            .values(
-                status=status,
-                num_inferences=num_inferences,
-                num_boxes=num_boxes,
-                inference_time=inference_time,
-                ended_at=_utcnow(),
-            )
+            .values(**values)
         )
 
     # ── 結果の保存 ────────────────────────────────────────────────────────
@@ -475,6 +482,9 @@ def _run_to_dict(row: DepthEstimationParams) -> dict[str, Any]:
         "depth_params": row.depth_params,
         "lidar_params": row.lidar_params,
         "box_fitting_params": row.box_fitting_params,
+        "merge_params": row.merge_params,
+        # 「なぜ結合されなかったか」を UI で確認するための記録
+        "merge_diagnostics": row.merge_diagnostics,
         "status": row.status,
         "num_inferences": row.num_inferences,
         "num_boxes": row.num_boxes,

@@ -496,6 +496,13 @@ class DepthEstimationParams(Base):
     box_fitting_params: Mapped[dict] = mapped_column(
         JSON, nullable=False, default=dict, server_default=text("'{}'")
     )
+    # カメラ跨ぎの結合の設定。空なら結合していない run
+    merge_params: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    # 結合の診断情報（グループ一覧と、却下された辺の理由）。
+    # 「なぜ結合されなかったか」を後から確認するために残す
+    merge_diagnostics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 実行結果メタ
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_boxes:      Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

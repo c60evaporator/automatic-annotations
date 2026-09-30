@@ -51,6 +51,11 @@ MERGE_METHODS = (MERGE_METHOD_BEV_HULL,)
 OVERLAP_IOS = "ios"      # 小さい方に対する重なり率（既定）
 OVERLAP_IOU = "iou"
 
+# 診断に残す候補の下限。これ未満は「重なっていない」として記録しない
+CANDIDATE_MIN_OVERLAP = 0.01
+# 診断に残す辺の上限。全部残すとインスタンス数の 2 乗に比例して膨らむ
+MAX_DIAGNOSTIC_EDGES = 200
+
 LABEL_MATCH_LABEL = "label"
 LABEL_MATCH_CATEGORY_GROUP = "category_group"
 LABEL_MATCH_NONE = "none"
@@ -187,16 +192,27 @@ def match_camera_pair(
         instances_a / instances_b: ``{"points", "label"}`` を持つ辞書
 
     Returns:
-        ``{(a の index, b の index): 重なり率}``。閾値未満は含まれない。
+        ``({(a index, b index): 重なり率}, [候補の記録])``。
+        2 つ目は採用されなかった対も含む診断用のリストで、
+        ``{"pair", "overlap", "status"}`` を持つ。
+
+        status:
+          accepted        … 採用
+          taken_by_other  … 閾値は超えたが、Hungarian で相手が別の対に取られた
+          below_threshold … 重なりが閾値未満
 
     **スコアを返すのが要点。** トラック単位の集計で
     「どの辺を優先して繋ぐか」を決めるのに使う。
 
     Hungarian で全体最適を取り、そのあと閾値未満を落とす
     （必ず最大マッチングが作られるため）。
+
+    NOTE: 「閾値を緩めても結合されない」ときの原因は閾値ではなく、
+    **1 対 1 の割り当てで別の相手に取られている**ことが多い。
+    それを切り分けられるよう、候補の記録を返している。
     """
     if not instances_a or not instances_b:
-        return {}
+        return {}, []
 
     score = np.zeros((len(instances_a), len(instances_b)))
     for i, a in enumerate(instances_a):
@@ -217,11 +233,27 @@ def match_camera_pair(
     from scipy.optimize import linear_sum_assignment
 
     rows, cols = linear_sum_assignment(-score)
-    return {
-        (int(i), int(j)): float(score[i, j])
-        for i, j in zip(rows, cols)
-        if score[i, j] >= overlap_threshold
+    assigned = {(int(i), int(j)) for i, j in zip(rows, cols)}
+    matched = {
+        pair: float(score[pair])
+        for pair in assigned
+        if score[pair] >= overlap_threshold
     }
+
+    # 診断用。重なりが 0 の対は数が多いので記録しない
+    candidates = []
+    for i, j in zip(*np.nonzero(score > CANDIDATE_MIN_OVERLAP)):
+        pair = (int(i), int(j))
+        if pair in matched:
+            status = "accepted"
+        elif score[pair] >= overlap_threshold:
+            status = "taken_by_other"
+        else:
+            status = "below_threshold"
+        candidates.append(
+            {"pair": pair, "overlap": float(score[pair]), "status": status}
+        )
+    return matched, candidates
 
 
 def match_frame(
@@ -239,19 +271,22 @@ def match_frame(
         instances: ``{"channel", "label", "points"}``（基準 ego 座標）
 
     Returns:
-        ``{(index, index): 重なり率}``。index は instances 内の位置。
+        ``({(index, index): 重なり率}, [候補の記録])``。
+        index は instances 内の位置。候補の記録は診断用で、
+        採用されなかった対とその理由を含む。
     """
     by_channel: dict[str, list[int]] = {}
     for index, instance in enumerate(instances):
         by_channel.setdefault(instance["channel"], []).append(index)
 
     edges: dict[tuple[int, int], float] = {}
+    candidates: list[dict[str, Any]] = []
     channels = sorted(by_channel)
     for a_pos in range(len(channels)):
         for b_pos in range(a_pos + 1, len(channels)):
             indices_a = by_channel[channels[a_pos]]
             indices_b = by_channel[channels[b_pos]]
-            matched = match_camera_pair(
+            matched, pair_candidates = match_camera_pair(
                 [instances[i] for i in indices_a],
                 [instances[j] for j in indices_b],
                 overlap_threshold=overlap_threshold,
@@ -262,34 +297,75 @@ def match_frame(
             )
             for (local_a, local_b), value in matched.items():
                 edges[(indices_a[local_a], indices_b[local_b])] = value
-    return edges
+            for entry in pair_candidates:
+                local_a, local_b = entry["pair"]
+                candidates.append({
+                    **entry,
+                    "pair": (indices_a[local_a], indices_b[local_b]),
+                })
+    return edges, candidates
 
 
 # ── 結合（カメラ重複を禁止して繋ぐ）──────────────────────────────────────
 
 def merge_by_edges(
-    channels: Sequence[str],
+    nodes: Sequence[dict[str, Any]],
     edges: dict[tuple[int, int], dict[str, Any]],
     *,
     min_match_frames: int = 1,
-) -> list[list[int]]:
+    max_same_camera_gap: int | None = None,
+) -> tuple[list[list[int]], list[dict[str, Any]]]:
     """辺の集計結果からグループを作る.
 
     Args:
-        channels: ノードごとのカメラ名（同一カメラの重複を防ぐのに使う）
+        nodes: ``{"key", "channel", "frames"}`` のリスト。
+            ``frames`` はそのトラックが存在するフレーム番号の集合（省略可）
         edges: ``{(i, j): {"frames": int, "max_overlap": float}}``
         min_match_frames: この回数以上マッチした辺だけを繋ぐ
+        max_same_camera_gap: 同一カメラのトラックを同じグループへ入れてよい
+            **時間的な隔たりの上限**（フレーム数）。None なら同一カメラを一切許さない
 
     Returns:
-        グループ（ノード index のリスト）。単独のノードも 1 要素で含まれる。
+        ``(グループ, 却下した辺の記録)``。
 
-    **重なり率の高い辺から順に繋ぎ、カメラが重複する結合は却下する。**
-    同一カメラの 2 トラックは定義上別物体なので、連鎖で同じ群に
-    入るのを防ぐ必要がある。
+    ## 同一カメラの扱い
+
+    同一カメラの 2 トラックが同時に存在するなら、それは別物体なので繋がない。
+    一方、**存在フレームが重ならない**なら、トラックが時間方向に分断された
+    同じ物体でありうる（カメラ A → カメラ B → カメラ A と写り込む場合など）。
+    その場合だけ許す。
+
+    ただし「重ならない」だけだと、視界を出た車と後から入ってきた別の車が
+    共通の相手を介して繋がりうる。隔たりが max_same_camera_gap を超える組は
+    却下する。
+
+    判定は **グループ全体**で行う。辺の両端だけを見ると、相手のグループに
+    既に入っている同一カメラのトラックを見落とす。
     """
-    union = UnionFind(len(channels))
-    # 群ごとに「含んでいるカメラ」を持ち、重複を検出する
-    members = {index: {channel} for index, channel in enumerate(channels)}
+    union = UnionFind(len(nodes))
+    channels = [n["channel"] for n in nodes]
+    frames_of = [set(n.get("frames") or ()) for n in nodes]
+    members = {index: {index} for index in range(len(nodes))}
+    rejected: list[dict[str, Any]] = []
+
+    def conflict(group_a: set[int], group_b: set[int]) -> str | None:
+        """同じグループにできない理由。問題なければ None."""
+        for i in group_a:
+            for j in group_b:
+                if channels[i] != channels[j]:
+                    continue
+                if frames_of[i] & frames_of[j]:
+                    return "同一カメラで同時に存在"
+                if max_same_camera_gap is None:
+                    return "同一カメラが重複"
+                if frames_of[i] and frames_of[j]:
+                    gap = max(
+                        min(frames_of[j]) - max(frames_of[i]),
+                        min(frames_of[i]) - max(frames_of[j]),
+                    )
+                    if gap > max_same_camera_gap:
+                        return f"同一カメラで時間が離れすぎ（{gap} フレーム）"
+        return None
 
     candidates = sorted(
         (
@@ -299,21 +375,30 @@ def merge_by_edges(
         ),
         key=lambda item: -item[0],
     )
+    for pair, stats in edges.items():
+        if stats.get("frames", 0) < min_match_frames:
+            rejected.append({
+                "pair": pair, "max_overlap": stats.get("max_overlap", 0.0),
+                "frames": stats.get("frames", 0),
+                "reason": f"マッチしたフレーム数が {min_match_frames} 未満",
+            })
 
     for overlap, (a, b) in candidates:
         root_a, root_b = union.find(a), union.find(b)
         if root_a == root_b:
             continue
-        if members[root_a] & members[root_b]:
-            logger.debug(
-                "却下: ノード %d-%d（重なり %.3f）はカメラが重複", a, b, overlap
-            )
+        reason = conflict(members[root_a], members[root_b])
+        if reason:
+            rejected.append({
+                "pair": (a, b), "max_overlap": overlap,
+                "frames": edges[(a, b)].get("frames", 0), "reason": reason,
+            })
             continue
         union.union(a, b)
         root = union.find(a)
         members[root] = members[root_a] | members[root_b]
 
-    return union.groups()
+    return union.groups(), rejected
 
 
 def merge_instances(
@@ -336,7 +421,7 @@ def merge_instances(
     if len(instances) < 2:
         return UnionFind(len(instances)).groups()
 
-    edges = match_frame(
+    edges, _candidates = match_frame(
         instances,
         overlap_threshold=overlap_threshold,
         max_centroid_distance=max_centroid_distance,
@@ -344,11 +429,13 @@ def merge_instances(
         label_match=label_match,
         label_to_category_group=label_to_category_group,
     )
-    return merge_by_edges(
-        [i["channel"] for i in instances],
+    groups, _rejected = merge_by_edges(
+        [{"key": str(i), "channel": inst["channel"]}
+         for i, inst in enumerate(instances)],
         {pair: {"frames": 1, "max_overlap": value} for pair, value in edges.items()},
         min_match_frames=1,
     )
+    return groups
 
 
 # ── トラック単位の集計 ────────────────────────────────────────────────────
@@ -383,16 +470,18 @@ def assign_global_track_ids(
     frame_matches: Iterable[dict[tuple[str, str], float]],
     *,
     min_match_frames: int = 1,
+    max_same_camera_gap: int | None = None,
     start_id: int = 0,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """トラックを結合し、グローバル ID を割り当てる.
 
     Args:
-        tracks: ``{"key", "channel"}`` のリスト（key は一意な文字列）
+        tracks: ``{"key", "channel", "frames"}`` のリスト（key は一意な文字列）
         frame_matches: フレームごとの照合結果（キー対 → 重なり率）
+        max_same_camera_gap: 同一カメラのトラックを同居させてよい隔たり
 
     Returns:
-        ``{トラックキー: global_track_id}``
+        ``({トラックキー: global_track_id}, 却下した辺の記録)``
     """
     keys = [t["key"] for t in tracks]
     index_of = {key: i for i, key in enumerate(keys)}
@@ -403,8 +492,10 @@ def assign_global_track_ids(
         for (a, b), value in stats.items()
         if a in index_of and b in index_of
     }
-    groups = merge_by_edges(
-        [t["channel"] for t in tracks], edges, min_match_frames=min_match_frames
+    groups, rejected = merge_by_edges(
+        tracks, edges,
+        min_match_frames=min_match_frames,
+        max_same_camera_gap=max_same_camera_gap,
     )
 
     assigned: dict[str, str] = {}
@@ -412,10 +503,12 @@ def assign_global_track_ids(
         global_id = str(start_id + offset)
         for index in group:
             assigned[keys[index]] = global_id
-    return assigned
+    # 却下の記録はトラックキーで返す（index だと呼び出し側が読めない）
+    rejected = [
+        {**r, "pair": (keys[r["pair"][0]], keys[r["pair"][1]])} for r in rejected
+    ]
+    return assigned, rejected
 
-
-# ── パス間で持ち越す要約 ──────────────────────────────────────────────────
 
 def summarize_instance(
     points: np.ndarray,
@@ -572,11 +665,14 @@ def merge_and_fit(
     # --- 1) sample ごとの照合 ---------------------------------------------
     # 判定は各トラックの多数決ラベルで行うので、先にラベルを集める
     labels_by_track: dict[str, list[tuple[str, float]]] = {}
-    for entries in entries_by_sample.values():
+    # トラックごとの存在フレーム。sample の並び順を番号として使う
+    frames_by_track: dict[str, set[int]] = {}
+    for sample_index, entries in enumerate(entries_by_sample.values()):
         for entry in entries:
             if entry.get("_summary") is None:
                 continue
             key = track_key(_channel_of(entry), entry["track_id"])
+            frames_by_track.setdefault(key, set()).add(sample_index)
             labels_by_track.setdefault(key, []).append(
                 (entry.get("label"), float(entry.get("score") or 0.0))
             )
@@ -586,6 +682,8 @@ def merge_and_fit(
     }
 
     frame_matches: list[dict[tuple[str, str], float]] = []
+    # {トラック対: {"overlap": 最大, "status": 最良時の扱い}}
+    candidate_stats: dict[tuple[str, str], dict[str, Any]] = {}
     for entries in entries_by_sample.values():
         usable = [e for e in entries if e.get("_summary") is not None]
         if len(usable) < 2:
@@ -599,28 +697,40 @@ def merge_and_fit(
             }
             for e in usable
         ]
-        edges = match_frame(
+        edges, pair_candidates = match_frame(
             instances,
             overlap_threshold=overlap_threshold,
             max_centroid_distance=max_distance,
             label_match=label_match,
             label_to_category_group=label_to_category_group,
         )
+        key_of = lambda k: track_key(_channel_of(usable[k]), usable[k]["track_id"])
         frame_matches.append({
-            (
-                track_key(_channel_of(usable[i]), usable[i]["track_id"]),
-                track_key(_channel_of(usable[j]), usable[j]["track_id"]),
-            ): value
-            for (i, j), value in edges.items()
+            (key_of(i), key_of(j)): value for (i, j), value in edges.items()
         })
+        # 診断用。採用されなかった対も、トラック対ごとに最良の記録だけ残す
+        for entry in pair_candidates:
+            i, j = entry["pair"]
+            pair = tuple(sorted((key_of(i), key_of(j))))
+            previous = candidate_stats.get(pair)
+            if previous is None or entry["overlap"] > previous["overlap"]:
+                candidate_stats[pair] = {
+                    "overlap": entry["overlap"], "status": entry["status"]
+                }
 
     # --- 2) トラック単位の集計 -------------------------------------------
     tracks = [
-        {"key": key, "channel": key.rsplit(":", 1)[0]}
+        {
+            "key": key, "channel": key.rsplit(":", 1)[0],
+            # 同一カメラのトラックが同時に存在するかの判定に使う
+            "frames": frames_by_track.get(key, set()),
+        }
         for key in sorted(labels_by_track)
     ]
-    global_ids = assign_global_track_ids(
-        tracks, frame_matches, min_match_frames=min_frames
+    global_ids, rejected_edges = assign_global_track_ids(
+        tracks, frame_matches,
+        min_match_frames=min_frames,
+        max_same_camera_gap=merge_params.get("max_same_camera_gap"),
     )
 
     # --- 3) グローバルトラック単位でラベルを多数決 -----------------------
@@ -682,7 +792,62 @@ def merge_and_fit(
                     member["status"] = "merged"
                     member["is_primary"] = False
 
+    # --- 5) 診断情報 -----------------------------------------------------
+    # 「なぜ結合されなかったか」を後から確認できるようにする。
+    # 閾値を緩めても結合されない場合、原因は閾値ではなく
+    # 1 対 1 の割り当てやカメラ重複の保護であることが多い
+    groups_by_id: dict[str, list[str]] = {}
+    for key, global_id in global_ids.items():
+        groups_by_id.setdefault(global_id, []).append(key)
+
+    rejected_by_pair = {tuple(sorted(r["pair"])): r for r in rejected_edges}
+    edge_rows: list[dict[str, Any]] = []
+    for pair, stats in sorted(
+        candidate_stats.items(), key=lambda kv: -kv[1]["overlap"]
+    ):
+        same_group = global_ids.get(pair[0]) == global_ids.get(pair[1])
+        rejected = rejected_by_pair.get(pair)
+        if same_group:
+            status, reason = "accepted", ""
+        elif rejected:
+            status, reason = "rejected", rejected["reason"]
+        elif stats["status"] == "taken_by_other":
+            status = "rejected"
+            reason = "1 対 1 の割り当てで別の相手に取られた"
+        else:
+            status = "rejected"
+            reason = f"重なりが閾値（{overlap_threshold}）未満"
+        edge_rows.append({
+            "pair": list(pair), "max_overlap": round(stats["overlap"], 4),
+            "status": status, "reason": reason,
+        })
+
+    diagnostics = {
+        "groups": [
+            {
+                "global_track_id": global_id,
+                "members": sorted(members_),
+                "label": global_label.get(global_id),
+                "num_frames": len(
+                    set().union(*(frames_by_track.get(k, set()) for k in members_))
+                ),
+            }
+            for global_id, members_ in sorted(groups_by_id.items(), key=lambda kv: kv[0])
+        ],
+        # 重なりの大きい順。結合されなかった対の理由がここに出る
+        "edges": edge_rows[:MAX_DIAGNOSTIC_EDGES],
+        "num_edges_total": len(edge_rows),
+        "params": {
+            "overlap_threshold": overlap_threshold,
+            "max_centroid_distance": max_distance,
+            "min_match_frames": min_frames,
+            "label_match": label_match,
+            "max_same_camera_gap": merge_params.get("max_same_camera_gap"),
+        },
+    }
+
     return {
         "num_groups": len(set(global_ids.values())),
         "num_merged": num_merged,
+        "diagnostics": diagnostics,
     }

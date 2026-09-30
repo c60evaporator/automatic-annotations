@@ -243,6 +243,8 @@ class BoxFittingJobResult(BaseModel):
     # カメラ跨ぎの結合結果
     num_merged_groups: int = 0
     num_merged_instances: int = 0
+    # 結合の診断情報（グループ一覧と、却下された辺の理由）
+    merge_diagnostics: dict[str, Any] | None = None
     num_fitted: int
     inference_time: float
     depth_estimations: list[DepthEstimationResult]

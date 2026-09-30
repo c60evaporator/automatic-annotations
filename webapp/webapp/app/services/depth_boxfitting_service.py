@@ -257,6 +257,8 @@ def finalize_run(
                 1 for b in box_fittings if b.get("center_ego") is not None
             ),
             inference_time=(job.get("result") or {}).get("inference_time"),
+            # 結合の診断情報。結合しなかった run では None のまま
+            merge_diagnostics=(job.get("result") or {}).get("merge_diagnostics"),
         )
 
     logger.info(

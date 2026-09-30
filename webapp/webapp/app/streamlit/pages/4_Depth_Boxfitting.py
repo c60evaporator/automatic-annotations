@@ -158,6 +158,60 @@ def instance_legend_key(item: dict, color_mode: str) -> str:
     return str(item.get("label", ""))
 
 
+def render_merge_diagnostics(run_info: dict | None) -> None:
+    """カメラ間結合の診断をエクスパンダーで出す.
+
+    「閾値を緩めても結合されない」ときの原因は閾値ではなく、
+    1 対 1 の割り当てやカメラ重複の保護であることが多い。
+    どの対がどの理由で落ちたかを見られるようにしている。
+    """
+    diagnostics = (run_info or {}).get("merge_diagnostics")
+    if not diagnostics:
+        return
+
+    groups = diagnostics.get("groups") or []
+    edges = diagnostics.get("edges") or []
+    merged = [g for g in groups if len(g.get("members") or []) > 1]
+
+    with st.expander(
+        f"Merge Diagnostics（{len(groups)} グループ / 結合 {len(merged)} 件）",
+        expanded=False,
+    ):
+        st.caption(
+            "結合の条件: "
+            + " / ".join(f"{k}={v}" for k, v in (diagnostics.get("params") or {}).items())
+        )
+        st.markdown("**グループ**")
+        st.dataframe(
+            [
+                {
+                    "global_track_id": g["global_track_id"],
+                    "members": ", ".join(g.get("members") or []),
+                    "label": g.get("label"),
+                    "frames": g.get("num_frames"),
+                }
+                for g in sorted(groups, key=lambda g: -len(g.get("members") or []))
+            ],
+            width="stretch", hide_index=True,
+        )
+
+        st.markdown("**トラック対の判定**")
+        total = diagnostics.get("num_edges_total", len(edges))
+        if total > len(edges):
+            st.caption(f"重なりの大きい順に {len(edges)} / {total} 件を表示")
+        st.dataframe(
+            [
+                {
+                    "track A": e["pair"][0], "track B": e["pair"][1],
+                    "max overlap": e["max_overlap"],
+                    "status": e["status"], "reason": e.get("reason", ""),
+                }
+                for e in edges
+            ],
+            width="stretch", hide_index=True,
+        )
+
+
 def has_box(item: dict) -> bool:
     """3D ボックスを描く対象か.
 
@@ -350,7 +404,7 @@ with param_col:
                 help=("結合してよいラベルの条件。判定にはトラック内で"
                       "多数決したラベルを使う"),
             )
-            merge_cols = st.columns(3)
+            merge_cols = st.columns(4)
             with merge_cols[0]:
                 merge_overlap = st.slider(
                     "Overlap Threshold", 0.0,
@@ -366,6 +420,17 @@ with param_col:
                     value=settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE, step=0.5,
                     disabled=not enable_merge,
                     help="重心がこれ以上離れた組は、凸包を作る前に捨てる",
+                )
+            with merge_cols[3]:
+                merge_same_cam_gap = st.slider(
+                    "Max Same-Camera Gap", 0,
+                    settings.MERGE_MAX_SAME_CAMERA_GAP_MAX,
+                    value=settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP, step=1,
+                    disabled=not enable_merge,
+                    help=("同一カメラの 2 トラックを同じグループへ入れてよい"
+                          "時間的な隔たり（キーフレーム数）。カメラ A → B → A と"
+                          "写り込む物体は A 側で 2 トラックに分断されるため、"
+                          "同時に存在しなければ同居を許す。0 なら一切許さない"),
                 )
             with merge_cols[2]:
                 merge_min_frames = st.slider(
@@ -410,6 +475,7 @@ merge_params = {
     "overlap_threshold": float(merge_overlap),
     "max_centroid_distance": float(merge_distance),
     "min_match_frames": int(merge_min_frames),
+    "max_same_camera_gap": int(merge_same_cam_gap),
 } if enable_merge else {}
 box_fitting_params = {
     "method": boxfit_method,
@@ -1282,6 +1348,7 @@ with fitting_tab_view:
                 f"インスタンス {len(bf_flat)} 件 / ボックス生成 {len(est_boxes)} 件"
                 + (f" / GT {len(gt_boxes)} 件" if compare_gt else "")
             )
+            render_merge_diagnostics(run_info)
             common = dict(
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
                 axis_range=axis_range,

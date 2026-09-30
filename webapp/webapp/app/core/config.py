@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # どのラベルへ畳み込むか決まらなくなる（validate_label_config で検出する）。
     LABEL_TO_SUBLABEL: dict[str, list[str]] = {
         "car": ["car", "van"],
-        "truck": ["truck", "tank_truck"],
+        "truck": ["truck", "tank_truck", "truck_cab"],
         "construction_vehicle": ["construction_vehicle"],
         "bus": ["bus"],
         "trailer": ["trailer"],
@@ -150,6 +150,7 @@ class Settings(BaseSettings):
                     "sidewalk": None,
                     "sign": None},
         "car": {"car": "car",
+                "truck cab": "truck",
                 "window reflection": None,
                 "painting": None},
         "construction_vehicle": {"construction vehicle": "construction_vehicle",
@@ -158,6 +159,8 @@ class Settings(BaseSettings):
                 "building": None},
         "motorcycle": {"motorcycle": "motorcycle",
                        "painting": None},
+        "bicycle": {"bicycle": "bicycle",
+                    "human legs": None},
         "pedestrian": {"pedestrian": "pedestrian",
                        "rider": None},
     }
@@ -222,30 +225,30 @@ class Settings(BaseSettings):
     POINTCLOUD_DISPLAY_MAX_POINTS: int = 50_000
 
     # マスクのクロージング（General タブ）
-    MASK_DILATION_DEFAULT: int = 5
+    MASK_DILATION_DEFAULT: int = 3
     MASK_DILATION_MAX: int = 31
     MASK_EROSION_DEFAULT: int = 5
     MASK_EROSION_MAX: int = 31
 
     # 深度点群のフィルタ（Depth Estimation タブ）
-    DEPTH_ROR_NB_POINTS_DEFAULT: int = 8
+    DEPTH_ROR_NB_POINTS_DEFAULT: int = 5
     DEPTH_ROR_NB_POINTS_MAX: int = 50
     DEPTH_ROR_RADIUS_DEFAULT: float = 0.8
     DEPTH_ROR_RADIUS_MAX: float = 5.0
     DEPTH_DBSCAN_EPS_DEFAULT: float = 1.0
     DEPTH_DBSCAN_EPS_MAX: float = 5.0
-    DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 12
+    DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 10
     DEPTH_DBSCAN_MIN_SAMPLES_MAX: int = 100
 
     # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）
     LIDAR_NUM_SWEEPS_DEFAULT: int = 5
-    LIDAR_MIN_POINTS_DEFAULT: int = 10
+    LIDAR_MIN_POINTS_DEFAULT: int = 6
     LIDAR_MIN_POINTS_MAX: int = 200
-    LIDAR_ROR_NB_POINTS_DEFAULT: int = 4
+    LIDAR_ROR_NB_POINTS_DEFAULT: int = 3
     LIDAR_ROR_NB_POINTS_MAX: int = 50
     LIDAR_ROR_RADIUS_DEFAULT: float = 0.8
     LIDAR_ROR_RADIUS_MAX: float = 5.0
-    LIDAR_DBSCAN_EPS_DEFAULT: float = 0.8
+    LIDAR_DBSCAN_EPS_DEFAULT: float = 1.2
     LIDAR_DBSCAN_EPS_MAX: float = 5.0
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
@@ -288,6 +291,13 @@ class Settings(BaseSettings):
     # 同じ物体が複数カメラに写るキーフレームは高々 1〜2 なので、
     # 割合ではなくフレーム数で判定する（割合だと 0/0.5/1 の 3 値しか取れない）
     DEFAULT_MERGE_MIN_MATCH_FRAMES: int = 1
+    # 同一カメラの 2 トラックを同じグループへ入れてよい時間的な隔たり
+    # （キーフレーム数）。カメラ A → カメラ B → カメラ A と写り込む物体は、
+    # カメラ A 側で 2 つのトラックに分断される。同時に存在しないなら
+    # 同じ物体でありうるので、この範囲内なら同居を許す。
+    # 0 にすると同一カメラの同居を一切許さない（従来の挙動）
+    DEFAULT_MERGE_MAX_SAME_CAMERA_GAP: int = 20
+    MERGE_MAX_SAME_CAMERA_GAP_MAX: int = 40
     MERGE_MIN_MATCH_FRAMES_MAX: int = 5
     # 結合してよいラベルの条件（label / category_group / none）。
     # 判定にはトラック内で多数決したラベルを使う

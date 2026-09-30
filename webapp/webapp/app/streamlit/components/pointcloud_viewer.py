@@ -42,7 +42,7 @@ SYMBOL_DEPTH = "circle"
 # 中抜きなら輪郭が重なるだけで、両方を判別できる
 SYMBOL_LIDAR = "diamond-open"
 # LiDAR は点数が桁違いに少なく、中抜きは視認性が落ちるので大きめに描く
-MARKER_SIZE_LIDAR = 5
+MARKER_SIZE_LIDAR = 3
 
 # 自車の姿勢を示す軸の色（x=前方 / y=左方 / z=上方）
 AXIS_COLORS = ("red", "green", "blue")
