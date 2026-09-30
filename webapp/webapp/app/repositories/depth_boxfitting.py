@@ -22,6 +22,7 @@ from sqlalchemy import delete, desc, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from app.models.ann_intermediate import (
+    InstanceTracking2D,
     BOXFIT_STATUS_FITTED,
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
@@ -374,7 +375,11 @@ class DepthBoxFittingRepository:
         Args:
             include_points: 点群 JSON を読むか。
                 1 run で数十 MB になるため、点群ビュー以外では False にする
-            include_mask: クロージング後マスクを読むか
+            include_mask: クロージング後マスクを読むか。
+                **再フィルタで使う。** 推論時に外れ値除去へ渡したラベル
+                （tracking_label）も一緒に返す。box_fittings.label は
+                カメラ間結合の多数決で書き換わることがあり、
+                NB_POINTS_RATIO の倍率がずれるため
 
         点群とマスクを既定で読まないのは、一覧表示や 3D ボックスの
         重ね描きだけなら不要で、読むと JSON パースが支配的になるため。
@@ -400,12 +405,21 @@ class DepthBoxFittingRepository:
             ]
         if include_mask:
             columns.append(BoxFitting3D.mask_rle_closed)
+            # 推論時に使われたラベル（結合の多数決で書き換わる前の値）
+            columns.append(InstanceTracking2D.label.label("tracking_label"))
         if include_hull:
             columns.append(BoxFitting3D.hull_xy)
 
         stmt = select(*columns).where(
             BoxFitting3D.depth_estimation_params_id == params_id
         )
+        if include_mask:
+            # tracking_label を引くための結合。outerjoin にしておくと、
+            # トラッキング行が消えていても Box Fitting 側は返る
+            stmt = stmt.outerjoin(
+                InstanceTracking2D,
+                InstanceTracking2D.id == BoxFitting3D.instance_tracking_2d_id,
+            )
         if sample_data_tokens is not None:
             stmt = stmt.where(
                 BoxFitting3D.sample_data_token.in_(sample_data_tokens)

@@ -225,9 +225,9 @@ class Settings(BaseSettings):
     POINTCLOUD_DISPLAY_MAX_POINTS: int = 50_000
 
     # マスクのクロージング（General タブ）
-    MASK_DILATION_DEFAULT: int = 3
+    MASK_DILATION_DEFAULT: int = 2
     MASK_DILATION_MAX: int = 31
-    MASK_EROSION_DEFAULT: int = 5
+    MASK_EROSION_DEFAULT: int = 4
     MASK_EROSION_MAX: int = 31
 
     # 深度点群のフィルタ（Depth Estimation タブ）

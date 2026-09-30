@@ -563,6 +563,8 @@ def refilter_sample(
     with read_only_session() as session:
         repo = DepthBoxFittingRepository(session)
         depth_info = repo.list_depth_estimations_by_run(params_id)
+        run = repo.get_run(params_id) or {}
+        run_depth_params = run.get("depth_params") or {}
         # LiDAR は sample 単位。再フィルタでも同じ .npz を使う
         lidar_info = repo.list_lidar_pointclouds_by_run(params_id)
         frames = SensorRepository(session).list_frames_by_sample(
@@ -586,6 +588,8 @@ def refilter_sample(
         None,
     )
     payload_frames = []
+    # {box_fitting_id: 推論時の点数}
+    stored_counts: dict[str, dict[str, Any]] = {}
     for token, items in fittings.items():
         info = depth_info.get(token)
         frame = frame_by_token.get(token)
@@ -595,11 +599,23 @@ def refilter_sample(
             {
                 "id": fit["id"],
                 "track_id": fit.get("track_id"),
-                "label": fit.get("label"),
+                # **推論時に使われたラベル**を渡す。box_fittings.label は
+                # カメラ間結合の多数決で書き換わることがあり、
+                # そのまま使うと NB_POINTS_RATIO の倍率がずれて
+                # 推論時と違う結果になる
+                "label": fit.get("tracking_label") or fit.get("label"),
                 "mask_rle_closed": fit["mask_rle_closed"],
             }
             for fit in items if fit.get("mask_rle_closed")
         ]
+        # 推論時の点数。再フィルタ結果と突き合わせて差分の原因を切り分ける
+        for fit in items:
+            stored_counts[fit["id"]] = {
+                "stored_raw": fit.get("num_points_depth"),
+                "stored_kept": fit.get("num_points_depth_kept"),
+                "stored_lidar_raw": fit.get("num_points_lidar"),
+                "stored_lidar_kept": fit.get("num_points_lidar_kept"),
+            }
         if not instances:
             continue
         lidar = lidar_info.get(frame["sample_token"]) or {}
@@ -618,6 +634,13 @@ def refilter_sample(
     if not payload_frames:
         return {}
 
+    # max_depth は Filter Params のスライダーに無いので、run の設定から補う。
+    # 補わないと推論時と違う範囲の点群になり、密度が変わって
+    # 外れ値除去の結果がずれる
+    depth_params = dict(depth_params)
+    if "max_depth" not in depth_params and run_depth_params.get("max_depth"):
+        depth_params["max_depth"] = run_depth_params["max_depth"]
+
     response = refilter_boxfitting({
         "frames": payload_frames,
         "depth_params": depth_params,
@@ -631,7 +654,10 @@ def refilter_sample(
         "refiltered %d instances in %.2fs",
         len(response.get("instances", [])), response.get("elapsed_sec", 0.0),
     )
-    return {item["id"]: item for item in response.get("instances", [])}
+    return {
+        item["id"]: {**item, **stored_counts.get(item["id"], {})}
+        for item in response.get("instances", [])
+    }
 
 
 # ── 削除 ──────────────────────────────────────────────────────────────────────

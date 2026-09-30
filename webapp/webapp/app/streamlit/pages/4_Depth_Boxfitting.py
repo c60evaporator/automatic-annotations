@@ -131,6 +131,12 @@ DEPTH_INSTANCE_CORRECTED = "LiDAR corrected"
 DEPTH_INSTANCE_MODES = (DEPTH_INSTANCE_RAW, DEPTH_INSTANCE_CORRECTED)
 # Box Fitting タブの表示オプション
 OPT_BF_COLOR, W_BF_COLOR = "boxfit_bf_color", "_w_boxfit_bf_color"
+# Box Fitting タブの深度点群の表示（補正前 / 補正後）。
+# 既定は補正後。当てはめに使っているのが補正後の点群なので、
+# raw のままだとボックスと点群がずれて見える
+OPT_BF_DEPTH_INST, W_BF_DEPTH_INST = (
+    "boxfit_bf_depth_inst", "_w_boxfit_bf_depth_inst"
+)
 
 # カメラ跨ぎの結合を目で確かめるための色分け。
 # global_track_id で塗ると、結合されたインスタンスが別カメラでも同色になる
@@ -943,7 +949,7 @@ with pointcloud_tab_view:
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
     fitted_boxes: list[dict] = []
-    refilter_summary: tuple[int, int, int, int, int] | None = None
+    refilter_summary: tuple[int, int, int, int, int, int, int] | None = None
 
     if view_run_id:
         info = lidar_info.get(selected_sample["token"])
@@ -1010,6 +1016,9 @@ with pointcloud_tab_view:
                     len(flat),
                     sum(i.get("num_lidar_raw", 0) for i in flat),
                     sum(i.get("num_lidar_kept", 0) for i in flat),
+                    # 推論時の点数。差が出たときの切り分けに使う
+                    sum(i.get("stored_raw") or 0 for i in flat),
+                    sum(i.get("stored_kept") or 0 for i in flat),
                 )
             else:
                 fittings = load_box_fittings(
@@ -1219,7 +1228,8 @@ with pointcloud_tab_view:
             )
             render_pointcloud(fig, counts)
             if refilter_summary is not None:
-                raw_total, kept_total, n_inst, lidar_raw, lidar_kept = refilter_summary
+                (raw_total, kept_total, n_inst, lidar_raw, lidar_kept,
+                 stored_raw, stored_kept) = refilter_summary
                 ratio = kept_total / raw_total * 100 if raw_total else 0.0
                 lidar_text = (
                     f" / LiDAR {lidar_raw:,} → {lidar_kept:,} 点"
@@ -1231,6 +1241,17 @@ with pointcloud_tab_view:
                     f"{lidar_text}。"
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
+                # 推論時との比較。**raw が一致するかで原因を切り分けられる**
+                # 一致しない → マスク・深度の範囲（max_depth）が違う
+                # raw だけ一致 → 外れ値除去の条件かラベルの倍率が違う
+                if stored_raw:
+                    raw_match = "一致" if raw_total == stored_raw else "不一致"
+                    kept_match = "一致" if kept_total == stored_kept else "不一致"
+                    st.caption(
+                        f"推論時との比較: raw {stored_raw:,} → {raw_total:,}"
+                        f"（{raw_match}）/ kept {stored_kept:,} → {kept_total:,}"
+                        f"（{kept_match}）"
+                    )
 
 # ------------------------------------------------------------------
 # Box Fitting タブ
@@ -1257,6 +1278,16 @@ with fitting_tab_view:
         show_hull = st.checkbox(
             "Convex-Hull", value=False, key="_w_bf_hull",
             help="当てはめに使った凸包を重ねる")
+        S.init_sticky(W_BF_DEPTH_INST, OPT_BF_DEPTH_INST, DEPTH_INSTANCE_CORRECTED)
+        bf_depth_mode = st.radio(
+            "Depth Instance", DEPTH_INSTANCE_MODES, key=W_BF_DEPTH_INST,
+            on_change=S.sync_sticky, args=(W_BF_DEPTH_INST, OPT_BF_DEPTH_INST),
+            help=("深度点群を補正前（raw）と、LiDAR を基準に補正した後"
+                  "（LiDAR corrected）のどちらで表示するか。"
+                  "**当てはめは補正後の点群で行っている**ので、"
+                  "ボックスと見比べるなら LiDAR corrected を選ぶ"),
+        )
+
         S.init_sticky(W_BF_COLOR, OPT_BF_COLOR, COLOR_MODE_LABEL)
         bf_color_mode = st.radio(
             "Instance Color", BOXFIT_COLOR_MODES, key=W_BF_COLOR,
@@ -1273,6 +1304,18 @@ with fitting_tab_view:
             include_hull=show_hull,
         )
         bf_flat = [fit for items_ in bf_fittings.values() for fit in items_]
+        # 補正後の点群で見るときは、補正できなかったインスタンスだけ
+        # 補正前へ落とす（元の dict は書き換えない。キャッシュ共有のため）
+        bf_depth_key = "points_depth_ego"
+        if bf_depth_mode == DEPTH_INSTANCE_CORRECTED:
+            bf_flat = [
+                {**fit, "_depth_display": (
+                    fit.get("points_depth_corrected_ego")
+                    or fit.get("points_depth_ego")
+                )}
+                for fit in bf_flat
+            ]
+            bf_depth_key = "_depth_display"
 
         def _bf_color(item: dict) -> str:
             return instance_color(item, bf_color_mode)
@@ -1299,7 +1342,7 @@ with fitting_tab_view:
         bf_groups = []
         if show_bf_depth:
             bf_groups += group_instance_points(
-                bf_flat, color_mode=bf_color_mode, points_key="points_depth_ego",
+                bf_flat, color_mode=bf_color_mode, points_key=bf_depth_key,
                 key_fn=lambda f: instance_legend_key(f, bf_color_mode),
                 color_fn=lambda k: instance_color(
                     {"global_track_id": k, "track_id": k, "label": k},

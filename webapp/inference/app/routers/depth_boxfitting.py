@@ -329,9 +329,12 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
             lidar_params=req.lidar_params,
             min_lidar_points=req.min_lidar_points,
             stored_points_max=req.stored_points_max,
-            max_depth=(
+            # 推論本体と同じ読み方にする。depth_params を無視すると、
+            # 点群の範囲が変わって外れ値除去の結果がずれる
+            max_depth=(req.depth_params or {}).get(
+                "max_depth",
                 req.max_depth if req.max_depth is not None
-                else settings.DEPTH_MAX_DISTANCE
+                else settings.DEPTH_MAX_DISTANCE,
             ),
         )
     except Exception as exc:  # noqa: BLE001
