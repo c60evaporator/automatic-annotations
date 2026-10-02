@@ -2,7 +2,7 @@
 # inference/Dockerfile_devel
 
 # Base image
-FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+FROM jidohub/base-cu128-devel-ubuntu22.04:latest
 
 # Common environment variables (TORCH_CUDA_ARCH_LIST)
 ARG TORCH_CUDA_ARCH_LIST

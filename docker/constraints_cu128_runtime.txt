@@ -1,0 +1,9 @@
+numpy==1.26.4
+pillow==11.1.0
+opencv-python==4.10.0.84
+scipy==1.14.1
+tqdm==4.67.1
+
+setuptools==75.8.0
+wheel==0.45.1
+packaging==24.2
