@@ -19,6 +19,26 @@ Detection2Dは、以下のフローで行われます
     - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
     - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、最もスコアの大きいラベルを採用
     - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
+- 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
+    - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
+    - 閾値を超えた場合、面積が小さい方or大きい方のボックスを削除する（大小どちらを削除するかは後述の`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに決める）
+
+`settings.DET2D_IOS_DELETE_DIRECTION`は以下のようにラベルをkeyとし、"small"ならIoSが閾値を超えたら小さい方のボックスを削除し、"big"なら大きい方のボックスを削除するようにします
+
+```python
+DET2D_IOS_DELETE_DIRECTION: dict[str, str] = {
+        "car": "small",
+        "truck": "small",
+        "construction_vehicle": "small",
+        "bus": "small",
+        "trailer": "small",
+        "barrier": "big",
+        "traffic_cone": "big",
+        "motorcycle": "big",
+        "bicycle": "big",
+        "pedestrian": "big",
+    }
+```
 
 ### 推論に使用するパラメータ
 
@@ -344,7 +364,7 @@ Depth Boxfittingは、以下のフローで行われます
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
-        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値以上の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る
+        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値以上の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームが`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`以上離れているトラック同士は結合されないようにする）
         - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
     - global_track_idごとに結合した点群に対して、[こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさと角度（yaw角）を推定する
     - 3Dバウンディングボックスの高さは、global_track_idごと点群の分位点に基づき推定する
@@ -378,6 +398,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Inter-cam Merge Overlap Threshold|float|Match Method="BEV convex-hull"のとき使用。XY平面での凸包の重なりのしきい値||
 |Inter-cam Merge Max Centroid Distance|float|Match Method="BEV convex-hull"のとき使用。インスタンス間の重心距離のしきい値||
 |Inter-cam Merge Min Match Frames|float|Match Method="BEV convex-hull"のとき使用。同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する||
+|Inter-cam Merge Max Same-Camera Gap|int|同一カメラのトラック同士は、このキーフレーム数を超えて離れている場合は結合されない（同一キーフレームを含む場合も結合されない）|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`で指定|
 |Inter-cam Merge Label Match|"Label", "Category Group", or None|カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するかを指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`で指定|
 |Boxfitting Method|"convex_hull_moa"|3Dバウンディングボックスのフィッティングに使用するアルゴリズム。"convex_hull_moa"なら[こちらの論文](https://arxiv.org/abs/2302.01034)の手法を使用||
 |convex_hull_moa angle_step_deg|float|Boxfitting Method="convex_hull_moa"のとき使用。最もフィットするyaw角度を探索するステップ||
@@ -424,8 +445,9 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.MERGE_MAX_CENTROID_DISTANCE_MAX`|float|Inter-cam Merge Max Centroid Distanceパラメータの最大値|
 |`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`|int|Inter-cam Merge Min Match Framesパラメータのデフォルト値|
 |`settings.MERGE_MIN_MATCH_FRAMES_MAX`|int|Inter-cam Merge Min Match Framesパラメータの最大値|
+|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`|int|Inter-cam Merge Max Same-Camera Gapパラメータのデフォルト値|
+|`settings.MERGE_MAX_SAME_CAMERA_GAP_MAX`|int|Inter-cam Merge Max Same-Camera Gapパラメータの最大値|
 |`settings.DEFAULT_MERGE_LABEL_MATCH`|str|Inter-cam Merge Label Matchパラメータ（カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するか）のデフォルト値|
-
 |`settings.BOXFIT_METHODS`|list[str]|Boxfitting Methodパラメータ（3Dバウンディングボックスのフィッティングに使用するアルゴリズム）の選択肢|
 |`settings.BOXFIT_METHOD_DEFAULT`|str|Boxfitting Methodパラメータのデフォルト値|
 |`settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT`|float|convex_hull_moa angle_step_degパラメータのデフォルト値|
@@ -454,3 +476,129 @@ Depth Boxfittingは、キーフレームごとに実施する。
 
 ### 推論モデルの実装
 
+深度推定のDepth-Anything-3モデルは、HuggingFace版ではなくGitHubの公式リポジトリ版を使用するが、重みはHuggingFaceから自動ダウンロードされる（ホストとコンテナ両方で~/.cache/huggingfaceフォルダに格納される）。
+
+Depth-Anything-3のモデルインスタンスは以下のように作成する
+
+```python
+from depth_anything_3.api import DepthAnything3
+from depth_anything_3.utils.alignment import compute_sky_mask
+
+DA3_MODEL_NAME = "DA3METRIC-LARGE"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+da3_model = DepthAnything3.from_pretrained(f"depth-anything/{DA3_MODEL_NAME}").to(device=device)
+```
+
+推論時は以下のようにカメラ・サンプルのループでDA3推論を実施して結果を保持し（get_metric_depth関数は推論された深度マップをメートル単位に修正し、内部パラメータのスケールを深度マップの解像度に合わせる。詳細は`webapp/inference/app/models_impl/da3_depth.py`参照）
+
+```python
+depth_est_results = {}
+# Camera channel loop
+for camera_channel in CAMERA_CHANNELS:
+    max_track_id = -1  # Initialize max_track_id for each camera channel
+    depth_est_results[camera_channel] = {}
+    # Sample loop
+    for sample_index in range(len(samples)):
+        calibrated_sensor_cam = # そのサンプル・カメラのcalibrated_sensor
+        ego_pose_cam = # そのサンプル・カメラのego_pose
+        image = # そのサンプル・カメラのPIL.Image.Image形式のカメラ画像
+        # Inference depth using DepthAnything3 (without pose conditioning)
+        prediction = da3_model.inference([image])
+        metric_depths, scaled_intrinsics = get_metric_depth(
+            prediction,
+            model_name=DA3_MODEL_NAME,
+            camera_intrinsics=[calibrated_sensor_cam["camera_intrinsic"]],
+            original_image_width=image.width,
+            original_image_height=image.height
+        )
+        # Store the depth estimation results
+        depth_est_results[camera_channel][sample_index] = {
+            "metric_depth": metric_depths[0],
+            "scaled_intrinsics": scaled_intrinsics[0],
+            "non_sky_mask": compute_sky_mask(prediction.sky[0]) if prediction.sky is not None else None,
+            "original_image_width": image.width,
+            "original_image_height": image.height,
+            "depth_image_width": metric_depths[0].shape[1],
+            "depth_image_height": metric_depths[0].shape[0],
+            "camera_translation": calibrated_sensor_cam["translation"],
+            "camera_quaternion": calibrated_sensor_cam["rotation"],
+            "ego_translation": ego_pose_cam["translation"],
+            "ego_quaternion": ego_pose_cam["rotation"],
+        }
+```
+
+LiDAR点群の読込と地面除去、インスタンスマスクのクロージング処理適用、推論で得られたdepth画像のマスク投影とsky_mask適用は、以下のように実施します（depth_map_to_point_cloud_per_instance関数は添付depth.pyを参照してください）
+
+```python
+import pypatchworkpp
+
+# Frame loop
+for sample_index in range(len(samples)):
+    pointclouds_per_instance[sample_index] = {}
+
+    # Read the LiDAR point cloud
+    lidar_data = get_lidar_pointcloud_in_sample(
+        sample_index=sample_index,
+        samples_in_scene=samples,
+        sample_data_in_scene=sample_data,
+        ego_poses_in_scene=ego_poses,
+        calibrated_sensors_in_scene=calibrated_sensors,
+        lidar_sensor_token=sensor_lookup["LIDAR_TOP"],
+        nuscenes_root=NUSCENES_ROOT,
+        nsweeps=NUM_LIDAR_SWEEPS,
+        stack_result=False,
+    )
+    lidar_translation=lidar_data[-1]["lidar_translation"]
+    lidar_quaternion=lidar_data[-1]["lidar_quaternion"]
+    ego_translation=lidar_data[-1]["ego_translation"]
+    ego_quaternion=lidar_data[-1]["ego_quaternion"]
+    # Remove the ground points by Patchwork++
+    nonground = []
+    for sweep_lidar in lidar_data:
+        pointcloud = np.hstack((sweep_lidar["points"], sweep_lidar["intensity"].reshape(-1, 1)))  # Combine points and intensity into a single array
+        PatchworkPLUSPLUS.estimateGround(pointcloud)
+        sweep_ground = PatchworkPLUSPLUS.getGround()
+        sweep_nonground = PatchworkPLUSPLUS.getNonground()
+        nonground.append(sweep_nonground)
+    lidar_points = np.vstack(nonground)
+
+    # Camera channel loop
+    for i_cam, camera_channel in enumerate(CAMERA_CHANNELS):
+        ###### Depth map projection ######
+        pointclouds_per_instance[sample_index][camera_channel] = {}
+        depth_est_result = depth_est_results[camera_channel][sample_index]
+        depth_image = depth_est_result["metric_depth"]
+        # Resize the instance masks to the depth image size
+        instance_masks = instance_tracking_results[camera_channel][sample_index]
+        depth_instance_masks = [instance.convert_to_original_coordinates(
+            original_width=depth_est_result["depth_image_width"],
+            original_height=depth_est_result["depth_image_height"],
+            input_width=depth_est_result["original_image_width"],
+            input_height=depth_est_result["original_image_height"]
+        ) for instance in instance_masks]
+        # Instance mask closing operation to fill holes and remove noise
+        closed_instance_masks = [mask_morphology(mask, kernel_sizes=CLOSING_KERNEL_SIZES, ratio_morphology=RATIO_MORPHOLOGY)
+                                for mask in depth_instance_masks]
+        # Get the pseudo-LiDAR point clouds from the depth image and instance masks
+        pseudo_points_per_instance, colors = depth_map_to_point_cloud_per_instance(
+            metric_depth=depth_image,
+            camera_intrinsics=depth_est_result["scaled_intrinsics"],
+            instances=closed_instance_masks,
+            common_mask=depth_est_result["non_sky_mask"],
+            color=category_color_dict,
+            color_attr="label"
+        )
+        for instance, pseudo_points in zip(closed_instance_masks, pseudo_points_per_instance):
+            pseudo_points_ego = transform_cam_to_ego(
+                pseudo_points,
+                camera_translation=depth_est_result["camera_translation"],
+                camera_quaternion=depth_est_result["camera_quaternion"]
+            )
+            pseudo_points_global = transform_ego_to_global(
+                pseudo_points_ego,
+                ego_translation=depth_est_result["ego_translation"],
+                ego_quaternion=depth_est_result["ego_quaternion"]
+            )
+            pointclouds_per_instance[sample_index][camera_channel][instance.box.track_id] = {}
+            pointclouds_per_instance[sample_index][camera_channel][instance.box.track_id]["pseudo_pointcloud"] = pseudo_points_global
+```
