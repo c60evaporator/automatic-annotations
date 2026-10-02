@@ -46,10 +46,10 @@ HOST_DATA_ROOT/<dataroot>/
 
 ### 3. 重みダウンロード
 
-GroundingDINOとSAM2の重みを、`nuscenes-annotator/checkpoints`フォルダにダウンロードします（DA3の重みはHuggingFaceから自動ダウンロードされるので手動でのダウンロードは不要です）
+GroundingDINOとSAM2の重みを、`checkpoints`フォルダにダウンロードします（DA3の重みはHuggingFaceから自動ダウンロードされるので手動でのダウンロードは不要です）
 
 ```bash
-cd nuscenes-annotator/checkpoints
+cd checkpoints
 wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth
 wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 ```
@@ -59,7 +59,6 @@ wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large
 以下コマンドでコンテナをビルドします（TORCH_CUDA_ARCH_LISTが間違っているとビルドは通るがコンテナ内でのGPU推論が無効化されて激遅になるので注意してください）
 
 ```bash
-cd nuscenes-annotator
 docker compose build --no-cache
 ```
 
@@ -78,7 +77,6 @@ docker compose run --rm webapp \
 以下コマンドでアプリ立ち上げ
 
 ```bash
-cd nuscenes-annotator
 docker compose up
 ```
 
