@@ -71,6 +71,24 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
         total_inferences += num_frames_total
     job.set_progress(0, total_inferences, "モデルを準備中...")
 
+    # 内包関係の重複検出を落とす。**UI へ流す直前**に通す。
+    # ラベルが確定していないと方向（small / big）を引けないので、
+    # 再判定より後、かつ partial を送る前に呼ぶ
+    ios_counter = {"deleted": 0}
+
+    def apply_ios(result: Detection2DFrameResult) -> None:
+        if req.ios_delete_threshold <= 0 or not req.ios_delete_direction:
+            return
+        from app.services.postprocess import suppress_contained_boxes
+
+        boxes = [b.model_dump() for b in result.boxes]
+        ios_counter["deleted"] += suppress_contained_boxes(
+            boxes,
+            threshold=req.ios_delete_threshold,
+            direction_by_label=req.ios_delete_direction,
+        )
+        result.boxes = [BBox2D(**b) for b in boxes]
+
     done = 0
     total_time = 0.0
     num_boxes = 0
@@ -152,6 +170,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                     pending_reclassify.append((path, result))
                 else:
                     # 再判定しない場合はここで UI へ流す
+                    apply_ios(result)
                     job.append_partial(result.model_dump())
 
     # --- 再判定フェーズ -------------------------------------------------
@@ -187,6 +206,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                     done += 1
                     job.set_progress(done, message="ラベル再判定")
                 # 再判定まで終わったフレームを UI へ流す
+                apply_ios(result)
                 job.append_partial(result.model_dump())
 
     return {
@@ -194,6 +214,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
         "num_boxes": num_boxes,
         "num_reclassified": num_reclassified,
         "num_deleted": num_deleted,
+        "num_ios_deleted": ios_counter["deleted"],
         "inference_time": round(total_time, 3),
         "frames": [f.model_dump() for f in all_frames],
     }

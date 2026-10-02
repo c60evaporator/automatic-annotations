@@ -68,6 +68,10 @@ class Detection2DRequest(BaseModel):
     )
     # 切り出し時にボックスを広げる比率
     reclassification_crop_margin_ratio: float = 0.1
+    # 内包関係の重複検出を落とす IoS の閾値。0 なら判定しない
+    ios_delete_threshold: float = 0.0
+    # {ラベル: "small" | "big"}。ここに無いラベルは判定しない
+    ios_delete_direction: dict[str, str] = Field(default_factory=dict)
 
     # スタブ用: 1推論あたりの待ち時間（秒）。本実装では無視される
     stub_delay_sec: float | None = None
@@ -86,6 +90,8 @@ class BBox2D(BaseModel):
     detection_label: str | None = None
     # SigLIP2 が返した候補ラベル（デバッグ・確認用）
     reclassified_as: str | None = None
+    # 何によって削除されたか（reclassification / ios_small / ios_big）
+    deleted_by: str | None = None
     # 再判定で「使わない」と判定されたか（論理削除）
     is_deleted: bool = False
     score: float
@@ -114,6 +120,8 @@ class Detection2DResult(BaseModel):
     # SigLIP2 で再判定したボックス数と、そのうち論理削除された数
     num_reclassified: int = 0
     num_deleted: int = 0
+    # IoS の内包判定で落とした数
+    num_ios_deleted: int = 0
     inference_time: float
     frames: list[Detection2DFrameResult]
 

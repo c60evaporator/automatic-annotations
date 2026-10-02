@@ -198,6 +198,22 @@ with param_col:
             + "（config の RE_CLASSIFICATION_CANDIDATES で指定）"
         )
 
+        st.markdown("**Duplicate Suppression (IoS)**")
+        ios_threshold = st.slider(
+            "IoS Delete Threshold", 0.0,
+            settings.DET2D_IOS_DELETE_THRESHOLD_MAX,
+            value=settings.DET2D_IOS_DELETE_THRESHOLD, step=0.05,
+            help=("同じラベルのボックスがほぼ内包関係にあるとき、片方を削除する。"
+                  "IoU の NMS は大小差があると効かないため、IoS（小さい方の面積に"
+                  "対する重なり率）で判定する。0 で無効"),
+        )
+        small = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "small"]
+        big = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "big"]
+        st.caption(
+            f"小さい方を削除: {', '.join(small)} / 大きい方を削除: {', '.join(big)}"
+            "（config の DET2D_IOS_DELETE_DIRECTION で指定）"
+        )
+
 # ------------------------------------------------------------------
 # Run / progress
 # ------------------------------------------------------------------
@@ -250,6 +266,9 @@ def _build_payload() -> dict:
             for label, mapping in settings.RE_CLASSIFICATION_CANDIDATES.items()
         },
         "reclassification_crop_margin_ratio": float(reclassify_margin),
+        # 内包関係の重複検出を落とす（IoU の NMS では合体できないケース）
+        "ios_delete_threshold": float(ios_threshold),
+        "ios_delete_direction": dict(settings.DET2D_IOS_DELETE_DIRECTION),
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
     }
 

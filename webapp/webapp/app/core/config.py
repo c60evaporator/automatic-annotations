@@ -173,6 +173,33 @@ class Settings(BaseSettings):
                        "mural": None,
                        "rider": None},
     }
+    # --- 重複検出の抑制（IoS）----------------------------------------------
+    # 同じラベルのボックスがほぼ内包関係にあるとき、IoU の NMS では
+    # 合体できない（大小差があると IoU が小さくなる）。
+    # IoS（小さい方の面積に対する重なり率）で判定して片方を落とす。
+    #
+    # 実質的な重複検出が残ると、トラッキングで同じ物体に 2 つの
+    # track_id が付くなど後段に響く
+    DET2D_IOS_DELETE_THRESHOLD: float = 0.8
+    DET2D_IOS_DELETE_THRESHOLD_MAX: float = 1.0
+    # ラベルごとに、どちらを残すか。
+    #   "small" … 小さい方を削除（物体の一部を拾った検出を落とす。車両向け）
+    #   "big"   … 大きい方を削除（複数の物体をまとめて囲った検出を落とす。
+    #             並ぶことが多い barrier / traffic_cone / 歩行者向け）
+    # ここに無いラベルは判定しない
+    DET2D_IOS_DELETE_DIRECTION: dict[str, str] = {
+        "car": "small",
+        "truck": "small",
+        "construction_vehicle": "small",
+        "bus": "small",
+        "trailer": "small",
+        "barrier": "big",
+        "traffic_cone": "big",
+        "motorcycle": "big",
+        "bicycle": "big",
+        "pedestrian": "big",
+    }
+
     # 切り出し時にボックスを広げる比率。
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
     DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.1

@@ -215,6 +215,9 @@ class Detection2D(Base):
     # 最終ラベル（label）は対応表を通した後の値なので、
     # 「何と判定されて落ちたのか」を見るにはこちらが必要
     reclassified_as: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 何によって削除されたか（reclassification / ios_small / ios_big）。
+    # 落ちた理由を後から確認するために残す
+    deleted_by: Mapped[str | None] = mapped_column(String, nullable=True)
     # SigLIP2 の再判定で「使わない」と判定されたか（論理削除）。
     # 表示のために行は残し、Instance Tracking 以降では除外する
     is_deleted: Mapped[bool] = mapped_column(

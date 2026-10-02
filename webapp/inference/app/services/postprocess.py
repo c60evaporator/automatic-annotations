@@ -9,7 +9,7 @@ motorcycle として二重に検出されることがある。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from common.box_ops import box_iou as iou
 
@@ -72,3 +72,98 @@ def same_class_nms(
         if all(iou(box, k) < iou_threshold for k in same):
             kept.append(box)
     return kept
+
+
+# ── 内包関係の重複検出を落とす（IoS）────────────────────────────────────
+
+DELETE_SMALL = "small"
+DELETE_BIG = "big"
+
+
+def box_ios(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """2 つのボックスの IoS（小さい方の面積に対する重なり率）.
+
+    IoU ではなく IoS を使う。大きさが違うと、内包していても IoU は
+    小さくなってしまう（面積比がそのまま上限になる）。
+    """
+    left = max(float(a["xmin"]), float(b["xmin"]))
+    top = max(float(a["ymin"]), float(b["ymin"]))
+    right = min(float(a["xmax"]), float(b["xmax"]))
+    bottom = min(float(a["ymax"]), float(b["ymax"]))
+    if right <= left or bottom <= top:
+        return 0.0
+
+    intersection = (right - left) * (bottom - top)
+    smaller = min(box_area(a), box_area(b))
+    return float(intersection / smaller) if smaller > 0 else 0.0
+
+
+def box_area(box: dict[str, Any]) -> float:
+    return max(0.0, float(box["xmax"]) - float(box["xmin"])) * max(
+        0.0, float(box["ymax"]) - float(box["ymin"])
+    )
+
+
+def suppress_contained_boxes(
+    boxes: Sequence[dict[str, Any]],
+    *,
+    threshold: float,
+    direction_by_label: dict[str, str],
+) -> int:
+    """同じラベルで内包関係にあるボックスの片方へ削除印を付ける.
+
+    Args:
+        direction_by_label: ``{ラベル: "small" | "big"}``。
+            ここに無いラベルは判定しない
+        threshold: IoS の下限
+
+    Returns:
+        削除印を付けた数。``boxes`` は **その場で書き換える**。
+
+    ## なぜ総当たりなのか
+
+    1 対 1 の割り当て（Hungarian）では、**1 つの大きなボックスに
+    2 つが内包される**場合に片方しか処理できない。同ラベル内の全対を
+    見る必要がある。
+
+    ## 1 パスで判定する
+
+    削除印は元の集合に対して付け、途中で対象から外さない。
+    入れ子が 3 段（A ⊃ B ⊃ C）のとき、
+      small … B と C が落ちて A が残る
+      big   … A と B が落ちて C が残る
+    となり、どちらも意図どおり。消しながら進めると順序に依存する。
+
+    面積が同じ場合は index で順序を決めるので、入力の並びを変えても
+    結果は変わらない。
+    """
+    if not boxes or threshold <= 0:
+        return 0
+
+    by_label: dict[str, list[int]] = {}
+    for index, box in enumerate(boxes):
+        if box.get("is_deleted"):
+            # 再判定で既に落ちているものは対象外
+            continue
+        label = box.get("label")
+        if label in direction_by_label:
+            by_label.setdefault(label, []).append(index)
+
+    marked = 0
+    for label, indices in by_label.items():
+        direction = direction_by_label[label]
+        areas = {i: box_area(boxes[i]) for i in indices}
+        for position, i in enumerate(indices):
+            for j in indices[position + 1:]:
+                if box_ios(boxes[i], boxes[j]) < threshold:
+                    continue
+                # 面積が同じときも決まるように index を第 2 キーにする
+                big, small = (
+                    (i, j) if (areas[i], i) >= (areas[j], j) else (j, i)
+                )
+                target = small if direction == DELETE_SMALL else big
+                if not boxes[target].get("is_deleted"):
+                    boxes[target]["is_deleted"] = True
+                    boxes[target]["deleted_by"] = f"ios_{direction}"
+                    marked += 1
+    return marked

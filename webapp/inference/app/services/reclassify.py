@@ -84,6 +84,7 @@ def reclassify_boxes(
             if final_label is None:
                 # 対応表が None = このボックスは使わない（論理削除）
                 box["is_deleted"] = True
+                box["deleted_by"] = "reclassification"
             else:
                 box["label"] = final_label
                 box["is_deleted"] = False
