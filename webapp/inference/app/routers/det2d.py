@@ -67,7 +67,11 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
     # 再判定は検出が全フレーム終わったあとに、別フェーズとして走らせる。
     # MAX_RESIDENT_MODELS=1 なので GroundingDINO と SigLIP2 は同時に載せられない
     reclassify_enabled = bool(req.re_classification_candidates)
-    if reclassify_enabled:
+    # 検出 0 件のフレームの救済も SigLIP2 を使う。
+    # 再判定をしない設定でも、救済だけ有効にできる
+    whole_image_enabled = bool(req.whole_image_candidates)
+    siglip2_enabled = reclassify_enabled or whole_image_enabled
+    if siglip2_enabled:
         total_inferences += num_frames_total
     job.set_progress(0, total_inferences, "モデルを準備中...")
 
@@ -165,11 +169,11 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                 )
                 num_boxes += len(kept)
                 all_frames.append(result)
-                if reclassify_enabled:
-                    # 再判定フェーズで画像を開き直すため、パスを覚えておく
+                if siglip2_enabled:
+                    # SigLIP2 のフェーズで画像を開き直すため、パスを覚えておく
                     pending_reclassify.append((path, result))
                 else:
-                    # 再判定しない場合はここで UI へ流す
+                    # SigLIP2 を使わない場合はここで UI へ流す
                     apply_ios(result)
                     job.append_partial(result.model_dump())
 
@@ -177,8 +181,10 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
     # GroundingDINO を解放してから SigLIP2 を載せる（VRAM の都合）
     num_reclassified = 0
     num_deleted = 0
-    if reclassify_enabled and not job.cancel_requested():
+    num_whole_image = 0
+    if siglip2_enabled and not job.cancel_requested():
         from app.services.reclassify import reclassify_boxes
+        from app.services.whole_image import classify_whole_image
 
         with model_registry.use_gpu("siglip2") as classifier:
             for path, result in pending_reclassify:
@@ -189,11 +195,27 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                     with Image.open(path) as opened:
                         image = opened.convert("RGB")
                     boxes = [b.model_dump() for b in result.boxes]
-                    num_reclassified += reclassify_boxes(
-                        classifier, image, boxes,
-                        req.re_classification_candidates,
-                        margin_ratio=req.reclassification_crop_margin_ratio,
-                    )
+                    if reclassify_enabled:
+                        num_reclassified += reclassify_boxes(
+                            classifier, image, boxes,
+                            req.re_classification_candidates,
+                            margin_ratio=req.reclassification_crop_margin_ratio,
+                        )
+                    # 残ったボックスが 0 件なら、画像全体で救済を試みる。
+                    # 視野いっぱいの車両は輪郭が画面に収まらず、
+                    # GroundingDINO が検出できないことがある
+                    if whole_image_enabled and not any(
+                        not b.get("is_deleted") for b in boxes
+                    ):
+                        rescued = classify_whole_image(
+                            classifier, image, req.whole_image_candidates,
+                            score_threshold=req.whole_image_score_threshold,
+                            resize_ratio=req.whole_image_resize_ratio,
+                        )
+                        if rescued is not None:
+                            boxes.append(rescued)
+                            if not rescued["is_deleted"]:
+                                num_whole_image += 1
                     result.boxes = [BBox2D(**b) for b in boxes]
                     num_deleted += sum(1 for b in boxes if b.get("is_deleted"))
                 except Exception as exc:  # noqa: BLE001
@@ -204,7 +226,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                     elapsed = time.perf_counter() - started
                     total_time += elapsed
                     done += 1
-                    job.set_progress(done, message="ラベル再判定")
+                    job.set_progress(done, message="ラベル再判定・救済判定")
                 # 再判定まで終わったフレームを UI へ流す
                 apply_ios(result)
                 job.append_partial(result.model_dump())
@@ -215,6 +237,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
         "num_reclassified": num_reclassified,
         "num_deleted": num_deleted,
         "num_ios_deleted": ios_counter["deleted"],
+        "num_whole_image": num_whole_image,
         "inference_time": round(total_time, 3),
         "frames": [f.model_dump() for f in all_frames],
     }

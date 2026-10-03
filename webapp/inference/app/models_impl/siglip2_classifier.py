@@ -103,3 +103,31 @@ class Siglip2Classifier:
         return self.classify_batch(
             [image], candidate_labels, score_threshold=score_threshold
         )[0]
+
+    def classify_with_score(
+        self, image: Image.Image, candidate_labels: Sequence[str]
+    ) -> tuple[str | None, float]:
+        """最良の候補とそのスコアを返す.
+
+        **閾値判定を呼び出し側に委ねる**ために、スコアをそのまま返す。
+        画像全体での救済判定では、閾値未満だった場合もスコアを記録して
+        UI で確認できるようにしたい（閾値の較正に使う）。
+        """
+        import torch
+
+        if not candidate_labels:
+            return None, 0.0
+
+        texts = [PROMPT_TEMPLATE.format(label=label) for label in candidate_labels]
+        inputs = self.processor(
+            text=texts, images=[image], padding="max_length",
+            max_length=TEXT_MAX_LENGTH, truncation=True,
+            max_num_patches=MAX_NUM_PATCHES, return_tensors="pt",
+        ).to(self.model.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        scores = torch.sigmoid(outputs.logits_per_image)[0]
+        best = int(scores.argmax())
+        return candidate_labels[best], float(scores[best])

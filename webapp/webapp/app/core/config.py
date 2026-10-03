@@ -173,6 +173,32 @@ class Settings(BaseSettings):
                        "mural": None,
                        "rider": None},
     }
+    # --- 検出 0 件のフレームの救済 ------------------------------------------
+    # 視野いっぱいに車両が写る構図では、輪郭が画面に収まらず
+    # GroundingDINO が何も検出しないことがある。
+    # そのフレームに限り、画像全体を 1 枚の切り出しとみなして分類する。
+    #
+    # 値が None の候補は **除外候補**（判定されても検出としない）。
+    # 相対比較で落とせるので、閾値の較正に依存しないで済む
+    WHOLE_IMAGE_CANDIDATES: dict[str, str | None] = {
+        "bus": "bus",
+        "truck cargo bed": "truck",
+        "road": None,
+        "building": None,
+        "vegetation": None,
+    }
+    # 採用候補が勝った場合でも、このスコア未満なら採用しない。
+    # 画像全体を覆うボックスになるので、誤ると後段への影響が大きい。
+    #
+    # NOTE: SigLIP のスコアは **確率ではない**（候補ごとに独立した sigmoid）。
+    # 合計 1 になる制約がないため、全体的に低い値が出る。
+    # 実データでの較正の結果この値にしている
+    DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD: float = 0.04
+    WHOLE_IMAGE_SCORE_THRESHOLD_MAX: float = 1.0
+    # 分類へ渡す前の縮小率。元解像度のままでは前処理が重い
+    DEFAULT_WHOLE_IMAGE_RESIZE_RATIO: float = 0.5
+    WHOLE_IMAGE_RESIZE_RATIO_MAX: float = 1.0
+
     # --- 重複検出の抑制（IoS）----------------------------------------------
     # 同じラベルのボックスがほぼ内包関係にあるとき、IoU の NMS では
     # 合体できない（大小差があると IoU が小さくなる）。
@@ -206,7 +232,9 @@ class Settings(BaseSettings):
     RECLASSIFICATION_CROP_MARGIN_RATIO_MAX: float = 1.0
 
     # --- 2D Object Detection ---------------------------------------------
-    DET2D_DEFAULT_SAMPLE_INTERVAL: int = 4
+    # 4 だとインターバルの間に現れて消えるインスタンスを取りこぼす
+    # （自車や対象の速度が速い場面）
+    DET2D_DEFAULT_SAMPLE_INTERVAL: int = 3
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
         "vehicle": 0.35,
         "road_object": 0.25,

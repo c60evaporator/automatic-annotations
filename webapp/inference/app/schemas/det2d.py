@@ -68,6 +68,11 @@ class Detection2DRequest(BaseModel):
     )
     # 切り出し時にボックスを広げる比率
     reclassification_crop_margin_ratio: float = 0.1
+    # 検出 0 件のフレームを画像全体の分類で救済する。
+    # {分類候補: 最終ラベル or None}。None は除外候補。空なら救済しない
+    whole_image_candidates: dict[str, str | None] = Field(default_factory=dict)
+    whole_image_score_threshold: float = 0.3
+    whole_image_resize_ratio: float = 0.5
     # 内包関係の重複検出を落とす IoS の閾値。0 なら判定しない
     ios_delete_threshold: float = 0.0
     # {ラベル: "small" | "big"}。ここに無いラベルは判定しない
@@ -122,6 +127,8 @@ class Detection2DResult(BaseModel):
     num_deleted: int = 0
     # IoS の内包判定で落とした数
     num_ios_deleted: int = 0
+    # 画像全体の分類で救済した数（論理削除になったものは含まない）
+    num_whole_image: int = 0
     inference_time: float
     frames: list[Detection2DFrameResult]
 

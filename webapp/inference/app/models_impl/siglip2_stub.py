@@ -51,3 +51,13 @@ class Siglip2ClassifierStub:
         return self.classify_batch(
             [image], candidate_labels, score_threshold=score_threshold
         )[0]
+
+    def classify_with_score(
+        self, image: Image.Image, candidate_labels: Sequence[str]
+    ) -> tuple[str | None, float]:
+        if not candidate_labels:
+            return None, 0.0
+        label = self.classify_batch([image], candidate_labels)[0]
+        # 画像サイズから決まる値をスコアにする（決定的）
+        seed = int(hashlib.md5(f"{image.size}:score".encode()).hexdigest()[:8], 16)
+        return label, round(0.2 + (seed % 70) / 100.0, 3)

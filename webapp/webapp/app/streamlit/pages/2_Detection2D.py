@@ -198,6 +198,36 @@ with param_col:
             + "（config の RE_CLASSIFICATION_CANDIDATES で指定）"
         )
 
+        st.markdown("**Whole-Image Fallback**")
+        whole_cols = st.columns(2)
+        with whole_cols[0]:
+            whole_image_threshold = st.slider(
+                "Whole-Image Score Threshold", 0.0,
+                settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX,
+                # SigLIP のスコアは低めに出るので刻みを細かくする
+                value=settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD, step=0.02,
+                help=("検出が 0 件のフレームで、画像全体を分類して救済する。"
+                      "このスコア未満なら採用しない（論理削除として残るので、"
+                      "Show deleted と Box text=Score で分布を確認できる）"),
+            )
+        with whole_cols[1]:
+            whole_image_resize = st.slider(
+                "Whole-Image Resize Ratio", 0.1,
+                settings.WHOLE_IMAGE_RESIZE_RATIO_MAX,
+                value=settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO, step=0.05,
+                help="分類へ渡す前の縮小率。元解像度のままでは前処理が重い",
+            )
+        positives = [
+            k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if v
+        ]
+        negatives = [
+            k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if not v
+        ]
+        st.caption(
+            f"採用候補: {', '.join(positives)} / 除外候補: {', '.join(negatives)}"
+            "（config の WHOLE_IMAGE_CANDIDATES で指定）"
+        )
+
         st.markdown("**Duplicate Suppression (IoS)**")
         ios_threshold = st.slider(
             "IoS Delete Threshold", 0.0,
@@ -267,6 +297,10 @@ def _build_payload() -> dict:
         },
         "reclassification_crop_margin_ratio": float(reclassify_margin),
         # 内包関係の重複検出を落とす（IoU の NMS では合体できないケース）
+        # 検出 0 件のフレームを画像全体の分類で救済する
+        "whole_image_candidates": dict(settings.WHOLE_IMAGE_CANDIDATES),
+        "whole_image_score_threshold": float(whole_image_threshold),
+        "whole_image_resize_ratio": float(whole_image_resize),
         "ios_delete_threshold": float(ios_threshold),
         "ios_delete_direction": dict(settings.DET2D_IOS_DELETE_DIRECTION),
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
