@@ -1,17 +1,26 @@
 ## Build the base Docker image
 
-### cu124-devel-ubuntu22.04
+### CUDA12.4.1 + torch2.5.1
 
 devel
 
 ```
 cd docker
-docker build -t jidohub/base-cu124-devel-ubuntu22.04:latest -f Dockerfile_devel .
+bash cu124_devel_ubuntu2204.sh
 ```
 
 runtime
 
 ```
 cd docker
-docker build -t jidohub/base-cu124-runtime-ubuntu22.04:latest -f Dockerfile_runtime .
+bash cu124_runtime_ubuntu2204.sh
+```
+
+### CUDA12.8.0 + torch2.9.1
+
+devel
+
+```
+cd docker
+bash cu128_devel_ubuntu2204.sh
 ```

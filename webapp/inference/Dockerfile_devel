@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Base image
-FROM jidohub/base-cu128-devel-ubuntu22.04:latest
+FROM jidohub/base-cu124-devel-ubuntu22.04:latest
 
 # Common environment variables (TORCH_CUDA_ARCH_LIST)
 ARG TORCH_CUDA_ARCH_LIST
@@ -44,6 +44,12 @@ ENV CUDA_HOME=/usr/local/cuda
 WORKDIR ${THIRD_PARTY_ROOT}
 RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
 WORKDIR ${THIRD_PARTY_ROOT}/GroundingDINO
+# GroundingDINO's CUDA extension uses deprecated PyTorch APIs.
+# Patch it for recent PyTorch versions.
+RUN sed -i \
+    -e 's/value\.type()\.is_cuda()/value.is_cuda()/g' \
+    -e 's/value\.type()/value.scalar_type()/g' \
+    groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu
 # GroundingDINO imports torch from setup.py while resolving build requirements.
 # Reuse the environment where torch was installed instead of an isolated build.
 RUN pip install \
