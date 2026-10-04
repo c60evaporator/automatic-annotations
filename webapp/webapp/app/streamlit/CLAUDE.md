@@ -34,6 +34,10 @@
     - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる
     - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
     - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合
+    - Whole-Image Fallback: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定関係。以下パラメータを指定可能
+        - Whole-Image Score Threshold: Whole-Image再判定時のSigLIP2スコアの閾値。この閾値以下の結果は削除
+        - Whole-Image Resize Ratio: Whole-Image再判定時の画像リサイズ率
+    - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /detection2d/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /detection2d/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存する
     - 推論が完了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。ただし過去に手作業で修正したバウンディングボックスがあれば優先して使用するため、保存前に以下処理をsample_data_tokenごと（Sample＆カメラごと）に実行

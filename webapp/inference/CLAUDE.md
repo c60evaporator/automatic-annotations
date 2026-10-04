@@ -15,13 +15,14 @@ Detection2Dは、以下のフローで行われます
     - プロンプトを渡してGrounding DINOで推論
     - 推論で得られたサブラベルを`settings.LABEL_TO_SUBLABEL`で逆引きしてラベルに戻す
 - GroundingDINOで得られた各バウンディングボックスのラベルを、以下手順でSigLIP2により再判定
-    - GroundingDINOのラベルに応じて`settings.RE_CLASSIFICATION_CANDIDATES`から再判定のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）
+    - GroundingDINOのラベルに応じて`settings.RE_CLASSIFICATION_CANDIDATES`から再判定のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す。valueがNoneならそのボックスを削除）
     - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
     - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、最もスコアの大きいラベルを採用
     - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
 - 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
     - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
     - 閾値を超えた場合、面積が小さい方or大きい方のボックスを削除する（大小どちらを削除するかは後述の`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに決める）
+- そのカメラ・フレームのボックス検出数が0の場合、画像全体をリサイズ（Whole-Image Resize Ratioで割合指定）してSigLIP2で推論を実施。`settings.WHOLE_IMAGE_CANDIDATES`から推論のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）。推論のスコアがWhole-Image Score Threshold以下または割り当てられたラベル（辞書のvalue）がNoneなら結果を使用せず削除し、どちらでもない場合は割り当てられたラベルの全画面のボックスを追加する
 
 `settings.DET2D_IOS_DELETE_DIRECTION`は以下のようにラベルをkeyとし、"small"ならIoSが閾値を超えたら小さい方のボックスを削除し、"big"なら大きい方のボックスを削除するようにします
 
@@ -527,7 +528,17 @@ for camera_channel in CAMERA_CHANNELS:
         }
 ```
 
-LiDAR点群の読込と地面除去、インスタンスマスクのクロージング処理適用、推論で得られたdepth画像のマスク投影とsky_mask適用は、以下のように実施します（depth_map_to_point_cloud_per_instance関数は添付depth.pyを参照してください）
+上記に続く処理
+
+- LiDAR点群の読込と地面除去
+- インスタンスマスクのクロージング処理適用
+- 推論で得られたdepth画像のマスク投影点群化とsky_mask、ROR・DBSCAN適用
+- LiDAR点群のマスク投影とROR・DBSCANの適用
+- インスタンスごとのDepth点群とLiDAR点群の混合
+- カメラ間同一インスタンス結合
+- Box Fitting
+
+は、以下のように実施します
 
 ```python
 import pypatchworkpp
@@ -536,7 +547,7 @@ import pypatchworkpp
 for sample_index in range(len(samples)):
     pointclouds_per_instance[sample_index] = {}
 
-    # Read the LiDAR point cloud
+    # Read the LiDAR point cloud (keyframe LiDAR coordinates)
     lidar_data = get_lidar_pointcloud_in_sample(
         sample_index=sample_index,
         samples_in_scene=samples,
@@ -561,6 +572,8 @@ for sample_index in range(len(samples)):
         sweep_nonground = PatchworkPLUSPLUS.getNonground()
         nonground.append(sweep_nonground)
     lidar_points = np.vstack(nonground)
+    # Convert LiDAR coordinates to ego
+    lidar_points_ego = transform_lidar_to_ego(lidar_points, lidar_translation, lidar_quaternion)
 
     # Camera channel loop
     for i_cam, camera_channel in enumerate(CAMERA_CHANNELS):
@@ -580,7 +593,7 @@ for sample_index in range(len(samples)):
         closed_instance_masks = [mask_morphology(mask, kernel_sizes=CLOSING_KERNEL_SIZES, ratio_morphology=RATIO_MORPHOLOGY)
                                 for mask in depth_instance_masks]
         # Get the pseudo-LiDAR point clouds from the depth image and instance masks
-        pseudo_points_per_instance, colors = depth_map_to_point_cloud_per_instance(
+        depth_points_per_instance, colors = depth_map_to_point_cloud_per_instance(
             metric_depth=depth_image,
             camera_intrinsics=depth_est_result["scaled_intrinsics"],
             instances=closed_instance_masks,
@@ -588,17 +601,64 @@ for sample_index in range(len(samples)):
             color=category_color_dict,
             color_attr="label"
         )
-        for instance, pseudo_points in zip(closed_instance_masks, pseudo_points_per_instance):
-            pseudo_points_ego = transform_cam_to_ego(
-                pseudo_points,
+        # Per instance processes
+        for instance, inst_depth_points in zip(closed_instance_masks, depth_points_per_instance):
+            inst_depth_points_ego = transform_cam_to_ego(
+                inst_depth_points,
                 camera_translation=depth_est_result["camera_translation"],
                 camera_quaternion=depth_est_result["camera_quaternion"]
             )
-            pseudo_points_global = transform_ego_to_global(
-                pseudo_points_ego,
+            inst_depth_points_global = transform_ego_to_global(
+                inst_depth_points_ego,
                 ego_translation=depth_est_result["ego_translation"],
                 ego_quaternion=depth_est_result["ego_quaternion"]
             )
-            pointclouds_per_instance[sample_index][camera_channel][instance.box.track_id] = {}
-            pointclouds_per_instance[sample_index][camera_channel][instance.box.track_id]["pseudo_pointcloud"] = pseudo_points_global
+            # Apply ROR and DBSCAN noise removal
+            inst_depth_points_global = apply_ror_dbscan(inst_depth_points_global,
+                                                        depth_ror_nb_points, depth_ror_radius,
+                                                        depth_dbscan_eps, depth_dbscan_min_samples)
+            
+            ###### Project LiDAR points to instance mask ######
+            inst_lider_points = instance_lidar_points(
+                instance,
+                lidar_points_ego,
+                camera_translation=depth_est_result["camera_translation"],
+                camera_quaternion=depth_est_result["camera_quaternion"]
+            )
+            inst_lider_points_global = transform_ego_to_global(
+                inst_lider_points,
+                ego_translation=depth_est_result["ego_translation"],
+                ego_quaternion=depth_est_result["ego_quaternion"]
+            )
+            # Apply ROR and DBSCAN noise removal
+            inst_lidar_points_global = apply_ror_dbscan(inst_lidar_points_global,
+                                                        lidar_ror_nb_points, lidar_ror_radius,
+                                                        lidar_dbscan_eps, lidar_dbscan_min_samples)
+            # Use Depth only if the number of LiDAR points is lower than threshold
+            if len(inst_lidar_points_global) < min_lidar_points_to_use:
+                inst_points = inst_depth_points_global
+            # Mix Depth and LiDAR instande points
+            elif len(inst_lidar_points_global) < max_lidar_points_to_use_depth:
+                inst_points = mix_depth_with_lidar(inst_depth_points_global, inst_lider_points_global)
+            # Use LiDAR only if the number of LiDAR points is higher than threshold
+            else:
+                inst_points = inst_lider_points_global
+            pointclouds_per_instance[sample_index][camera_channel][instance.box.track_id] = inst_points
+        
+    ##### Inter-cam instance points merge ######
+    pointclouds_per_global_track = inter_cam_instance_merge(
+        method="bev_convex_hull",
+        label_match="category_group",
+        overlap_threshold=0.15,
+        max_centroid_distance=3.0,
+        min_match_frames=1
+    )
+
+    for global_track_points in pointclouds_per_global_track:
+        ##### Box fitting ######
+        fitted_box = fit_convex_hull_moa(
+            global_track_points,
+            angle_step_deg=0.5,
+            z_percentiles=(1, 99),
+        )
 ```
