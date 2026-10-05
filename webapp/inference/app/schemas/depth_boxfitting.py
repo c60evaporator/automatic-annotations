@@ -152,6 +152,8 @@ class BoxFittingResult(BaseModel):
     hull_xy: dict[str, Any] | None = None
     # 手法固有の指標（occlusion_area など）
     fit_metrics: dict[str, Any] | None = None
+    # 当てはめ・結合に深度点群を使ったか（LiDAR が十分なら False）
+    depth_used: bool = True
     # LiDAR を基準に補正した深度点群と、その係数
     points_depth_corrected_ego: dict[str, Any] | None = None
     depth_correction: dict[str, Any] | None = None

@@ -214,6 +214,7 @@ class BoxFittingPipeline:
         reference_ego_poses: dict[str, dict[str, Any]] | None = None,
         lidar_path: Path | str | None = None,
         min_lidar_points: int = 0,
+        max_lidar_points_for_depth: int = 0,
         depth_correction_method: str | None = None,
         fit_boxes: bool = True,
         **_: Any,
@@ -228,6 +229,9 @@ class BoxFittingPipeline:
                 渡すとインスタンスごとの LiDAR 点群も作る
             min_lidar_points: LiDAR 点がこの数に届かないインスタンスは
                 LiDAR 点群を持たせない（少なすぎる点は補正に使えない）
+            max_lidar_points_for_depth: LiDAR 点がこの数以上なら
+                **深度点群を使わない**（0 で無効）。LiDAR だけで形が取れる
+                場合、深度推定の外れ値が混ざるほうが害になる
             depth_correction_method: 指定すると、LiDAR を基準に深度点群を補正し、
                 **補正後の深度点群と LiDAR 点群を混ぜて**当てはめに使う。
                 None なら補正せず、従来どおり深度点群のみで当てはめる
@@ -400,10 +404,21 @@ class BoxFittingPipeline:
             entry["num_points_lidar"] = int(lidar_instance.shape[0])
             entry["num_points_lidar_kept"] = int(lidar_instance.shape[0])
 
-            # --- LiDAR を基準に深度点群を補正し、混ぜる ------------------
+            # --- 使う点群を決める ----------------------------------------
+            # LiDAR が十分にあるなら深度点群は使わない。
+            # 深度推定の外れ値が混ざると、当てはめも結合も引きずられる
+            lidar_only = bool(
+                max_lidar_points_for_depth > 0
+                and lidar_instance.shape[0] >= max_lidar_points_for_depth
+            )
+            entry["depth_used"] = not lidar_only
+
             # 当てはめ・結合に使う点群。補正できなければ深度点群のまま
-            fit_points = points_ego
-            if depth_correction_method and lidar_instance.shape[0]:
+            fit_points = lidar_instance if lidar_only else points_ego
+            if lidar_only:
+                # 深度は使わないので補正もしない（補正後の点群も残さない）
+                pass
+            elif depth_correction_method and lidar_instance.shape[0]:
                 from app.services.depth_correction import (
                     apply_correction,
                     fit_correction,

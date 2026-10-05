@@ -307,6 +307,11 @@ class Settings(BaseSettings):
     # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）
     LIDAR_NUM_SWEEPS_DEFAULT: int = 5
     LIDAR_MIN_POINTS_DEFAULT: int = 6
+    # インスタンスの LiDAR 点がこの数以上なら、**深度点群を使わない**。
+    # LiDAR だけで形が十分に取れる場合、深度推定の外れ値が混ざるほうが害になる。
+    # 0 なら無効（常に深度点群も使う）
+    LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 60
+    LIDAR_MAX_POINTS_FOR_DEPTH_MAX: int = 500
     LIDAR_MIN_POINTS_MAX: int = 200
     LIDAR_ROR_NB_POINTS_DEFAULT: int = 3
     LIDAR_ROR_NB_POINTS_MAX: int = 50

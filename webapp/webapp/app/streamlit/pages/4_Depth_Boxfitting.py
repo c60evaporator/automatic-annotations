@@ -360,6 +360,15 @@ with param_col:
                 help=("これ未満のインスタンスは LiDAR 点群を持たせない。"
                       "深度点群だけでフィッティングし、表示もされない"),
             )
+            max_lidar_for_depth = st.slider(
+                "Max LiDAR Points to use Depth", 0,
+                settings.LIDAR_MAX_POINTS_FOR_DEPTH_MAX,
+                value=settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT, step=1,
+                help=("LiDAR 点がこの数以上のインスタンスは、**深度点群を使わず**"
+                      "LiDAR だけで当てはめ・カメラ間結合を行う。"
+                      "LiDAR で形が取れている場合、深度推定の外れ値が混ざるほうが"
+                      "害になるため。0 で無効（常に深度点群も使う）"),
+            )
             st.markdown("**ROR**")
             lidar_ror_nb = st.slider(
                 "nb_points", 1, settings.LIDAR_ROR_NB_POINTS_MAX,
@@ -494,6 +503,8 @@ depth_params = {
 }
 lidar_params = {
     "min_points": int(min_lidar_points),
+    # これ以上の LiDAR 点があるインスタンスは深度点群を使わない
+    "max_points_for_depth": int(max_lidar_for_depth),
     # LiDAR を基準に深度点群を補正する方式。run に記録するため lidar_params に入れる
     "depth_correction": depth_correction_method,
     "ror_nb_points": int(lidar_ror_nb), "ror_radius": float(lidar_ror_radius),
@@ -1030,11 +1041,14 @@ with pointcloud_tab_view:
                 if depth_instance_mode == DEPTH_INSTANCE_CORRECTED:
                     # 補正後の点群で表示する。補正できなかったインスタンス
                     # （LiDAR 点が足りない等）は補正前のまま表示する。
+                    # **深度点群を使わなかったインスタンス（LiDAR が十分）は
+                    # 何も出さない。** raw のほうは比較のために出す
                     # 元の dict は書き換えない（キャッシュを共有しているため）
                     flat = [
                         {**fit, "_depth_display": (
-                            fit.get("points_depth_corrected_ego")
-                            or fit.get("points_depth_ego")
+                            (fit.get("points_depth_corrected_ego")
+                             or fit.get("points_depth_ego"))
+                            if fit.get("depth_used", True) else None
                         )}
                         for fit in flat
                     ]
@@ -1304,18 +1318,23 @@ with fitting_tab_view:
             include_hull=show_hull,
         )
         bf_flat = [fit for items_ in bf_fittings.values() for fit in items_]
-        # 補正後の点群で見るときは、補正できなかったインスタンスだけ
-        # 補正前へ落とす（元の dict は書き換えない。キャッシュ共有のため）
-        bf_depth_key = "points_depth_ego"
-        if bf_depth_mode == DEPTH_INSTANCE_CORRECTED:
-            bf_flat = [
-                {**fit, "_depth_display": (
-                    fit.get("points_depth_corrected_ego")
-                    or fit.get("points_depth_ego")
-                )}
-                for fit in bf_flat
-            ]
-            bf_depth_key = "_depth_display"
+        # **実際に当てはめへ使った点群だけを出す。**
+        # 深度点群を使わなかったインスタンス（LiDAR が十分）は深度を出さない。
+        # 補正後で見るときは、補正できなかったものだけ補正前へ落とす
+        # （元の dict は書き換えない。キャッシュ共有のため）
+        bf_flat = [
+            {**fit, "_depth_display": (
+                None if not fit.get("depth_used", True)
+                else (
+                    (fit.get("points_depth_corrected_ego")
+                     or fit.get("points_depth_ego"))
+                    if bf_depth_mode == DEPTH_INSTANCE_CORRECTED
+                    else fit.get("points_depth_ego")
+                )
+            )}
+            for fit in bf_flat
+        ]
+        bf_depth_key = "_depth_display"
 
         def _bf_color(item: dict) -> str:
             return instance_color(item, bf_color_mode)

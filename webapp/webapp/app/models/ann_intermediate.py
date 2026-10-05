@@ -716,6 +716,13 @@ class BoxFitting3D(Base):
     # 持つと同じ情報の二重管理になる。
     points_depth_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     points_lidar_ego: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 当てはめ・結合に深度点群を使ったか。
+    # LiDAR 点が十分にあるインスタンスでは False になり、LiDAR だけで当てる。
+    # **表示でも「実際に使った点群」を出すのに要る**ので列として持つ
+    # （run の閾値から導出もできるが、条件を 2 箇所に書くとずれる）
+    depth_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("1")
+    )
     # LiDAR を基準に補正した深度点群。補正できなかった場合は None
     # （points_depth_ego が補正前。UI で見比べられるよう両方残す）
     points_depth_corrected_ego: Mapped[dict | None] = mapped_column(
