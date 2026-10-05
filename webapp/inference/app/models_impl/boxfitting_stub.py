@@ -118,6 +118,8 @@ class BoxFittingStub:
         sweeps: list[dict[str, Any]] | None = None,
         num_sweeps: int = 1,
         stub_delay_sec: float | None = None,
+        # 本実装と引数を揃える（スタブは合成点群なので反射は無い）
+        ego_box: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         """sweep を統合し、地面判定を付けて .npz として保存する.

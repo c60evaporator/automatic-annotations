@@ -121,6 +121,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                     dataroot=dataroot,
                     sweeps=[f.model_dump() for f in group],
                     num_sweeps=req.num_lidar_sweeps,
+                    # 自車の反射を落とす（インスタンス抽出より前に行う）
+                    ego_box=req.ego_box,
                     stub_delay_sec=req.stub_delay_sec,
                 )
             except NotImplementedError as exc:

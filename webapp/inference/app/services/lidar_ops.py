@@ -253,3 +253,51 @@ def instance_lidar_points(
 
     # 返すのは基準 ego 座標（投影は選別のためだけに使う）
     return points_ego_reference[selected][:, :3]
+
+
+def remove_ego_points(
+    points_ego: np.ndarray,
+    *,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    z_range: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """自車の車体が占める範囲にある点を落とす（ego 座標）.
+
+    Args:
+        x_range / y_range / z_range: 車体の範囲 [m]。
+            いずれかが None なら除去しない
+
+    Returns:
+        ``(残った点, 残った点の bool マスク)``
+
+    ## なぜ必要か
+
+    LiDAR は自車の屋根やボンネットに当たった反射も返す。これが
+    インスタンスマスクの視野上に重なると、インスタンスの点群へ混入する。
+    反射点は **非常に密**なので DBSCAN の最大クラスタとして勝ってしまい、
+    後段のフィルタでは救えない。
+
+    ## なぜ半径ではなく直方体か
+
+    半径で切ると、自車のすぐ横の歩行者や前方 1.5 m の車も一緒に消える。
+    反射点は物理的に **車体がある空間**に現れるので、ego 座標の直方体で
+    切るほうが正確（ego 座標は原点が後輪車軸の中点・地面高さで固定）。
+
+    nuScenes devkit の ``remove_close`` は LiDAR 座標で
+    ``|x| < r かつ |y| < r`` の正方形を落とす。これを車体形状に
+    合わせて精密化したもの。
+    """
+    points_ego = np.asarray(points_ego, dtype=np.float64)
+    if points_ego.shape[0] == 0 or not (x_range and y_range and z_range):
+        return points_ego, np.ones(points_ego.shape[0], dtype=bool)
+
+    inside = (
+        (points_ego[:, 0] >= x_range[0]) & (points_ego[:, 0] <= x_range[1])
+        & (points_ego[:, 1] >= y_range[0]) & (points_ego[:, 1] <= y_range[1])
+        & (points_ego[:, 2] >= z_range[0]) & (points_ego[:, 2] <= z_range[1])
+    )
+    keep = ~inside
+    if int(inside.sum()):
+        logger.debug("removed %d ego-reflection points", int(inside.sum()))
+    return points_ego[keep], keep

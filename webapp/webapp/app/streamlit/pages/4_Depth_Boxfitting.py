@@ -54,6 +54,7 @@ from app.streamlit.components.instance_tracking_viewer import (
     preferred_instances,
 )
 from app.streamlit.components.box3d_viewer import (
+    BOX3D_TEXT_MODES,
     box_center_in_fov,
     render_box3d_comparison_grid,
     render_box3d_grid,
@@ -1386,7 +1387,13 @@ with fitting_tab_view:
                     bf_color_mode))
         if show_bf_lidar:
             bf_groups += group_instance_points(
-                bf_flat, color_mode=bf_color_mode, points_key="points_lidar_ego")
+                bf_flat, color_mode=bf_color_mode, points_key="points_lidar_ego",
+                # 深度点群と同じ軸で色分けする。渡さないと Label へ落ちる
+                key_fn=lambda f: instance_legend_key(f, bf_color_mode),
+                color_fn=lambda k: instance_color(
+                    {"global_track_id": k, "track_id": k, "label": k},
+                    bf_color_mode),
+                symbol=SYMBOL_LIDAR, size=MARKER_SIZE_LIDAR)
 
         # GT は sample 単位。**基準 ego 座標へ変換する**。
         # 推定ボックスが基準 ego にあるので、カメラごとの ego_pose を使うと
@@ -1465,7 +1472,7 @@ with cam_tab_view:
         )
         S.init_sticky(W_CAM_TEXT, OPT_CAM_TEXT, TEXT_MODE_TRACK)
         cam_text_mode = st.radio(
-            "Instance text", INSTANCE_TEXT_MODES, key=W_CAM_TEXT,
+            "Instance text", BOX3D_TEXT_MODES, key=W_CAM_TEXT,
             on_change=S.sync_sticky, args=(W_CAM_TEXT, OPT_CAM_TEXT),
         )
 

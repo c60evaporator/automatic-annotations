@@ -34,7 +34,15 @@ from app.streamlit.components.instance_tracking_viewer import (
     COLOR_MODE_TRACK,
     TEXT_MODE_LABEL,
     TEXT_MODE_NONE,
+    TEXT_MODE_TRACK,
     color_for_track,
+)
+
+# カメラ跨ぎで結合したトラック ID を文字として出すモード
+TEXT_MODE_GLOBAL = "Global Track"
+# Box on Cam の Instance text の選択肢
+BOX3D_TEXT_MODES = (
+    TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_TRACK, TEXT_MODE_GLOBAL,
 )
 
 # 3D ボックスの線幅。12 辺あるので細いと画像上で追いにくい
@@ -127,6 +135,13 @@ def color_for_box(box: dict[str, Any], color_mode: str) -> str:
 
 
 def legend_key(box: dict[str, Any], color_mode: str) -> str:
+    """凡例・ホバーに出すキー.
+
+    **color_for_box と同じ軸で分けること。** 片方だけ分岐を足すと、
+    色は Global Track なのに凡例は Label、という食い違いが起きる
+    """
+    if color_mode == COLOR_MODE_GLOBAL:
+        return str(box.get("global_track_id") or box.get("track_id", ""))
     if color_mode == COLOR_MODE_TRACK:
         return str(box.get("track_id", ""))
     return str(box.get("label", ""))
@@ -170,10 +185,14 @@ def draw_boxes_3d(
             )
 
         if font is not None:
-            text = (
-                str(box.get("label", "")) if text_mode == TEXT_MODE_LABEL
-                else str(box.get("track_id", ""))
-            )
+            if text_mode == TEXT_MODE_LABEL:
+                text = str(box.get("label", ""))
+            elif text_mode == TEXT_MODE_GLOBAL:
+                # 結合していない run では global_track_id が無いので
+                # track_id へ落とす
+                text = str(box.get("global_track_id") or box.get("track_id", ""))
+            else:
+                text = str(box.get("track_id", ""))
             if not text:
                 continue
             # 見えている頂点のうち一番上に置く

@@ -333,6 +333,18 @@ class Settings(BaseSettings):
     DEPTH_CORRECTION_METHODS: list[str] = ["scale", "shift", "affine"]
     DEFAULT_DEPTH_CORRECTION_METHOD: str = "scale"
 
+    # 自車の車体が占める範囲（ego 座標、メートル）。
+    # LiDAR は自車の屋根やボンネットの反射も返す。これがインスタンスマスクに
+    # 重なると点群へ混入し、**非常に密なので DBSCAN の最大クラスタとして
+    # 勝ってしまう**（後段のフィルタでは救えない）。
+    #
+    # 半径ではなく直方体で切る。半径だと自車のすぐ横の歩行者や
+    # 前方 1.5 m の車も消えてしまう。
+    # nuScenes の ego は 4.084 x 1.730 x 1.562 m。少し余裕を持たせている
+    EGO_BOX_X_RANGE: tuple[float, float] = (-1.5, 4.2)
+    EGO_BOX_Y_RANGE: tuple[float, float] = (-1.3, 1.3)
+    EGO_BOX_Z_RANGE: tuple[float, float] = (-0.5, 2.3)
+
     # --- カメラ間の結合 ----------------------------------------------------
     # 点群を揃える基準の座標系を決めるセンサー。
     # カメラごとに sample_data のタイムスタンプが違うため、

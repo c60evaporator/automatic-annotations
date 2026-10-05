@@ -128,6 +128,8 @@ class BoxFittingPipeline:
         dataroot: Path | str = "",
         sweeps: list[dict[str, Any]] | None = None,
         num_sweeps: int = 1,
+        # 自車の車体が占める範囲（ego 座標）。反射点を落とすのに使う
+        ego_box: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
         """sweep を統合し、地面判定を付けて .npz として保存する.
@@ -159,6 +161,24 @@ class BoxFittingPipeline:
         )
         points_ego = lidar_to_ego(points_lidar, calib)
 
+        # 自車の反射を落とす。**インスタンス抽出より前**に落とす必要がある。
+        # 反射点は非常に密で、DBSCAN の最大クラスタとして勝ってしまうため
+        # 後段では救えない。地面推定への影響も避けられる
+        if ego_box:
+            from app.services.lidar_ops import remove_ego_points
+
+            before = points_ego.shape[0]
+            points_ego, keep = remove_ego_points(
+                points_ego,
+                x_range=ego_box.get("x"),
+                y_range=ego_box.get("y"),
+                z_range=ego_box.get("z"),
+            )
+            ground_mask = ground_mask[keep]
+            removed_ego = before - points_ego.shape[0]
+        else:
+            removed_ego = 0
+
         path = output_dir / "lidar" / f"{frame['sample_token']}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
@@ -175,6 +195,8 @@ class BoxFittingPipeline:
             "num_sweeps": len(target_sweeps),
             "num_points": int(points_ego.shape[0]),
             "num_ground_points": int(ground_mask.sum()),
+            # 自車の反射として落とした数（効き具合の確認用）
+            "num_points_ego_removed": removed_ego,
         }
 
     # ── 3. インスタンスごとの点群 ────────────────────────────────────────

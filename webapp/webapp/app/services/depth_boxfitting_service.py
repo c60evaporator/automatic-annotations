@@ -170,6 +170,12 @@ def build_boxfitting_payload(
         "box_fitting_params": box_fitting_params or {},
         # ROR の nb_points にかけるラベルごとの倍率（設定のスナップショット）
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
+        # 自車の反射を落とすための車体範囲（ego 座標）
+        "ego_box": {
+            "x": list(settings.EGO_BOX_X_RANGE),
+            "y": list(settings.EGO_BOX_Y_RANGE),
+            "z": list(settings.EGO_BOX_Z_RANGE),
+        },
         # sample ごとの基準 ego_pose。カメラ間で点群の座標系を揃えるのに使う
         "reference_ego_poses": reference_ego_poses,
         # カメラ跨ぎの結合。空なら結合しない

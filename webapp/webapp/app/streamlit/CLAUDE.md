@@ -135,8 +135,10 @@
             - eps: epsパラメータ（近傍とみなす半径）
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
     - LiDAR Pointcloud: LiDAR点群の結合・ノイズ除去・Depth点群とのに使用するパラメータ
+        - Depth Correction: Depth点群の深さ方向位置をLiDAR点群で補正する際のアルゴリズムを選択するプルダウン。"scale"（中央値の比で補正）、"shift"（中央値の差で補正）、"affine"（2パラメータ）の選択肢を持つ
         - LiDAR Sweeps: キーフレームあたりで結合するLiDAR点群のsweep数
         - Min LiDAR Points: インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）
+        - Max LiDAR Points to use Depth: Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれを上回ったインスタンスはLiDAR点群のみ使用する）
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
             - radius: radiusパラメータ（注目する点を中心とした球の半径）

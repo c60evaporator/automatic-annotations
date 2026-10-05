@@ -359,13 +359,14 @@ Depth Boxfittingは、以下のフローで行われます
         - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
         - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
-        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行する
+        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて合体する
+        - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
         - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
         - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
-        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値以上の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームが`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`以上離れているトラック同士は結合されないようにする）
+        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
         - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
     - global_track_idごとに結合した点群に対して、[こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさと角度（yaw角）を推定する
     - 3Dバウンディングボックスの高さは、global_track_idごと点群の分位点に基づき推定する

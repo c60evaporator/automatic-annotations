@@ -67,6 +67,9 @@ class BoxFittingRequest(BaseModel):
     # LiDAR をフィッティングに使うか（読み込みと地面除去は常に行う）
     use_lidar: bool = False
     num_lidar_sweeps: int = 1
+    # 自車の車体が占める範囲（ego 座標）。{"x": [min,max], "y": ..., "z": ...}。
+    # ここに入る LiDAR 点は自車の反射なので落とす。空なら落とさない
+    ego_box: dict[str, Any] = Field(default_factory=dict)
 
     # UI のタブに対応した設定群
     mask_params: dict[str, Any] = Field(default_factory=dict)
@@ -121,6 +124,8 @@ class LidarPointcloudResult(BaseModel):
     num_points: int = 0
     num_ground_points: int = 0
     error: str | None = None
+    # 自車の反射として落とした数
+    num_points_ego_removed: int = 0
 
 
 class BoxFittingResult(BaseModel):
