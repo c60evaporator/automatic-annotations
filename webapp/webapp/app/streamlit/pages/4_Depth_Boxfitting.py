@@ -1015,7 +1015,25 @@ with pointcloud_tab_view:
                     show_fitted_boxes and tokens) else {}
                 # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）
                 raw = points_mode == POINTS_MODE_RAW
-                depth_key = "points_raw_ego" if raw else "points_filtered_ego"
+                corrected = depth_instance_mode == DEPTH_INSTANCE_CORRECTED
+                if corrected:
+                    # 補正後で見る。補正できなかったものは補正前へ落とし、
+                    # 深度を使わないインスタンス（LiDAR が十分）は出さない
+                    source = (
+                        "points_corrected_raw_ego" if raw
+                        else "points_corrected_filtered_ego"
+                    )
+                    fallback = "points_raw_ego" if raw else "points_filtered_ego"
+                    flat = [
+                        {**i, "_depth_display": (
+                            (i.get(source) or i.get(fallback))
+                            if i.get("depth_used", True) else None
+                        )}
+                        for i in flat
+                    ]
+                    depth_key = "_depth_display"
+                else:
+                    depth_key = "points_raw_ego" if raw else "points_filtered_ego"
                 # LiDAR 側も同じ Instance Points の指定に従う
                 lidar_key = (
                     "points_lidar_raw_ego" if raw

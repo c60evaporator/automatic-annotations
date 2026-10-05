@@ -565,6 +565,7 @@ def refilter_sample(
         depth_info = repo.list_depth_estimations_by_run(params_id)
         run = repo.get_run(params_id) or {}
         run_depth_params = run.get("depth_params") or {}
+        run_lidar_params = run.get("lidar_params") or {}
         # LiDAR は sample 単位。再フィルタでも同じ .npz を使う
         lidar_info = repo.list_lidar_pointclouds_by_run(params_id)
         frames = SensorRepository(session).list_frames_by_sample(
@@ -647,6 +648,15 @@ def refilter_sample(
         # LiDAR 側は深度とは別のパラメータで作り直す
         "lidar_params": lidar_params or {},
         "min_lidar_points": int((lidar_params or {}).get("min_points", 0)),
+        # 補正方式と「深度を使わない閾値」は Filter Params に無いので
+        # run の設定から補う。補わないと推論時と違う点群になる
+        "depth_correction_method": run_lidar_params.get("depth_correction"),
+        "max_lidar_points_for_depth": int(
+            (lidar_params or {}).get(
+                "max_points_for_depth",
+                run_lidar_params.get("max_points_for_depth", 0),
+            )
+        ),
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
     })

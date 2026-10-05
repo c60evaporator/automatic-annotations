@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from app.core.logging import get_logger
+from common.transform3d import ego_to_ego
 from app.services.depth_ops import (
     depth_map_to_point_cloud,
     filter_outliers,
@@ -62,6 +63,8 @@ def refilter_frame(
     min_lidar_points: int = 0,
     camera_ego_pose: dict[str, Any] | None = None,
     reference_ego_pose: dict[str, Any] | None = None,
+    depth_correction_method: str | None = None,
+    max_lidar_points_for_depth: int = 0,
 ) -> list[dict[str, Any]]:
     """1 フレーム分のインスタンスを、新しいパラメータで作り直す.
 
@@ -73,12 +76,18 @@ def refilter_frame(
     Args:
         lidar_path: そのサンプルの LiDAR .npz。渡すと LiDAR 側も作り直す
         min_lidar_points: この数に届かない LiDAR 点群は捨てる
+        depth_correction_method: LiDAR を基準に深度点群を補正する方式。
+            **外れ値除去の条件を変えると LiDAR 点群が変わり、補正係数も変わる**
+            ので、再フィルタでも作り直す
+        max_lidar_points_for_depth: LiDAR 点がこの数以上なら深度点群を使わない
 
     Returns:
         インスタンスごとの ``{id, num_points_raw, num_points_kept,
         points_raw_ego, points_filtered_ego,
         num_lidar_raw, num_lidar_kept,
-        points_lidar_raw_ego, points_lidar_filtered_ego}``
+        points_lidar_raw_ego, points_lidar_filtered_ego,
+        depth_used, depth_correction,
+        points_corrected_raw_ego, points_corrected_filtered_ego}``
 
     NOTE: LiDAR 側は **深度マップとは独立**に作り直す。
     点の出所が違うので、外れ値除去のパラメータも別に渡すこと。
@@ -129,12 +138,24 @@ def refilter_frame(
             nb_points_ratio=nb_points_ratio,
         )
 
-        raw_ego = camera_to_ego(
-            raw, calibrated_sensor["translation"], calibrated_sensor["rotation"]
-        )
-        filtered_ego = camera_to_ego(
-            filtered, calibrated_sensor["translation"], calibrated_sensor["rotation"]
-        )
+        def to_reference(points_camera: np.ndarray) -> np.ndarray:
+            """カメラ座標 → 基準 ego 座標.
+
+            パイプラインが保存する点群と同じ座標系に揃える。
+            揃えないとカメラ間で時刻差ぶんずれる（自車 10 m/s・25 ms で 0.25 m）
+            """
+            points = camera_to_ego(
+                points_camera,
+                calibrated_sensor["translation"], calibrated_sensor["rotation"],
+            )
+            if reference_ego_pose:
+                points = ego_to_ego(
+                    points, camera_ego_pose or {}, reference_ego_pose
+                )
+            return points
+
+        raw_ego = to_reference(raw)
+        filtered_ego = to_reference(filtered)
         # 前後で同じボクセルサイズを使う。別々に間引くと、広がりの大きい
         # フィルタ前が粗くなり「フィルタして点が増えた」ように見える
         reduced_raw, reduced_filtered = downsample_pair(
@@ -180,7 +201,49 @@ def refilter_frame(
             lidar_raw, lidar_kept, stored_points_max
         )
 
+        # --- 深度点群の補正 -------------------------------------------
+        # 外れ値除去の条件を変えると LiDAR 点群が変わるので、
+        # 補正係数も作り直す（推論時の値を流用しない）
+        correction = None
+        corrected_raw_reduced = corrected_filtered_reduced = None
+        depth_used = not (
+            max_lidar_points_for_depth > 0
+            and lidar_kept.shape[0] >= max_lidar_points_for_depth
+        )
+        if depth_used and depth_correction_method and lidar_kept.shape[0]:
+            from app.services.depth_correction import (
+                apply_correction, fit_correction, sample_depth_at,
+            )
+            from app.services.lidar_ops import ego_to_camera
+
+            lidar_camera = ego_to_camera(
+                ego_to_ego(
+                    lidar_kept, reference_ego_pose or {}, camera_ego_pose or {}
+                ) if reference_ego_pose else lidar_kept,
+                calibrated_sensor,
+            )
+            z_lidar, z_pred = sample_depth_at(
+                lidar_camera, depth, intrinsic, mask=mask
+            )
+            correction = fit_correction(z_lidar, z_pred, depth_correction_method)
+            if correction is not None:
+                corrected_raw_reduced, corrected_filtered_reduced = downsample_pair(
+                    to_reference(apply_correction(raw, correction)),
+                    to_reference(apply_correction(filtered, correction)),
+                    stored_points_max,
+                )
+
         results.append({
+            "depth_used": depth_used,
+            "depth_correction": correction,
+            "points_corrected_raw_ego": (
+                points_to_json(corrected_raw_reduced)
+                if corrected_raw_reduced is not None else None
+            ),
+            "points_corrected_filtered_ego": (
+                points_to_json(corrected_filtered_reduced)
+                if corrected_filtered_reduced is not None else None
+            ),
             "num_lidar_raw": int(lidar_raw.shape[0]),
             "num_lidar_kept": int(lidar_kept.shape[0]),
             "points_lidar_raw_ego": (
@@ -208,6 +271,8 @@ def refilter(
     nb_points_ratio: dict[str, float] | None = None,
     lidar_params: dict[str, Any] | None = None,
     min_lidar_points: int = 0,
+    depth_correction_method: str | None = None,
+    max_lidar_points_for_depth: int = 0,
     stored_points_max: int = 500,
     max_depth: float | None = None,
 ) -> tuple[list[dict[str, Any]], float]:
@@ -232,6 +297,8 @@ def refilter(
                 nb_points_ratio=nb_points_ratio,
                 lidar_params=lidar_params,
                 min_lidar_points=min_lidar_points,
+                depth_correction_method=depth_correction_method,
+                max_lidar_points_for_depth=max_lidar_points_for_depth,
                 # LiDAR は sample 単位。フレームごとに渡ってくる
                 lidar_path=(
                     derived_root / frame["lidar_path"]

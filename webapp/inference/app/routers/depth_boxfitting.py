@@ -332,6 +332,8 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
             nb_points_ratio=req.nb_points_ratio,
             lidar_params=req.lidar_params,
             min_lidar_points=req.min_lidar_points,
+            depth_correction_method=req.depth_correction_method,
+            max_lidar_points_for_depth=req.max_lidar_points_for_depth,
             stored_points_max=req.stored_points_max,
             # 推論本体と同じ読み方にする。depth_params を無視すると、
             # 点群の範囲が変わって外れ値除去の結果がずれる

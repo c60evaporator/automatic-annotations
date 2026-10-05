@@ -200,6 +200,9 @@ class RefilterRequest(BaseModel):
     # LiDAR 側の外れ値除去。深度とは別のパラメータを使う
     lidar_params: dict[str, Any] = Field(default_factory=dict)
     min_lidar_points: int = 0
+    # 深度点群の補正も作り直す（LiDAR が変われば係数も変わる）
+    depth_correction_method: str | None = None
+    max_lidar_points_for_depth: int = 0
     # ROR の nb_points にかけるラベルごとの倍率
     nb_points_ratio: dict[str, float] = Field(default_factory=dict)
     stored_points_max: int = 500
@@ -221,6 +224,11 @@ class RefilterInstanceResult(BaseModel):
     num_lidar_kept: int = 0
     points_lidar_raw_ego: dict[str, Any] | None = None
     points_lidar_filtered_ego: dict[str, Any] | None = None
+    # 深度点群を使うか、と補正後の点群
+    depth_used: bool = True
+    depth_correction: dict[str, Any] | None = None
+    points_corrected_raw_ego: dict[str, Any] | None = None
+    points_corrected_filtered_ego: dict[str, Any] | None = None
 
 
 class RefilterResponse(BaseModel):
