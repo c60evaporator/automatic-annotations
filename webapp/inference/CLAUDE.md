@@ -365,6 +365,7 @@ Depth Boxfittingは、以下のフローで行われます
         - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
+        - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
         - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
         - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
@@ -390,7 +391,8 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Depth DBSCAN eps|float|インスタンスごとDepth点群に適用するDBSCANのepsパラメータ||
 |Depth DBSCAN min_samples|int|インスタンスごとDepth点群に適用するDBSCANのmin_samplesパラメータ||
 |LiDAR Sweeps|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定||
-|Min LiDAR Points|int|インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）||
+|Min LiDAR Points to use LiDAR|int|インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）||
+|Max LiDAR Points to use Depth|int|Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれを上回ったインスタンスはLiDAR点群のみ使用する）||
 |LiDAR ROR nb_points|int|インスタンスごとLiDAR点群に適用するRORのnb_pointsパラメータ||
 |LiDAR ROR radius|float|インスタンスごとLiDAR点群に適用するRORのradiusパラメータ||
 |LiDAR DBSCAN eps|float|インスタンスごとLiDAR点群に適用するDBSCANのepsパラメータ||
@@ -426,8 +428,8 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT`|int|Depth DBSCAN min_samplesパラメータのデフォルト値|
 |`settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX`|int|Depth DBSCAN min_samplesパラメータの最大値|
 |`settings.LIDAR_NUM_SWEEPS_DEFAULT`|int|LiDAR Sweepsパラメータのデフォルト値|
-|`settings.LIDAR_MIN_POINTS_DEFAULT`|int|Min LiDAR Pointsパラメータのデフォルト値|
-|`settings.LIDAR_MIN_POINTS_MAX`|int|Min LiDAR Pointsパラメータの最大値|
+|`settings.LIDAR_MIN_POINTS_DEFAULT`|int|Min LiDAR Points to Use LiDARパラメータのデフォルト値|
+|`settings.LIDAR_MIN_POINTS_MAX`|int|Min LiDAR Points to Use LiDARパラメータの最大値|
 |`settings.LIDAR_ROR_NB_POINTS_DEFAULT`|int|LiDAR ROR nb_pointsパラメータのデフォルト値|
 |`settings.LIDAR_ROR_NB_POINTS_MAX`|int|LiDAR ROR nb_pointsパラメータの最大値|
 |`settings.LIDAR_ROR_RADIUS_DEFAULT`|float|LiDAR ROR radiusパラメータのデフォルト値|

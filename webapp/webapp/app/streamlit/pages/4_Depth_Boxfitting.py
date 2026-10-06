@@ -356,7 +356,7 @@ with param_col:
                 value=settings.LIDAR_NUM_SWEEPS_DEFAULT, step=1,
             )
             min_lidar_points = st.slider(
-                "Min LiDAR Points", 1, settings.LIDAR_MIN_POINTS_MAX,
+                "Min LiDAR Points to use LiDAR", 1, settings.LIDAR_MIN_POINTS_MAX,
                 value=settings.LIDAR_MIN_POINTS_DEFAULT, step=1,
                 help=("これ未満のインスタンスは LiDAR 点群を持たせない。"
                       "深度点群だけでフィッティングし、表示もされない"),
@@ -961,7 +961,7 @@ with pointcloud_tab_view:
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
     fitted_boxes: list[dict] = []
-    refilter_summary: tuple[int, int, int, int, int, int, int] | None = None
+    refilter_summary: tuple[int, int, int, int, int, int, int, int, int] | None = None
 
     if view_run_id:
         info = lidar_info.get(selected_sample["token"])
@@ -1049,6 +1049,8 @@ with pointcloud_tab_view:
                     # 推論時の点数。差が出たときの切り分けに使う
                     sum(i.get("stored_raw") or 0 for i in flat),
                     sum(i.get("stored_kept") or 0 for i in flat),
+                    sum(i.get("stored_lidar_raw") or 0 for i in flat),
+                    sum(i.get("stored_lidar_kept") or 0 for i in flat),
                 )
             else:
                 fittings = load_box_fittings(
@@ -1230,6 +1232,15 @@ with pointcloud_tab_view:
                             "ror_radius": float(lidar_ror_radius_new),
                             "dbscan_eps": float(lidar_eps_new),
                             "dbscan_min_samples": int(lidar_min_new),
+                            # この 2 つは Filter Params にスライダーが無い。
+                            # run の値を引き継がないと推論時と条件が変わり、
+                            # 推論では消えたインスタンスが復活してしまう
+                            "min_points": int(run_lidar.get(
+                                "min_points",
+                                settings.LIDAR_MIN_POINTS_DEFAULT)),
+                            "max_points_for_depth": int(run_lidar.get(
+                                "max_points_for_depth",
+                                settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT)),
                         },
                     }
                     st.rerun()
@@ -1262,7 +1273,8 @@ with pointcloud_tab_view:
             render_pointcloud(fig, counts)
             if refilter_summary is not None:
                 (raw_total, kept_total, n_inst, lidar_raw, lidar_kept,
-                 stored_raw, stored_kept) = refilter_summary
+                 stored_raw, stored_kept,
+                 stored_lidar_raw, stored_lidar_kept) = refilter_summary
                 ratio = kept_total / raw_total * 100 if raw_total else 0.0
                 lidar_text = (
                     f" / LiDAR {lidar_raw:,} → {lidar_kept:,} 点"
@@ -1277,14 +1289,25 @@ with pointcloud_tab_view:
                 # 推論時との比較。**raw が一致するかで原因を切り分けられる**
                 # 一致しない → マスク・深度の範囲（max_depth）が違う
                 # raw だけ一致 → 外れ値除去の条件かラベルの倍率が違う
-                if stored_raw:
-                    raw_match = "一致" if raw_total == stored_raw else "不一致"
-                    kept_match = "一致" if kept_total == stored_kept else "不一致"
-                    st.caption(
-                        f"推論時との比較: raw {stored_raw:,} → {raw_total:,}"
-                        f"（{raw_match}）/ kept {stored_kept:,} → {kept_total:,}"
-                        f"（{kept_match}）"
-                    )
+                def _compare(name: str, stored: int, now: int) -> str:
+                    mark = "一致" if stored == now else "不一致"
+                    return f"{name} {stored:,} → {now:,}（{mark}）"
+
+                if stored_raw or stored_lidar_raw:
+                    lines = []
+                    if stored_raw or raw_total:
+                        lines.append(
+                            "深度 " + _compare("raw", stored_raw, raw_total)
+                            + " / " + _compare("kept", stored_kept, kept_total)
+                        )
+                    if stored_lidar_raw or lidar_raw:
+                        lines.append(
+                            "LiDAR "
+                            + _compare("raw", stored_lidar_raw, lidar_raw)
+                            + " / "
+                            + _compare("kept", stored_lidar_kept, lidar_kept)
+                        )
+                    st.caption("推論時との比較: " + " ｜ ".join(lines))
 
 # ------------------------------------------------------------------
 # Box Fitting タブ
