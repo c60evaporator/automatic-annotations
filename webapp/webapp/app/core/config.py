@@ -397,6 +397,15 @@ class Settings(BaseSettings):
     # 路面やマスクのはみ出し 1 点で箱が縦に伸びる
     BOXFIT_Z_PERCENTILE_LOW_DEFAULT: float = 1.0
     BOXFIT_Z_PERCENTILE_HIGH_DEFAULT: float = 99.0
+    # 当てはめに必要な点数の下限。これに届かないインスタンスはボックスを
+    # 作らない（点群は残す）。点が少なすぎると BEV の凸包が線や点に潰れ、
+    # 向きも大きさも意味を持たない。
+    # **判定はカメラ間結合の後、グローバルトラック単位・フレームごとに
+    # 行う**（実際に当てはめへ渡す点群で数えるため）。カメラ 1 台の深度点
+    # だけで数えていたときは 10 だったが、結合後は複数カメラ＋LiDAR の
+    # 合計になるため、同等の厳しさにはこれくらい必要
+    BOXFIT_MIN_POINTS_DEFAULT: int = 15
+    BOXFIT_MIN_POINTS_MAX: int = 100
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

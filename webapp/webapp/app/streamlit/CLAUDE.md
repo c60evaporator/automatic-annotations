@@ -145,11 +145,6 @@
         - DBSCAN: ノイズ除去の2段階目の処理であるDBSCANに使用するパラメータ
             - eps: epsパラメータ（近傍とみなす半径）
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
-    - Box Fitting: 3Dバウンディングボックスのインスタンスごと点群へのフィッティングに使用するパラメータ
-        - Method: 3Dバウンディングボックスのフィッティングに使用するアルゴリズム。以下の選択肢をもつ
-            - convex_hull_moa: [こちらの論文](https://arxiv.org/abs/2302.01034)の手法。以下のパラメータを指定可能
-                - angle_step_deg: 最もフィットするyaw角度を探索するステップ
-                - z_percentile: 高さの下限と上限として採用するパーセンタイル
     - Inter-cam Merge: 複数カメラ間での同一インスタンス結合に使用するパラメータ
         - Enable Merge: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス
         - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン。以下の選択肢を持つ
@@ -162,6 +157,12 @@
             - Label: ラベルが一致する場合のみマッチング対象とする
             - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
             - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
+    - Box Fitting: 3Dバウンディングボックスのインスタンスごと点群へのフィッティングに使用するパラメータ
+        - Min Points to fit Box: Box Fittingを行うためのglobal_track点数の下限しきい値（これを下回ったglobal_trackは3Dバウンディングボックスを推定しない）
+        - Method: 3Dバウンディングボックスのフィッティングに使用するアルゴリズム。以下の選択肢をもつ
+            - convex_hull_moa: [こちらの論文](https://arxiv.org/abs/2302.01034)の手法。以下のパラメータを指定可能
+                - angle_step_deg: 最もフィットするyaw角度を探索するステップ
+                - z_percentile: 高さの下限と上限として採用するパーセンタイル
 - 推論container: Detection2D・Instance Tracking画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
 - param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
 - ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`depth_estimation_params`、`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルに保存する

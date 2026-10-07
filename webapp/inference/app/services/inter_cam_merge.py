@@ -36,6 +36,7 @@ NOTE: 点群はすべて **sample の基準 ego 座標**へ揃えてから渡す
 from __future__ import annotations
 
 from collections import Counter
+from statistics import median
 from typing import Any, Iterable, Sequence
 
 import numpy as np
@@ -55,6 +56,8 @@ OVERLAP_IOU = "iou"
 CANDIDATE_MIN_OVERLAP = 0.01
 # 診断に残す辺の上限。全部残すとインスタンス数の 2 乗に比例して膨らむ
 MAX_DIAGNOSTIC_EDGES = 200
+# 「点数不足で当てはめなかった」トラックの診断に残す上限
+MAX_DIAGNOSTIC_TOO_FEW = 50
 
 LABEL_MATCH_LABEL = "label"
 LABEL_MATCH_CATEGORY_GROUP = "category_group"
@@ -654,6 +657,15 @@ def merge_and_fit(
     3. グローバルトラック全体でラベルを多数決
     4. sample ごとに、グループの要約を結合して当てはめる
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
+
+    ## 点数の下限をここで判定する理由
+
+    ``box_fitting_params["min_points"]`` に届かないグループは当てはめない
+    （status="too_few_points"）。**カメラごとに深度点だけで判定すると、
+    「深度は疎だが LiDAR は十分」「1 カメラでは疎だが複数カメラ合わせれば
+    足りる」インスタンスを取りこぼす**ため、実際に当てはめへ渡す点群
+    （結合後・深度＋LiDAR）で数える。判定は **フレームごと**に行うので、
+    遠方で点が減ったフレームだけボックスが欠け、トラックは残る。
     """
     from app.services.box_fitting import fit_box
 
@@ -661,6 +673,8 @@ def merge_and_fit(
     max_distance = float(merge_params.get("max_centroid_distance", 3.0))
     min_frames = int(merge_params.get("min_match_frames", 1))
     label_match = merge_params.get("label_match", LABEL_MATCH_CATEGORY_GROUP)
+    # 当てはめに必要な点数の下限（0 で無効）。結合後の点数で判定する
+    min_points_for_box = int(box_fitting_params.get("min_points", 0))
 
     # --- 1) sample ごとの照合 ---------------------------------------------
     # 判定は各トラックの多数決ラベルで行うので、先にラベルを集める
@@ -744,6 +758,11 @@ def merge_and_fit(
 
     # --- 4) sample ごとに結合して当てはめる ------------------------------
     num_merged = 0
+    # 点数不足で当てはめなかったグループの記録（診断用）。
+    # {global_track_id: [そのフレームの結合後点数, ...]}
+    too_few_points: dict[str, list[int]] = {}
+    # グループが成立したフレーム数（上の割合を読むための母数）
+    frames_with_group: Counter = Counter()
     for entries in entries_by_sample.values():
         groups: dict[str, list[dict[str, Any]]] = {}
         for entry in entries:
@@ -761,6 +780,24 @@ def merge_and_fit(
             combined = combine_summaries(summaries)
             if len(members) > 1:
                 num_merged += len(members)
+            frames_with_group[global_id] += 1
+
+            # 代表行（点数が最も多いメンバー）。当てはめの成否に関わらず
+            # 1 グループ 1 行にしておく
+            primary = max(members, key=lambda m: m["_summary"]["num_points"])
+
+            # **点数の下限。** 当てはめへ渡す点群そのもので数える。
+            # 点が少なすぎると BEV の凸包が線や点に潰れ、向きも大きさも
+            # 意味を持たない。点群は残すので条件の見直しはできる
+            if min_points_for_box and combined["num_points"] < min_points_for_box:
+                too_few_points.setdefault(global_id, []).append(
+                    int(combined["num_points"])
+                )
+                for member in members:
+                    member.pop("_summary", None)
+                    member["status"] = "too_few_points"
+                    member["is_primary"] = member is primary
+                continue
 
             # 点数が最も多いカメラの位置を原点にする
             origin = dominant_sensor_origin(
@@ -777,7 +814,6 @@ def merge_and_fit(
             )
             # ボックスは代表 1 行だけに入れる。全行へ入れると BEV 表示で
             # 同じ箱が重なって見える
-            primary = max(members, key=lambda m: m["_summary"]["num_points"])
             for member in members:
                 member.pop("_summary", None)
                 if member is primary and fit is not None:
@@ -822,6 +858,21 @@ def merge_and_fit(
             "status": status, "reason": reason,
         })
 
+    # 点数不足で当てはめなかったグループ。「推論直後と Apply 後で
+    # インスタンス数が違う」ときに、まずここを見れば切り分けられる
+    too_few_rows = [
+        {
+            "global_track_id": global_id,
+            "label": global_label.get(global_id),
+            "num_frames_skipped": len(counts),
+            "num_frames_total": int(frames_with_group.get(global_id, 0)),
+            "min_num_points": min(counts),
+            "median_num_points": int(median(counts)),
+        }
+        for global_id, counts in too_few_points.items()
+    ]
+    too_few_rows.sort(key=lambda r: (-r["num_frames_skipped"], r["global_track_id"]))
+
     diagnostics = {
         "groups": [
             {
@@ -837,17 +888,26 @@ def merge_and_fit(
         # 重なりの大きい順。結合されなかった対の理由がここに出る
         "edges": edge_rows[:MAX_DIAGNOSTIC_EDGES],
         "num_edges_total": len(edge_rows),
+        # 点数不足で当てはめを飛ばしたグループ（フレーム数の多い順）
+        "too_few_points": {
+            "min_points": min_points_for_box,
+            "num_tracks": len(too_few_rows),
+            "num_frames": sum(len(c) for c in too_few_points.values()),
+            "tracks": too_few_rows[:MAX_DIAGNOSTIC_TOO_FEW],
+        },
         "params": {
             "overlap_threshold": overlap_threshold,
             "max_centroid_distance": max_distance,
             "min_match_frames": min_frames,
             "label_match": label_match,
             "max_same_camera_gap": merge_params.get("max_same_camera_gap"),
+            "min_points_for_box": min_points_for_box,
         },
     }
 
     return {
         "num_groups": len(set(global_ids.values())),
         "num_merged": num_merged,
+        "num_too_few_points": sum(len(c) for c in too_few_points.values()),
         "diagnostics": diagnostics,
     }

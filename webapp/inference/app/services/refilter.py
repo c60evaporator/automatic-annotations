@@ -25,10 +25,32 @@ from app.services.depth_ops import (
     resize_mask_nearest,
     rle_to_depth_mask,
 )
-from common.point_ops import downsample_pair, points_to_json
+from common.point_ops import downsample_pair, downsample_to_max, points_to_json
 from common.transform3d import camera_to_ego, scale_intrinsic
 
 logger = get_logger(__name__)
+
+
+def _reduce_pair(
+    raw: np.ndarray, filtered: np.ndarray, max_points: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """フィルタ前後の点群を表示・保存用に間引く.
+
+    - **フィルタ後は推論時と同じ ``downsample_to_max``** で間引く。
+      推論時の保存結果と Apply 後の表示を一致させるため。
+      ``downsample_pair`` のように raw 基準のボクセルを使うと、背景を
+      巻き込んで広がった raw に引きずられ、本来 500 点以下で間引き
+      不要な kept まで潰れる（144 点 → 7 点の例あり）。
+    - フィルタ前は従来どおり ``downsample_pair`` のボクセルで間引く
+      （raw 同士の見え方は変えない）。
+
+    NOTE: 両者のボクセルサイズが揃わなくなるため、Raw 表示と
+      ROR/DBSCAN 表示を切り替えると、まれにフィルタ後のほうが
+      点が多く見える場合がある（実際の点数は raw ≥ kept）。
+    """
+    reduced_raw, _ = downsample_pair(raw, filtered, max_points)
+    filtered = np.asarray(filtered, dtype=np.float64).reshape(-1, 3)
+    return reduced_raw, downsample_to_max(filtered, max_points)
 
 
 def _load_depth(path: Path) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
@@ -158,7 +180,7 @@ def refilter_frame(
         filtered_ego = to_reference(filtered)
         # 前後で同じボクセルサイズを使う。別々に間引くと、広がりの大きい
         # フィルタ前が粗くなり「フィルタして点が増えた」ように見える
-        reduced_raw, reduced_filtered = downsample_pair(
+        reduced_raw, reduced_filtered = _reduce_pair(
             raw_ego, filtered_ego, stored_points_max
         )
 
@@ -197,7 +219,7 @@ def refilter_frame(
                 if lidar_kept.shape[0] < min_lidar_points:
                     lidar_kept = np.empty((0, 3))
 
-        lidar_raw_reduced, lidar_kept_reduced = downsample_pair(
+        lidar_raw_reduced, lidar_kept_reduced = _reduce_pair(
             lidar_raw, lidar_kept, stored_points_max
         )
 
@@ -227,7 +249,7 @@ def refilter_frame(
             )
             correction = fit_correction(z_lidar, z_pred, depth_correction_method)
             if correction is not None:
-                corrected_raw_reduced, corrected_filtered_reduced = downsample_pair(
+                corrected_raw_reduced, corrected_filtered_reduced = _reduce_pair(
                     to_reference(apply_correction(raw, correction)),
                     to_reference(apply_correction(filtered, correction)),
                     stored_points_max,

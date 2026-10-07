@@ -24,6 +24,7 @@ from app.models.map import MapMeta
 from app.models.ann_intermediate import (
     BOXFIT_STATUS_FAILED,
     BOXFIT_STATUS_FITTED,
+    BOXFIT_STATUS_MERGED,
     BOXFIT_STATUS_NO_POINTS,
     BOXFIT_STATUS_NOT_FITTED,
     BOXFIT_STATUS_TOO_FEW_POINTS,
@@ -117,5 +118,6 @@ __all__ = [
     "BOXFIT_STATUS_NO_POINTS",
     "BOXFIT_STATUS_FAILED",
     "BOXFIT_STATUS_NOT_FITTED",
+    "BOXFIT_STATUS_MERGED",
     "BOXFIT_STATUSES",
 ]

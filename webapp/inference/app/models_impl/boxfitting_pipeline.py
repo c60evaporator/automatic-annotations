@@ -9,10 +9,14 @@
 1 フレームにつき 1 回だけ読めば済むようにするため。
 インスタンスごとに読み直すと、同じ .npz を何度も展開することになる。
 
-現時点の制約:
-  - use_lidar=True でインスタンスごとの LiDAR 点群を作る。
-    深度点群との混合（座標補正）は未実装で、当てはめには深度点群を使う
-  - Box Fitting のアルゴリズムは未実装（点群までを保存する）
+当てはめに使う点群の決め方:
+  - use_lidar=True でインスタンスごとの LiDAR 点群を作る
+  - LiDAR 点が max_lidar_points_for_depth 以上なら LiDAR だけを使う
+    （深度推定の外れ値が混ざるほうが害になる）
+  - そうでなければ、LiDAR を基準に深度点群を補正してから両者を混ぜる
+  - **点数の下限（box_fitting_params["min_points"]）は、カメラ間結合の
+    あとに inter_cam_merge.merge_and_fit が判定する。** ここで打ち切るのは
+    「深度も LiDAR も 0 点」のときだけ
 """
 from __future__ import annotations
 
@@ -39,8 +43,14 @@ from common.transform3d import camera_to_ego, ego_to_ego
 
 logger = get_logger(__name__)
 
-# 点群がこの数に満たないインスタンスは「点が少なすぎる」として扱う
-MIN_POINTS_FOR_BOX = 10
+# 当てはめに使う点群がこの数に満たないインスタンスは
+# 「点が少なすぎる」として扱う。**通常は webapp の Box Fitting タブから
+# box_fitting_params["min_points"] で渡ってくる**ので、これは渡されなかった
+# ときの既定値。
+# NOTE: 判定はカメラ間結合の後、グローバルトラック単位・フレームごとに
+#   行う（inter_cam_merge.merge_and_fit）。ここで判定するのは結合しない
+#   場合（merge_params が空）だけ。
+DEFAULT_MIN_POINTS_FOR_BOX = 15
 
 
 class BoxFittingPipeline:
@@ -304,6 +314,13 @@ class BoxFittingPipeline:
         reference_pose_for_lidar = (reference_ego_poses or {}).get(
             frame["sample_token"]
         )
+        # 結合しない場合に使う点数の下限。結合する場合は merge_and_fit が
+        # 結合後の点数で判定するので、ここでは使わない
+        min_points_for_box = int(
+            (box_fitting_params or {}).get(
+                "min_points", DEFAULT_MIN_POINTS_FOR_BOX
+            )
+        )
 
         for instance in instances:
             mask = rle_to_depth_mask(
@@ -337,39 +354,14 @@ class BoxFittingPipeline:
                 "num_points_lidar_kept": 0,
             }
 
-            if raw_count == 0:
-                results.append({**base, "status": "no_points"})
-                continue
-            if points_camera.shape[0] < MIN_POINTS_FOR_BOX:
-                results.append({**base, "status": "too_few_points"})
-                continue
-
-            points_ego = camera_to_ego(
-                points_camera, calib["translation"], calib["rotation"]
-            )
-            # カメラ自身の時刻の ego 座標から、sample の基準 ego 座標へ移す。
-            # これをやらないとカメラ間で点群がずれ、結合判定が成立しない
-            reference_pose = (reference_ego_poses or {}).get(frame["sample_token"])
-            if reference_pose:
-                points_ego = ego_to_ego(
-                    points_ego, frame.get("ego_pose") or {}, reference_pose
-                )
-            entry = {
-                **base,
-                # フィルタ前は保存しない。深度マップとクロージング後マスクから
-                # 再生成できるため（再フィルタ用エンドポイント経由）
-                "points_depth_ego": points_to_json(
-                    downsample_to_max(points_ego, stored_points_max)
-                ),
-                "points_lidar_ego": None,
-            }
-
-            # 3D ボックスの当てはめ。間引き前の点群を使う
-            # （表示用に間引いた点で当てると形が粗くなる）
             # --- インスタンスごとの LiDAR 点群 ---------------------------
+            # **深度点群より先に作る。** 深度点が 0 でも LiDAR があれば
+            # 以降の処理を続けるため（LiDAR だけで形が取れることがある）。
             # マスクへ投影して選ぶ。侵食側のマスクを使うと、輪郭付近で
             # 奥の物体を拾う混入が減る
             lidar_instance = np.empty((0, 3))
+            # ROR / DBSCAN 前の点数。再フィルタ結果と突き合わせるために記録する
+            raw_lidar_count = 0
             # use_lidar が UI の「Use LiDAR」に対応する。
             # off ならインスタンスごとの LiDAR 点群は作らない
             # （生 LiDAR の読み込み自体は常に行い、比較表示に使う）
@@ -420,18 +412,55 @@ class BoxFittingPipeline:
                     # 少なすぎる点は補正に使えない。表示もしない
                     lidar_instance = np.empty((0, 3))
 
-            entry["points_lidar_ego"] = points_to_json(
-                downsample_to_max(lidar_instance, stored_points_max)
-            ) if lidar_instance.shape[0] else None
-            entry["num_points_lidar"] = int(lidar_instance.shape[0])
-            entry["num_points_lidar_kept"] = int(lidar_instance.shape[0])
+            # raw はフィルタ前、kept はフィルタ後（Min LiDAR Points 未満で
+            # 捨てた場合は 0）。深度側の num_points_depth / _kept と同じ意味
+            base["num_points_lidar"] = raw_lidar_count
+            base["num_points_lidar_kept"] = int(lidar_instance.shape[0])
+
+            # **打ち切るのは 0 点のときだけ。** 点数の下限はカメラ間結合の
+            # 後、実際に当てはめへ渡す点群で判定する（merge_and_fit）。
+            # ここで深度点だけを見て落とすと、「深度は疎だが LiDAR は十分」
+            # なインスタンスや、「1 カメラでは疎だが複数カメラ合わせれば
+            # 足りる」インスタンスを取りこぼす
+            if points_camera.shape[0] == 0 and lidar_instance.shape[0] == 0:
+                results.append({**base, "status": "no_points"})
+                continue
+
+            # カメラ自身の時刻の ego 座標から、sample の基準 ego 座標へ移す。
+            # これをやらないとカメラ間で点群がずれ、結合判定が成立しない
+            reference_pose = (reference_ego_poses or {}).get(frame["sample_token"])
+            if points_camera.shape[0]:
+                points_ego = camera_to_ego(
+                    points_camera, calib["translation"], calib["rotation"]
+                )
+                if reference_pose:
+                    points_ego = ego_to_ego(
+                        points_ego, frame.get("ego_pose") or {}, reference_pose
+                    )
+            else:
+                # 深度点が 1 つも残らなかった（LiDAR だけで続ける）
+                points_ego = np.empty((0, 3))
+
+            entry = {
+                **base,
+                # フィルタ前は保存しない。深度マップとクロージング後マスクから
+                # 再生成できるため（再フィルタ用エンドポイント経由）
+                "points_depth_ego": points_to_json(
+                    downsample_to_max(points_ego, stored_points_max)
+                ) if points_ego.shape[0] else None,
+                "points_lidar_ego": points_to_json(
+                    downsample_to_max(lidar_instance, stored_points_max)
+                ) if lidar_instance.shape[0] else None,
+            }
 
             # --- 使う点群を決める ----------------------------------------
             # LiDAR が十分にあるなら深度点群は使わない。
             # 深度推定の外れ値が混ざると、当てはめも結合も引きずられる
             lidar_only = bool(
-                max_lidar_points_for_depth > 0
-                and lidar_instance.shape[0] >= max_lidar_points_for_depth
+                # 深度点が 1 つも残らなかった場合も LiDAR だけで進める
+                points_ego.shape[0] == 0
+                or (max_lidar_points_for_depth > 0
+                    and lidar_instance.shape[0] >= max_lidar_points_for_depth)
             )
             entry["depth_used"] = not lidar_only
 
@@ -498,6 +527,14 @@ class BoxFittingPipeline:
                     z_percentiles=(float(percentiles[0]), float(percentiles[1])),
                 )
                 entry["_summary"]["sensor_origin_xy"] = origin_xy
+                results.append(entry)
+                continue
+
+            # 結合しない場合は、ここで点数の下限を判定する。
+            # 結合する場合は上の fit_boxes=False 側へ抜けており、
+            # merge_and_fit が結合後の点数で判定する
+            if fit_points.shape[0] < min_points_for_box:
+                entry["status"] = "too_few_points"
                 results.append(entry)
                 continue
 

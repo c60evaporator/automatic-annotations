@@ -26,6 +26,9 @@ from common.transform3d import scale_intrinsic
 logger = get_logger(__name__)
 
 DEFAULT_STUB_DELAY_SEC = 0.02
+# box_fitting_params["min_points"] が渡されなかったときの下限
+# （本実装の DEFAULT_MIN_POINTS_FOR_BOX と揃える）
+DEFAULT_MIN_POINTS_FOR_BOX = 15
 
 # スタブが生成する LiDAR 点数（1 sweep 相当）
 STUB_LIDAR_POINTS_PER_SWEEP = 4_000
@@ -176,6 +179,8 @@ class BoxFittingStub:
         # 本実装と引数を揃える。False なら当てはめず要約だけ返す
         # （カメラ跨ぎの結合をスタブでも確認できるように）
         fit_boxes: bool = True,
+        # 当てはめに必要な点数の下限を min_points から読む
+        box_fitting_params: dict[str, Any] | None = None,
         # 本実装と引数を揃える（スタブは常に深度点群を使う）
         max_lidar_points_for_depth: int = 0,
         # 本実装と引数を揃える（スタブは補正しない）
@@ -188,9 +193,15 @@ class BoxFittingStub:
         スタブではマスクの大きさから距離を作り、それらしい点群を散らす。
         マスクが小さいものは「点が少なすぎる」として失敗させ、
         UI が失敗ケースを表示できるようにしておく。
+
+        本実装と同じく、**打ち切るのは 0 点のときだけ**で、点数の下限は
+        結合する場合は merge_and_fit が判定する。
         """
         time.sleep(DEFAULT_STUB_DELAY_SEC if stub_delay_sec is None else stub_delay_sec)
 
+        min_points_for_box = int(
+            (box_fitting_params or {}).get("min_points", DEFAULT_MIN_POINTS_FOR_BOX)
+        )
         results: list[dict[str, Any]] = []
         for instance in instances:
             mask_rle = instance["mask_rle"]
@@ -216,10 +227,9 @@ class BoxFittingStub:
             num_depth = int(np.clip(area // 20, 0, 8000))
             num_lidar = int(np.clip(area // 400, 0, 600)) if use_lidar else 0
 
-            if num_depth < 10:
-                results.append({**base, "status": "too_few_points",
-                                "num_points_depth": num_depth,
-                                "num_points_lidar": num_lidar})
+            if num_depth == 0 and num_lidar == 0:
+                results.append({**base, "status": "no_points",
+                                "num_points_depth": 0, "num_points_lidar": 0})
                 continue
 
             center = np.array([distance, rng.uniform(-6, 6), rng.uniform(0.3, 1.5)])
@@ -236,7 +246,12 @@ class BoxFittingStub:
             if not fit_boxes:
                 from app.services.inter_cam_merge import summarize_instance
 
-                summary = summarize_instance(depth_points)
+                # 当てはめへ渡す点群と同じものを要約する
+                # （merge_and_fit の点数判定がこの num_points を見る）
+                summary = summarize_instance(
+                    np.vstack([depth_points, lidar_points]) if num_lidar
+                    else depth_points
+                )
                 translation = (
                     (frame or {}).get("calibrated_sensor", {}).get("translation")
                     or [0.0, 0.0, 0.0]
@@ -258,6 +273,26 @@ class BoxFittingStub:
                     "num_points_depth_kept": num_depth,
                     "num_points_lidar_kept": num_lidar,
                     "_summary": summary,
+                })
+                continue
+
+            # 結合しない場合は、ここで点数の下限を判定する
+            # （結合する場合は上で抜けており、merge_and_fit が判定する）
+            stored_points = {
+                "points_depth_ego": points_to_json(
+                    downsample_to_max(depth_points, stored_points_max)
+                ),
+                "points_lidar_ego": points_to_json(
+                    downsample_to_max(lidar_points, stored_points_max)
+                ) if num_lidar else None,
+                "num_points_depth": raw_depth_count,
+                "num_points_lidar": raw_lidar_count,
+                "num_points_depth_kept": num_depth,
+                "num_points_lidar_kept": num_lidar,
+            }
+            if num_depth + num_lidar < min_points_for_box:
+                results.append({
+                    **base, **stored_points, "status": "too_few_points",
                 })
                 continue
 

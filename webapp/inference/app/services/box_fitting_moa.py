@@ -59,10 +59,26 @@ def _convex_hull_clockwise(xy: np.ndarray) -> np.ndarray:
     """凸包を時計回りで返す.
 
     以降の走査が時計回りを前提にしているため、向きを揃える。
-    """
-    from scipy.spatial import ConvexHull
 
-    hull = ConvexHull(xy)
+    点が 1 点・1 直線に乗っている場合は面積が 0 で凸包が作れない。
+    その場合は両端の点（最大 2 点）を返し、呼び出し側に「3 点未満」として
+    扱わせる。**例外で落とさないのは、点数の少ないインスタンスでも
+    要約（summarize_instance）を作る必要があるため。**
+    """
+    from scipy.spatial import ConvexHull, QhullError
+
+    xy = np.asarray(xy, dtype=float)
+    try:
+        hull = ConvexHull(xy)
+    except QhullError:
+        unique = np.unique(xy, axis=0)
+        if len(unique) <= 2:
+            return unique
+        # 直線に乗っている。最も伸びている方向へ射影して両端を取る
+        centered = unique - unique.mean(axis=0)
+        axis = centered[int(np.argmax(np.einsum("ij,ij->i", centered, centered)))]
+        proj = centered @ axis
+        return unique[[int(np.argmin(proj)), int(np.argmax(proj))]]
     points = xy[hull.vertices]
     # scipy は通常の XY 座標系で反時計回りを返す
     if _signed_area(points) > 0:

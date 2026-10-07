@@ -179,11 +179,13 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
     groups = diagnostics.get("groups") or []
     edges = diagnostics.get("edges") or []
     merged = [g for g in groups if len(g.get("members") or []) > 1]
+    too_few = diagnostics.get("too_few_points") or {}
+    too_few_tracks = too_few.get("tracks") or []
 
-    with st.expander(
-        f"Merge Diagnostics（{len(groups)} グループ / 結合 {len(merged)} 件）",
-        expanded=False,
-    ):
+    title = f"Merge Diagnostics（{len(groups)} グループ / 結合 {len(merged)} 件"
+    if too_few.get("num_frames"):
+        title += f" / 点数不足 {too_few['num_frames']} フレーム"
+    with st.expander(title + "）", expanded=False):
         st.caption(
             "結合の条件: "
             + " / ".join(f"{k}={v}" for k, v in (diagnostics.get("params") or {}).items())
@@ -201,6 +203,37 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
             ],
             width="stretch", hide_index=True,
         )
+
+        if too_few_tracks:
+            st.markdown("**点数不足で当てはめなかったグループ**")
+            st.caption(
+                f"結合後の点数が Min Points to fit Box"
+                f"（{too_few.get('min_points')}）に届かなかったもの。"
+                f"{too_few.get('num_tracks')} グローバルトラック / "
+                f"{too_few.get('num_frames')} フレーム。"
+                "点群は残っているので、閾値を下げれば拾える"
+            )
+            if too_few.get("num_tracks", 0) > len(too_few_tracks):
+                st.caption(
+                    f"フレーム数の多い順に {len(too_few_tracks)} / "
+                    f"{too_few['num_tracks']} 件を表示"
+                )
+            st.dataframe(
+                [
+                    {
+                        "global_track_id": r["global_track_id"],
+                        "label": r.get("label"),
+                        # 「全フレームで落ちた」のか「遠方だけ落ちた」のかが分かる
+                        "skipped / total": (
+                            f"{r['num_frames_skipped']} / {r['num_frames_total']}"
+                        ),
+                        "min points": r.get("min_num_points"),
+                        "median points": r.get("median_num_points"),
+                    }
+                    for r in too_few_tracks
+                ],
+                width="stretch", hide_index=True,
+            )
 
         st.markdown("**トラック対の判定**")
         total = diagnostics.get("num_edges_total", len(edges))
@@ -482,6 +515,15 @@ with param_col:
                 help=("高さを決めるパーセンタイル。0/100 にすると"
                       "はみ出した 1 点で箱が縦に伸びる"),
             )
+            boxfit_min_points = st.slider(
+                "Min Points to fit Box", 1, settings.BOXFIT_MIN_POINTS_MAX,
+                value=settings.BOXFIT_MIN_POINTS_DEFAULT, step=1,
+                help=("当てはめに必要な点数の下限。届かないインスタンスは"
+                      "ボックスを作らない（status=too_few_points）。"
+                      "点群は残るので、フィルタ条件の見直しはできる。"
+                      "**カメラ間結合の後、グローバルトラック単位で"
+                      "フレームごとに数える**（深度点＋LiDAR 点の合計）"),
+            )
 
 mask_params = {"dilation": int(mask_dilation), "erosion": int(mask_erosion)}
 # 結合しない場合は空の dict を渡す（推論側が結合を飛ばす）
@@ -497,6 +539,8 @@ box_fitting_params = {
     "method": boxfit_method,
     "angle_step_deg": float(angle_step_deg),
     "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
+    # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
+    "min_points": int(boxfit_min_points),
 }
 depth_params = {
     "ror_nb_points": int(depth_ror_nb), "ror_radius": float(depth_ror_radius),

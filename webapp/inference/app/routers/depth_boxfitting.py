@@ -264,6 +264,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
         "num_fitted": sum(1 for b in box_results if b.get("status") == "fitted"),
         "num_merged_groups": merge_stats.get("num_groups", 0),
         "num_merged_instances": merge_stats.get("num_merged", 0),
+        # 結合後の点数が下限に届かず当てはめを飛ばしたフレーム数
+        "num_too_few_points": merge_stats.get("num_too_few_points", 0),
         # 「なぜ結合されなかったか」を後から確認するための記録
         "merge_diagnostics": merge_stats.get("diagnostics"),
         "inference_time": round(time.perf_counter() - started_all, 3),
