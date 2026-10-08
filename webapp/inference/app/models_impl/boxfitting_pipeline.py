@@ -50,7 +50,7 @@ logger = get_logger(__name__)
 # NOTE: 判定はカメラ間結合の後、グローバルトラック単位・フレームごとに
 #   行う（inter_cam_merge.merge_and_fit）。ここで判定するのは結合しない
 #   場合（merge_params が空）だけ。
-DEFAULT_MIN_POINTS_FOR_BOX = 15
+DEFAULT_MIN_POINTS_FOR_BOX = 10
 
 
 class BoxFittingPipeline:

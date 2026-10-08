@@ -310,7 +310,7 @@ class Settings(BaseSettings):
     # インスタンスの LiDAR 点がこの数以上なら、**深度点群を使わない**。
     # LiDAR だけで形が十分に取れる場合、深度推定の外れ値が混ざるほうが害になる。
     # 0 なら無効（常に深度点群も使う）
-    LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 60
+    LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 100
     LIDAR_MAX_POINTS_FOR_DEPTH_MAX: int = 500
     LIDAR_MIN_POINTS_MAX: int = 200
     LIDAR_ROR_NB_POINTS_DEFAULT: int = 3
@@ -401,10 +401,8 @@ class Settings(BaseSettings):
     # 作らない（点群は残す）。点が少なすぎると BEV の凸包が線や点に潰れ、
     # 向きも大きさも意味を持たない。
     # **判定はカメラ間結合の後、グローバルトラック単位・フレームごとに
-    # 行う**（実際に当てはめへ渡す点群で数えるため）。カメラ 1 台の深度点
-    # だけで数えていたときは 10 だったが、結合後は複数カメラ＋LiDAR の
-    # 合計になるため、同等の厳しさにはこれくらい必要
-    BOXFIT_MIN_POINTS_DEFAULT: int = 15
+    # 行う**（実際に当てはめへ渡す点群で数えるため）
+    BOXFIT_MIN_POINTS_DEFAULT: int = 10
     BOXFIT_MIN_POINTS_MAX: int = 100
 
     # 点群ビューの Global View の視点。

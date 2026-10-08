@@ -22,7 +22,7 @@ Detection2Dは、以下のフローで行われます
 - 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
     - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
     - 閾値を超えた場合、面積が小さい方or大きい方のボックスを削除する（大小どちらを削除するかは後述の`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに決める）
-- そのカメラ・フレームのボックス検出数が0の場合、画像全体をリサイズ（Whole-Image Resize Ratioで割合指定）してSigLIP2で推論を実施。`settings.WHOLE_IMAGE_CANDIDATES`から推論のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）。推論のスコアがWhole-Image Score Threshold以下または割り当てられたラベル（辞書のvalue）がNoneなら結果を使用せず削除し、どちらでもない場合は割り当てられたラベルの全画面のボックスを追加する
+- そのカメラ・フレームのボックス検出数が0の場合、画像全体をリサイズ（Whole-Image Resize Ratioで割合指定）してSigLIP2で推論を実施（Whole-Image再判定）。`settings.WHOLE_IMAGE_CANDIDATES`から推論のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）。推論のスコアがWhole-Image Score Threshold以下または割り当てられたラベル（辞書のvalue）がNoneなら結果を使用せず削除し、どちらでもない場合は割り当てられたラベルの全画面のボックスを追加する
 
 `settings.DET2D_IOS_DELETE_DIRECTION`は以下のようにラベルをkeyとし、"small"ならIoSが閾値を超えたら小さい方のボックスを削除し、"big"なら大きい方のボックスを削除するようにします
 
@@ -55,6 +55,9 @@ UI（Detection2Dページの画面上部のエクスパンダー）からは以�
 |Score Threshold|float|検出したバウンディングボックスのscore閾値にかける倍率。実際に適用する閾値は、カテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる|1.0|
 |NMS Threshold|float|検出したバウンディングボックスでNMSを実施する際に、IoUの閾値にかける倍率。実際に適用する閾値は、同ラベル間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別ラベル間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる|1.0|
 |Re-Classification Crop Margin|float|SigLIP2の再判定用切り出し画像をGroudingDINOのバウンディングボックスから拡張する割合|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`で指定|
+|Whole-Image Score Threshold|float|Whole-Image再判定時のSigLIP2スコアの閾値。この閾値以下の結果は削除|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`で指定|
+|Whole-Image Resize Ratio|float|Whole-Image再判定時の画像リサイズ率|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`で指定|
+|IoS Delete Threshold|float|ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される|`settings.DET2D_IOS_DELETE_THRESHOLD`で指定|
 
 #### 設定ファイルから指定するパラメータ
 
@@ -73,6 +76,14 @@ UI（Detection2Dページの画面上部のエクスパンダー）からは以�
 |`settings.RE_CLASSIFICATION_CANDIDATES`|dict[str, dict[str,str]]|Detection2Dのラベルごとに、SigLIP2によるラベル再判定のラベル候補と最終ラベルを指定するdict。keyがDetection2Dが付けたラベル、valueのkeyがラベル候補、valueのvalueが最終的に割り当てるラベルとなる。最終的に割り当てるラベルがNoneの場合、そのボックスは削除する|
 |`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`|float|前述のRe-Classification Crop Marginパラメータのデフォルト値|
 |`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|float|前述のRe-Classification Crop Marginパラメータの最大値|
+|`settings.WHOLE_IMAGE_CANDIDATES`|dict[str, dict[str,str]]|Whole-Image再判定の、SigLIP2推論のラベル候補と最終ラベルを指定するdict。辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す|
+|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`|float|Whole-Image Score Thresholdパラメータのデフォルト値|
+|`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|float|Whole-Image Score Thresholdパラメータの最大値|
+|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`|float|Whole-Image Resize Ratioパラメータのデフォルト値|
+|`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|float|Whole-Image Resize Ratioパラメータの最大値|
+|`settings.DET2D_IOS_DELETE_THRESHOLD`|float|Whole-Image Resize Ratioパラメータのデフォルト値|
+|`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|float|IoS Delete Thresholdパラメータの最大値|
+|`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除|
 |`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
 |`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
 
@@ -392,7 +403,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Depth ROR radius|float|インスタンスごとDepth点群に適用するRORのradiusパラメータ||
 |Depth DBSCAN eps|float|インスタンスごとDepth点群に適用するDBSCANのepsパラメータ||
 |Depth DBSCAN min_samples|int|インスタンスごとDepth点群に適用するDBSCANのmin_samplesパラメータ||
-|LiDAR Sweeps|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定||
+|LiDAR Sweeps|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定|
 |Min LiDAR Points to use LiDAR|int|インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）||
 |Max LiDAR Points to use Depth|int|Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれを上回ったインスタンスはLiDAR点群のみ使用する）||
 |LiDAR ROR nb_points|int|インスタンスごとLiDAR点群に適用するRORのnb_pointsパラメータ||
@@ -406,6 +417,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Inter-cam Merge Min Match Frames|float|Match Method="BEV convex-hull"のとき使用。同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する||
 |Inter-cam Merge Max Same-Camera Gap|int|同一カメラのトラック同士は、このキーフレーム数を超えて離れている場合は結合されない（同一キーフレームを含む場合も結合されない）|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`で指定|
 |Inter-cam Merge Label Match|"Label", "Category Group", or None|カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するかを指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`で指定|
+|Min Points to fit Box|int|Box Fittingを行うためのglobal_track点数の下限しきい値（これを下回ったglobal_trackは3Dバウンディングボックスを推定しない）|`settings.BOXFIT_MIN_POINTS_DEFAULT`で指定|
 |Boxfitting Method|"convex_hull_moa"|3Dバウンディングボックスのフィッティングに使用するアルゴリズム。"convex_hull_moa"なら[こちらの論文](https://arxiv.org/abs/2302.01034)の手法を使用||
 |convex_hull_moa angle_step_deg|float|Boxfitting Method="convex_hull_moa"のとき使用。最もフィットするyaw角度を探索するステップ||
 |convex_hull_moa z_percentile|float|Boxfitting Method="convex_hull_moa"のとき使用。高さの下限と上限として採用するパーセンタイル||
@@ -432,6 +444,8 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.LIDAR_NUM_SWEEPS_DEFAULT`|int|LiDAR Sweepsパラメータのデフォルト値|
 |`settings.LIDAR_MIN_POINTS_DEFAULT`|int|Min LiDAR Points to Use LiDARパラメータのデフォルト値|
 |`settings.LIDAR_MIN_POINTS_MAX`|int|Min LiDAR Points to Use LiDARパラメータの最大値|
+|`settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT`|int|Max LiDAR Points to Use Depthパラメータのデフォルト値|
+|`settings.LIDAR_MAX_POINTS_FOR_DEPTH_MAX`|int|Max LiDAR Points to Use Depthパラメータの最大値|
 |`settings.LIDAR_ROR_NB_POINTS_DEFAULT`|int|LiDAR ROR nb_pointsパラメータのデフォルト値|
 |`settings.LIDAR_ROR_NB_POINTS_MAX`|int|LiDAR ROR nb_pointsパラメータの最大値|
 |`settings.LIDAR_ROR_RADIUS_DEFAULT`|float|LiDAR ROR radiusパラメータのデフォルト値|
@@ -440,6 +454,9 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.LIDAR_DBSCAN_EPS_MAX`|float|LiDAR DBSCAN epsパラメータの最大値|
 |`settings.LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT`|int|LiDAR DBSCAN min_samplesパラメータのデフォルト値|
 |`settings.LIDAR_DBSCAN_MIN_SAMPLES_MAX`|int|LiDAR DBSCAN min_samplesパラメータの最大値|
+|`settings.EGO_BOX_X_RANGE`|list[int]|LiDAR点群を削除する自車周辺の直方体領域のx座標。`[xmin, xmax]`の形式|
+|`settings.EGO_BOX_Y_RANGE`|list[int]|LiDAR点群を削除する自車周辺の直方体領域のy座標。`[ymin, ymax]`の形式|
+|`settings.EGO_BOX_Z_RANGE`|list[int]|LiDAR点群を削除する自車周辺の直方体領域のz座標。`[zmin, zmax]`の形式|
 |`settings.DEPTH_CORRECTION_METHODS`|list[str]|LiDAR を基準に深度点群を補正する方式一覧（現状`["scale", "shift", "affine"]`の3種類）|
 |`settings.DEFAULT_DEPTH_CORRECTION_METHOD`|list[str]|LiDAR を基準に深度点群を補正する方式。"scale"ならインスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて補正。|
 |`settings.EGO_REFERENCE_CHANNEL`|str|Depth点群の座標を揃えるための基準センサー名（各カメラごとに取得時のego_poseが異なるため、ここで指定したセンサのego_poseに揃えることで同一のグローバル座標に点群を移せる）|
@@ -454,6 +471,8 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`|int|Inter-cam Merge Max Same-Camera Gapパラメータのデフォルト値|
 |`settings.MERGE_MAX_SAME_CAMERA_GAP_MAX`|int|Inter-cam Merge Max Same-Camera Gapパラメータの最大値|
 |`settings.DEFAULT_MERGE_LABEL_MATCH`|str|Inter-cam Merge Label Matchパラメータ（カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するか）のデフォルト値|
+|`settings.BOXFIT_MIN_POINTS_DEFAULT`|int|Min Points to fit Boxパラメータのデフォルト値|
+|`settings.BOXFIT_MIN_POINTS_MAX`|int|Min Points to fit Boxパラメータの最大値|
 |`settings.BOXFIT_METHODS`|list[str]|Boxfitting Methodパラメータ（3Dバウンディングボックスのフィッティングに使用するアルゴリズム）の選択肢|
 |`settings.BOXFIT_METHOD_DEFAULT`|str|Boxfitting Methodパラメータのデフォルト値|
 |`settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT`|float|convex_hull_moa angle_step_degパラメータのデフォルト値|

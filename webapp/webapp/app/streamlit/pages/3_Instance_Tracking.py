@@ -147,9 +147,12 @@ with param_col:
         )
         selected_prompt = next(r for r in prompt_runs if r["id"] == selected_prompt_id)
 
-        sweeps_col, iou_col, match_col = st.columns(3)
+        # Box Prompt はタブの外（どの処理にも共通の入力）
+        tracking_tab, inheritance_tab = st.tabs(
+            ["Instance Tracking", "Track ID Inheritance"]
+        )
 
-        with sweeps_col:
+        with tracking_tab:
             st.markdown("**Sweeps per Sample**")
             num_sweeps = st.number_input(
                 "Sweeps per Sample",
@@ -160,47 +163,50 @@ with param_col:
             )
             st.caption("1 ならキーフレームのみ。非キーフレームは伝播にのみ使う")
 
-        with iou_col:
-            st.markdown("**IoU Threshold**")
-            iou_threshold = st.slider(
-                "IoU Threshold", 0.0, 1.0,
-                value=settings.DEFAULT_TRACKING_IOU_THRESHOLD, step=0.05,
-                label_visibility="collapsed",
-            )
-            st.markdown("**IoU Method**")
-            iou_method = st.selectbox(
-                "IoU Method", IOU_METHODS,
-                index=IOU_METHODS.index(settings.DEFAULT_TRACKING_IOU_METHOD),
-                label_visibility="collapsed",
-            )
+        with inheritance_tab:
+            iou_col, match_col = st.columns(2)
 
-        with match_col:
-            st.markdown("**IoU Label Match**")
-            iou_label_match = st.selectbox(
-                "IoU Label Match", IOU_LABEL_MATCHES,
-                index=IOU_LABEL_MATCHES.index(
-                    settings.DEFAULT_TRACKING_IOU_LABEL_MATCH
-                ),
-                label_visibility="collapsed",
-            )
-            st.caption(
-                "区間の境界で、伝播したインスタンスと"
-                "新しいプロンプトのインスタンスを照合する条件"
-            )
+            with iou_col:
+                st.markdown("**IoU Threshold**")
+                iou_threshold = st.slider(
+                    "IoU Threshold", 0.0, 1.0,
+                    value=settings.DEFAULT_TRACKING_IOU_THRESHOLD, step=0.05,
+                    label_visibility="collapsed",
+                )
+                st.markdown("**IoU Method**")
+                iou_method = st.selectbox(
+                    "IoU Method", IOU_METHODS,
+                    index=IOU_METHODS.index(settings.DEFAULT_TRACKING_IOU_METHOD),
+                    label_visibility="collapsed",
+                )
 
-            st.markdown("**Track ID Inheritance**")
-            track_id_inheritance = st.radio(
-                "Track ID Inheritance", TRACK_ID_INHERITANCES,
-                index=TRACK_ID_INHERITANCES.index(
-                    settings.DEFAULT_TRACK_ID_INHERITANCE
-                ) if settings.DEFAULT_TRACK_ID_INHERITANCE in TRACK_ID_INHERITANCES
-                else 0,
-                label_visibility="collapsed",
-                help=("continuous_id: Forward のみ。区間境界で次のプロンプトと照合。\n\n"
-                      "forward_backward_matching: Forward と Backward を走らせ、"
-                      "区間内で照合する。区間途中に現れたインスタンスを拾えるが、"
-                      "推論時間は約 2 倍になる"),
-            )
+            with match_col:
+                st.markdown("**IoU Label Match**")
+                iou_label_match = st.selectbox(
+                    "IoU Label Match", IOU_LABEL_MATCHES,
+                    index=IOU_LABEL_MATCHES.index(
+                        settings.DEFAULT_TRACKING_IOU_LABEL_MATCH
+                    ),
+                    label_visibility="collapsed",
+                )
+                st.caption(
+                    "区間の境界で、伝播したインスタンスと"
+                    "新しいプロンプトのインスタンスを照合する条件"
+                )
+
+                st.markdown("**Track ID Inheritance**")
+                track_id_inheritance = st.radio(
+                    "Track ID Inheritance", TRACK_ID_INHERITANCES,
+                    index=TRACK_ID_INHERITANCES.index(
+                        settings.DEFAULT_TRACK_ID_INHERITANCE
+                    ) if settings.DEFAULT_TRACK_ID_INHERITANCE in TRACK_ID_INHERITANCES
+                    else 0,
+                    label_visibility="collapsed",
+                    help=("continuous_id: Forward のみ。区間境界で次のプロンプトと照合。\n\n"
+                          "forward_backward_matching: Forward と Backward を走らせ、"
+                          "区間内で照合する。区間途中に現れたインスタンスを拾えるが、"
+                          "推論時間は約 2 倍になる"),
+                )
 
 # ------------------------------------------------------------------
 # Run / progress

@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 DEFAULT_STUB_DELAY_SEC = 0.02
 # box_fitting_params["min_points"] が渡されなかったときの下限
 # （本実装の DEFAULT_MIN_POINTS_FOR_BOX と揃える）
-DEFAULT_MIN_POINTS_FOR_BOX = 15
+DEFAULT_MIN_POINTS_FOR_BOX = 10
 
 # スタブが生成する LiDAR 点数（1 sweep 相当）
 STUB_LIDAR_POINTS_PER_SWEEP = 4_000

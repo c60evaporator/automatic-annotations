@@ -34,7 +34,7 @@
     - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる
     - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
     - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合
-    - Whole-Image Fallback: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定関係。以下パラメータを指定可能
+    - Whole-Image Fallback: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定（検出0件フレームの救済推論）関係。以下パラメータを指定可能
         - Whole-Image Score Threshold: Whole-Image再判定時のSigLIP2スコアの閾値。この閾値以下の結果は削除
         - Whole-Image Resize Ratio: Whole-Image再判定時の画像リサイズ率
     - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される

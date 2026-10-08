@@ -140,109 +140,115 @@ with param_col:
     # 既定は畳んでおく。カメラ画像を見るためのスクロール量を減らすのが目的。
     # 畳んでいてもウィジェットは生成されるので、値は保持される
     with st.expander("Inference Parameters", expanded=False):
-        sample_interval_col, score_threshold_col, nms_threshold_col = st.columns(3)
+        # 処理の適用順に並べる（検出 → 再判定 → 重複除去 → 0 件の救済）
+        (det_tab, reclassify_tab, duplicate_tab, whole_image_tab) = st.tabs([
+            "Detection2D", "Re-Classification",
+            "Duplicate Suppression", "Whole-Image Fallback",
+        ])
+        with det_tab:
+            sample_interval_col, score_threshold_col, nms_threshold_col = st.columns(3)
 
-        with sample_interval_col:
-            st.markdown("**Sample Interval**")
-            sample_interval = st.number_input(
-                "Sample Interval", min_value=1, max_value=10,
-                value=settings.DET2D_DEFAULT_SAMPLE_INTERVAL, step=1,
-                label_visibility="collapsed",
+            with sample_interval_col:
+                st.markdown("**Sample Interval**")
+                sample_interval = st.number_input(
+                    "Sample Interval", min_value=1, max_value=10,
+                    value=settings.DET2D_DEFAULT_SAMPLE_INTERVAL, step=1,
+                    label_visibility="collapsed",
+                )
+                sample_indices = get_skipped_sample_indices(len(samples), sample_interval)
+                n_groups = len(label_groups())
+                st.caption(f"{len(sample_indices)} samples: {sample_indices}")
+                st.caption(
+                    f"推論回数 = {len(sample_indices)} × {n_cameras} cam × {n_groups} grp "
+                    f"= {len(sample_indices) * n_cameras * n_groups}"
+                )
+
+            with score_threshold_col:
+                st.markdown("**Score Threshold**")
+                score_threshold_ratio = st.slider(
+                    "Ratio", key="score_threshold_ratio",
+                    min_value=0.0, max_value=2.0, value=1.0, step=0.05,
+                )
+                # 閾値はカテゴリグループ単位（config の
+                # DET2D_DEFAULT_SCORE_THRESHOLDS がグループ名をキーに持つ）
+                score_thresholds = scaled_score_thresholds(score_threshold_ratio)
+                st.table(score_thresholds, border="horizontal", width="content")
+
+            with nms_threshold_col:
+                st.markdown("**NMS Threshold**")
+                nms_threshold_ratio = st.slider(
+                    "Ratio", key="nms_threshold_ratio",
+                    min_value=0.0, max_value=2.0, value=1.0, step=0.05,
+                )
+                nms_same = scaled_nms_same_class_ious(nms_threshold_ratio)
+                nms_cross = min(
+                    settings.DET2D_NMS_CROSS_CLASS_IOU * nms_threshold_ratio, 1.0
+                )
+                same_nms_col, cross_nms_col = st.columns([2, 1])
+                with same_nms_col:
+                    st.table(nms_same, border="horizontal", width="content")
+                with cross_nms_col:
+                    st.text(f"Cross-class NMS IOU: {nms_cross:.3f}")
+
+        with reclassify_tab:
+            reclassify_margin = st.slider(
+                "Re-Classification Crop Margin", 0.0,
+                settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX,
+                value=settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO, step=0.05,
+                help=("SigLIP2 の再判定で切り出す範囲を、ボックスの幅・高さに対して"
+                      "どれだけ広げるか。周囲が写らないと zero-shot 分類が当たらない"),
             )
-            sample_indices = get_skipped_sample_indices(len(samples), sample_interval)
-            n_groups = len(label_groups())
-            st.caption(f"{len(sample_indices)} samples: {sample_indices}")
             st.caption(
-                f"推論回数 = {len(sample_indices)} × {n_cameras} cam × {n_groups} grp "
-                f"= {len(sample_indices) * n_cameras * n_groups}"
+                "対象ラベル: "
+                + ", ".join(settings.RE_CLASSIFICATION_CANDIDATES)
+                + "（config の RE_CLASSIFICATION_CANDIDATES で指定）"
             )
 
-        with score_threshold_col:
-            st.markdown("**Score Threshold**")
-            score_threshold_ratio = st.slider(
-                "Ratio", key="score_threshold_ratio",
-                min_value=0.0, max_value=2.0, value=1.0, step=0.05,
+        with duplicate_tab:
+            ios_threshold = st.slider(
+                "IoS Delete Threshold", 0.0,
+                settings.DET2D_IOS_DELETE_THRESHOLD_MAX,
+                value=settings.DET2D_IOS_DELETE_THRESHOLD, step=0.05,
+                help=("同じラベルのボックスがほぼ内包関係にあるとき、片方を削除する。"
+                      "IoU の NMS は大小差があると効かないため、IoS（小さい方の面積に"
+                      "対する重なり率）で判定する。0 で無効"),
             )
-            # 閾値はカテゴリグループ単位（config の
-            # DET2D_DEFAULT_SCORE_THRESHOLDS がグループ名をキーに持つ）
-            score_thresholds = scaled_score_thresholds(score_threshold_ratio)
-            st.table(score_thresholds, border="horizontal", width="content")
+            small = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "small"]
+            big = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "big"]
+            st.caption(
+                f"小さい方を削除: {', '.join(small)} / 大きい方を削除: {', '.join(big)}"
+                "（config の DET2D_IOS_DELETE_DIRECTION で指定）"
+            )
 
-        with nms_threshold_col:
-            st.markdown("**NMS Threshold**")
-            nms_threshold_ratio = st.slider(
-                "Ratio", key="nms_threshold_ratio",
-                min_value=0.0, max_value=2.0, value=1.0, step=0.05,
+        with whole_image_tab:
+            whole_cols = st.columns(2)
+            with whole_cols[0]:
+                whole_image_threshold = st.slider(
+                    "Whole-Image Score Threshold", 0.0,
+                    settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX,
+                    # SigLIP のスコアは低めに出るので刻みを細かくする
+                    value=settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD, step=0.02,
+                    help=("検出が 0 件のフレームで、画像全体を分類して救済する。"
+                          "このスコア未満なら採用しない（論理削除として残るので、"
+                          "Show deleted と Box text=Score で分布を確認できる）"),
+                )
+            with whole_cols[1]:
+                whole_image_resize = st.slider(
+                    "Whole-Image Resize Ratio", 0.1,
+                    settings.WHOLE_IMAGE_RESIZE_RATIO_MAX,
+                    value=settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO, step=0.05,
+                    help="分類へ渡す前の縮小率。元解像度のままでは前処理が重い",
+                )
+            positives = [
+                k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if v
+            ]
+            negatives = [
+                k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if not v
+            ]
+            st.caption(
+                f"採用候補: {', '.join(positives)} / 除外候補: {', '.join(negatives)}"
+                "（config の WHOLE_IMAGE_CANDIDATES で指定）"
             )
-            nms_same = scaled_nms_same_class_ious(nms_threshold_ratio)
-            nms_cross = min(
-                settings.DET2D_NMS_CROSS_CLASS_IOU * nms_threshold_ratio, 1.0
-            )
-            same_nms_col, cross_nms_col = st.columns([2, 1])
-            with same_nms_col:
-                st.table(nms_same, border="horizontal", width="content")
-            with cross_nms_col:
-                st.text(f"Cross-class NMS IOU: {nms_cross:.3f}")
-
-        st.markdown("**Re-Classification**")
-        reclassify_margin = st.slider(
-            "Re-Classification Crop Margin", 0.0,
-            settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX,
-            value=settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO, step=0.05,
-            help=("SigLIP2 の再判定で切り出す範囲を、ボックスの幅・高さに対して"
-                  "どれだけ広げるか。周囲が写らないと zero-shot 分類が当たらない"),
-        )
-        st.caption(
-            "対象ラベル: "
-            + ", ".join(settings.RE_CLASSIFICATION_CANDIDATES)
-            + "（config の RE_CLASSIFICATION_CANDIDATES で指定）"
-        )
-
-        st.markdown("**Whole-Image Fallback**")
-        whole_cols = st.columns(2)
-        with whole_cols[0]:
-            whole_image_threshold = st.slider(
-                "Whole-Image Score Threshold", 0.0,
-                settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX,
-                # SigLIP のスコアは低めに出るので刻みを細かくする
-                value=settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD, step=0.02,
-                help=("検出が 0 件のフレームで、画像全体を分類して救済する。"
-                      "このスコア未満なら採用しない（論理削除として残るので、"
-                      "Show deleted と Box text=Score で分布を確認できる）"),
-            )
-        with whole_cols[1]:
-            whole_image_resize = st.slider(
-                "Whole-Image Resize Ratio", 0.1,
-                settings.WHOLE_IMAGE_RESIZE_RATIO_MAX,
-                value=settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO, step=0.05,
-                help="分類へ渡す前の縮小率。元解像度のままでは前処理が重い",
-            )
-        positives = [
-            k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if v
-        ]
-        negatives = [
-            k for k, v in settings.WHOLE_IMAGE_CANDIDATES.items() if not v
-        ]
-        st.caption(
-            f"採用候補: {', '.join(positives)} / 除外候補: {', '.join(negatives)}"
-            "（config の WHOLE_IMAGE_CANDIDATES で指定）"
-        )
-
-        st.markdown("**Duplicate Suppression (IoS)**")
-        ios_threshold = st.slider(
-            "IoS Delete Threshold", 0.0,
-            settings.DET2D_IOS_DELETE_THRESHOLD_MAX,
-            value=settings.DET2D_IOS_DELETE_THRESHOLD, step=0.05,
-            help=("同じラベルのボックスがほぼ内包関係にあるとき、片方を削除する。"
-                  "IoU の NMS は大小差があると効かないため、IoS（小さい方の面積に"
-                  "対する重なり率）で判定する。0 で無効"),
-        )
-        small = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "small"]
-        big = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "big"]
-        st.caption(
-            f"小さい方を削除: {', '.join(small)} / 大きい方を削除: {', '.join(big)}"
-            "（config の DET2D_IOS_DELETE_DIRECTION で指定）"
-        )
 
 # ------------------------------------------------------------------
 # Run / progress
