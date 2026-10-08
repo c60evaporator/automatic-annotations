@@ -30,6 +30,8 @@ from app.core.logging import get_logger
 from app.services.box_fitting import BOXFIT_METHOD_CONVEX_HULL_MOA, fit_box
 from app.services.depth_ops import (
     close_mask,
+    is_small_mask,
+    small_mask_erosion,
     filter_outliers,
     scaled_nb_points,
     depth_map_to_point_cloud,
@@ -37,7 +39,7 @@ from app.services.depth_ops import (
     resize_mask_nearest,
     rle_to_depth_mask,
 )
-from common.mask_rle import encode_rle
+from common.mask_rle import decode_rle, encode_rle
 from common.point_ops import downsample_to_max, points_to_json
 from common.transform3d import camera_to_ego, ego_to_ego
 
@@ -305,6 +307,13 @@ class BoxFittingPipeline:
         calib = frame.get("calibrated_sensor") or {}
         dilation = int(mask_params.get("dilation", 1))
         erosion = int(mask_params.get("erosion", 1))
+        # 小物体（マスクの短辺が閾値以下）用の調整。閾値は元画像の px
+        small_short_side = int(mask_params.get("small_mask_short_side", 0))
+        small_erosion = small_mask_erosion(
+            dilation, erosion,
+            float(mask_params.get("small_mask_erosion_ratio", 1.0)),
+        )
+        small_nb_ratio = float(depth_params.get("small_mask_nb_points_ratio", 1.0))
 
         # LiDAR は 1 フレームにつき 1 回だけ読み、全インスタンスで使い回す。
         # 地面の点はマスクにも入り込むので除いてある
@@ -323,10 +332,18 @@ class BoxFittingPipeline:
         )
 
         for instance in instances:
-            mask = rle_to_depth_mask(
-                instance["mask_rle"], depth_height, depth_width
+            # 小物体の判定は元画像の解像度で行うため、先に全画面で展開する
+            full_mask = decode_rle(instance["mask_rle"])
+            small = is_small_mask(full_mask, small_short_side)
+            mask = (
+                full_mask if full_mask.shape == (depth_height, depth_width)
+                else resize_mask_nearest(full_mask, depth_height, depth_width)
             )
-            closed = close_mask(mask, dilation, erosion)
+            # 小物体は収縮を弱める。輪郭から削る幅が同じでも、
+            # 細いマスクほど失われる割合が大きいため
+            closed = close_mask(
+                mask, dilation, small_erosion if small else erosion
+            )
 
             points_camera, points_raw_camera = instance_points_from_depth(
                 all_points, closed,
@@ -338,6 +355,8 @@ class BoxFittingPipeline:
                 # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める
                 label=instance.get("label"),
                 nb_points_ratio=nb_points_ratio,
+                # 小物体は点が疎なので ROR / DBSCAN をさらに緩める
+                small_mask_ratio=small_nb_ratio if small else 1.0,
             )
             raw_count = int(points_raw_camera.shape[0])
 
@@ -352,6 +371,9 @@ class BoxFittingPipeline:
                 "num_points_lidar": 0,
                 "num_points_depth_kept": int(points_camera.shape[0]),
                 "num_points_lidar_kept": 0,
+                # 小物体用の処理（収縮・ROR/DBSCAN の緩和）を適用したか。
+                # 再フィルタでも同じ扱いにするために記録する
+                "is_small_mask": bool(small),
             }
 
             # --- インスタンスごとの LiDAR 点群 ---------------------------

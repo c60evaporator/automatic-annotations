@@ -293,6 +293,18 @@ class Settings(BaseSettings):
     MASK_DILATION_MAX: int = 31
     MASK_EROSION_DEFAULT: int = 4
     MASK_EROSION_MAX: int = 31
+    # 小物体（遠方・小型の物体）用の調整。マスクの外接矩形の短辺が
+    # この値以下 [元画像の px] なら、収縮と ROR / DBSCAN を緩める。
+    # 同じ条件で処理すると、収縮でマスクの大半が消えたり、点が疎で
+    # ROR に丸ごと消されたりする。0 で無効
+    SMALL_MASK_SHORT_SIDE_DEFAULT: int = 40
+    SMALL_MASK_SHORT_SIDE_MAX: int = 300
+    # 小物体の収縮: Erosion = Dilation + (Erosion - Dilation) * この倍率
+    # （Erosion <= Dilation なら適用しない）
+    SMALL_MASK_EROSION_RATIO_DEFAULT: float = 0.5
+    # 小物体の深度点群の ROR nb_points と DBSCAN min_samples にかける倍率。
+    # nb_points は NB_POINTS_RATIO（ラベル別）をかけた後にさらにかける
+    SMALL_MASK_NB_POINTS_RATIO_DEFAULT: float = 0.6
 
     # 深度点群のフィルタ（Depth Estimation タブ）
     DEPTH_ROR_NB_POINTS_DEFAULT: int = 5

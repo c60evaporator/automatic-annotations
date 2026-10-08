@@ -185,6 +185,7 @@ class DepthBoxFittingRepository:
             "points_depth_ego": item.get("points_depth_ego"),
             "points_lidar_ego": item.get("points_lidar_ego"),
             "depth_used": bool(item.get("depth_used", True)),
+            "is_small_mask": bool(item.get("is_small_mask", False)),
             "points_depth_corrected_ego": item.get("points_depth_corrected_ego"),
             "depth_correction": item.get("depth_correction"),
             "num_points_depth": int(item.get("num_points_depth", 0)),
@@ -396,6 +397,7 @@ class DepthBoxFittingRepository:
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh, BoxFitting3D.yaw_ego,
             BoxFitting3D.global_track_id, BoxFitting3D.is_primary,
             BoxFitting3D.depth_correction, BoxFitting3D.depth_used,
+            BoxFitting3D.is_small_mask,
             BoxFitting3D.fitting_score, BoxFitting3D.fit_metrics,
             BoxFitting3D.manually_modified,
         ]

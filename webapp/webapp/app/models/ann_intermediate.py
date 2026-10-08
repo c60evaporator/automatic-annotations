@@ -725,6 +725,12 @@ class BoxFitting3D(Base):
     depth_used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("1")
     )
+    # 小物体用の処理（収縮・深度点群の ROR/DBSCAN の緩和）を適用したか。
+    # **再フィルタでも同じ扱いにするために要る**（クロージング後のマスクから
+    # は元の短辺が分からないので、判定し直せない）
+    is_small_mask: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
     # LiDAR を基準に補正した深度点群。補正できなかった場合は None
     # （points_depth_ego が補正前。UI で見比べられるよう両方残す）
     points_depth_corrected_ego: Mapped[dict | None] = mapped_column(

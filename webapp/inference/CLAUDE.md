@@ -366,14 +366,24 @@ Depth Boxfittingは、以下のフローで行われます
     - 補正後内部パラメータを用いて、深度画像をメートル単位に補正
 - キーフレームのループで、以下手順でカメラ間同一インスタンス結合・3Dバウンディングボックスのフィッティングを実施
     - キーフレーム内の全インスタンスマスクを走査し、以下手順でインスタンスごとDepth点群を得る
-        - インスタンスマスクにクロージング処理を適用
+        - インスタンスマスクにクロージング処理を適用。クロージング処理のカーネルサイズは以下のように決める
+            - 収縮: Dilationパラメータを使用
+            - 膨張: 基本はErosionパラメータを使用するが、マスクの短辺がSmall Mask Short Side以下なら`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`を使用する
         - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
-        - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する
+        - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
+            - RORのnb_points: Depth ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛け、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
+            - RORのradius: Depth ROR nb_pointsパラメータをそのまま用いる
+            - DBSCANのmin_samples: Depth DBSCAN min_samplesパラメータを用い、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
+            - DBSCANのeps: Depth DBSCAN epsパラメータをそのまま用いる
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
         - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて合体する
         - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
         - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
-        - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する
+        - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
+            - RORのnb_points: LiDAR ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛ける
+            - RORのradius: LiDAR ROR nb_pointsパラメータをそのまま用いる
+            - DBSCANのmin_samples: LiDAR DBSCAN min_samplesパラメータをそのまま用いる
+            - DBSCANのeps: LiDAR DBSCAN epxパラメータをそのまま用いる
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
@@ -398,11 +408,14 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Instance Tracking|-|入力とするInstance Trackingの結果を選択（`instance_tracking_2d_params`テーブルのレコードをラジオボタン付きでリスト表示）|`started_at`が最新のレコード|
 |Use LiDAR|bool|LiDAR点群を使用するかどうかを指定|`settings.BOXFIT_USE_LIDAR_DEFAULT`で指定|
 |Dilation|int|インスタンスマスクのクロージング処理の膨張カーネルサイズ||
-|Erosion|int|インスタンスマスクのクロージング処理の収縮カーネルサイズ||
+|Erosion|int|インスタンスマスクのクロージング処理の収縮カーネルサイズ（）||
+|Small Mask Short Side|int|各種小マスク向け倍率を適用するためのマスクの短辺サイズ閾値（これより小さければ収縮カーネルサイズにはSmall Mask Erosion Ratioを、Depth ROR nb_points, Depth DBSCANにはSmall Mask nb_points / min_samples Ratioを適用）|`settings.SMALL_MASK_SHORT_SIDE_DEFAULT`|
+|Small Mask Erosion Ratio|float|短辺がSmall Mask Short Side以下のマスクの収縮カーネルサイズに適用する倍率。適用後カーネルサイズは`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`|`settings.SMALL_MASK_EROSION_RATIO_DEFAULT`|
 |Depth ROR nb_points|int|インスタンスごとDepth点群に適用するRORのnb_pointsパラメータ||
 |Depth ROR radius|float|インスタンスごとDepth点群に適用するRORのradiusパラメータ||
 |Depth DBSCAN eps|float|インスタンスごとDepth点群に適用するDBSCANのepsパラメータ||
 |Depth DBSCAN min_samples|int|インスタンスごとDepth点群に適用するDBSCANのmin_samplesパラメータ||
+|Small Mask nb_points / min_samples Ratio|float|短辺がSmall Mask Short Side以下のマスクのSmall Mask nb_points / min_samples Ratioに適用する倍率|`settings.SMALL_MASK_NB_POINTS_RATIO_DEFAULT`|
 |LiDAR Sweeps|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`で指定|
 |Min LiDAR Points to use LiDAR|int|インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）||
 |Max LiDAR Points to use Depth|int|Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれを上回ったインスタンスはLiDAR点群のみ使用する）||
@@ -433,6 +446,10 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.MASK_DILATION_MAX`|int|Dilationパラメータの最大値|
 |`settings.MASK_EROSION_DEFAULT`|int|Erosionパラメータのデフォルト値|
 |`settings.MASK_EROSION_MAX`|int|Erosionパラメータの最大値|
+|`settings.SMALL_MASK_SHORT_SIDE_DEFAULT`|int|Small Mask Short Sideパラメータのデフォルト値|
+|`settings.SMALL_MASK_SHORT_SIDE_MAX`|int|Small Mask Short Sideパラメータの最大値|
+|`settings.SMALL_MASK_EROSION_RATIO_DEFAULT`|float|Small Mask Erosion Ratioパラメータのデフォルト値|
+|`settings.NB_POINTS_RATIO`|float|ROR nb_pointsにかけるラベルごとの倍率|
 |`settings.DEPTH_ROR_NB_POINTS_DEFAULT`|int|Depth ROR nb_pointsパラメータのデフォルト値|
 |`settings.DEPTH_ROR_NB_POINTS_MAX`|int|Depth ROR nb_pointsパラメータの最大値|
 |`settings.DEPTH_ROR_RADIUS_DEFAULT`|float|Depth ROR radiusパラメータのデフォルト値|
@@ -441,6 +458,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEPTH_DBSCAN_EPS_MAX`|float|Depth DBSCAN epsパラメータの最大値|
 |`settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT`|int|Depth DBSCAN min_samplesパラメータのデフォルト値|
 |`settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX`|int|Depth DBSCAN min_samplesパラメータの最大値|
+|`settings.SMALL_MASK_NB_POINTS_RATIO_DEFAULT`|float|Small Mask nb_points / min_samples Ratioパラメータのデフォルト値|
 |`settings.LIDAR_NUM_SWEEPS_DEFAULT`|int|LiDAR Sweepsパラメータのデフォルト値|
 |`settings.LIDAR_MIN_POINTS_DEFAULT`|int|Min LiDAR Points to Use LiDARパラメータのデフォルト値|
 |`settings.LIDAR_MIN_POINTS_MAX`|int|Min LiDAR Points to Use LiDARパラメータの最大値|

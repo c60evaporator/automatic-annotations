@@ -56,6 +56,63 @@ def close_mask(
     return result.astype(bool)
 
 
+def _round_half_up(value: float) -> int:
+    """四捨五入（Python の round は偶数丸めで 2.5 → 2 になるため使わない）."""
+    return int(np.floor(value + 0.5))
+
+
+def mask_short_side(mask: np.ndarray) -> int:
+    """マスクの外接矩形の短辺 [px]（空マスクは 0）."""
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+    if not rows.any():
+        return 0
+    height = int(np.flatnonzero(rows)[-1] - np.flatnonzero(rows)[0] + 1)
+    width = int(np.flatnonzero(cols)[-1] - np.flatnonzero(cols)[0] + 1)
+    return min(height, width)
+
+
+def is_small_mask(mask: np.ndarray, short_side_threshold: int) -> bool:
+    """小物体用の処理を適用するマスクか.
+
+    **面積ではなく外接矩形の短辺で判定する。** クロージングの収縮は輪郭から
+    一定幅を削るので、失われる割合は面積ではなく太さで決まる
+    （遠くの横長の barrier は面積が大きくても縦方向が削られきる）。
+
+    Args:
+        mask: **元画像の解像度**のマスク（閾値は元画像の px で指定する）
+        short_side_threshold: この値以下なら小物体扱い。0 以下で無効
+    """
+    if short_side_threshold <= 0:
+        return False
+    short = mask_short_side(mask)
+    return 0 < short <= short_side_threshold
+
+
+def small_mask_erosion(dilation: int, erosion: int, ratio: float) -> int:
+    """小物体用に収縮を弱める.
+
+    膨張との差に倍率をかけて縮める（膨張は変えない）。
+    例: dilation=2, erosion=4, ratio=0.5 → 2 + (4 - 2) * 0.5 = 3。
+    収縮が膨張以下なら輪郭は削られないので、そのまま返す。
+    """
+    if erosion <= dilation:
+        return erosion
+    return _round_half_up(dilation + (erosion - dilation) * float(ratio))
+
+
+def scale_density_param(value: int, ratio: float, minimum: int) -> int:
+    """密度で判定するパラメータ（ROR nb_points / DBSCAN min_samples）を緩める.
+
+    下限を割らないようにする。0 や 1 にすると処理自体が無効化され、
+    「緩めたつもりが素通し」になる（ROR は 1、DBSCAN は 2 が下限）。
+    元の値が下限未満（＝もともと無効）なら触らない。
+    """
+    if value < minimum or ratio == 1.0:
+        return value
+    return max(minimum, _round_half_up(value * float(ratio)))
+
+
 def depth_map_to_point_cloud(
     depth_map: np.ndarray,
     camera_intrinsic: np.ndarray,
@@ -209,12 +266,17 @@ def instance_points_from_depth(
     dbscan_min_samples: int = 0,
     label: str | None = None,
     nb_points_ratio: dict[str, float] | None = None,
+    small_mask_ratio: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """1 インスタンス分の点群を作り、外れ値を除去する.
 
     Args:
         label: ラベルごとの nb_points 倍率を引くのに使う
         nb_points_ratio: {ラベル: 倍率}。webapp の設定から渡される
+        small_mask_ratio: 小物体（マスクの短辺が閾値以下）用の倍率。
+            ROR nb_points（ラベル倍率をかけた後）と DBSCAN min_samples に
+            **同じ倍率**をかける。点が疎な物体が丸ごと消えるのを防ぐ。
+            小物体でなければ 1.0
 
     Returns:
         (フィルタ後の点群, フィルタ前の点群)
@@ -228,11 +290,17 @@ def instance_points_from_depth(
 
     points = filter_outliers(
         raw,
-        # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める
-        ror_nb_points=scaled_nb_points(ror_nb_points, label, nb_points_ratio),
+        # 小さい物体は点が疎なので、ラベルごとに nb_points を緩める。
+        # 小物体用の倍率はその後にかける（両方が掛け合わさる）
+        ror_nb_points=scale_density_param(
+            scaled_nb_points(ror_nb_points, label, nb_points_ratio),
+            small_mask_ratio, minimum=1,
+        ),
         ror_radius=ror_radius,
         dbscan_eps=dbscan_eps,
-        dbscan_min_samples=dbscan_min_samples,
+        dbscan_min_samples=scale_density_param(
+            dbscan_min_samples, small_mask_ratio, minimum=2,
+        ),
     )
     return points, raw
 

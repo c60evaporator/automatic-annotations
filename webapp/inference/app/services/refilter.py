@@ -144,8 +144,14 @@ def refilter_frame(
                 points = points[~np.asarray(data["ground_mask"], dtype=bool)]
             lidar_points = points[:, :3]
 
+    # 小物体用の倍率。どのインスタンスに適用するかは**推論時の判定**
+    # （box_fittings.is_small_mask）に従う。クロージング後のマスクからは
+    # 元の短辺が分からないため、ここで判定し直さない
+    small_nb_ratio = float(depth_params.get("small_mask_nb_points_ratio", 1.0))
+
     results: list[dict[str, Any]] = []
     for instance in instances:
+        small = bool(instance.get("is_small_mask"))
         mask = rle_to_depth_mask(
             instance["mask_rle_closed"], depth_height, depth_width
         )
@@ -158,6 +164,7 @@ def refilter_frame(
             dbscan_min_samples=int(depth_params.get("dbscan_min_samples", 0)),
             label=instance.get("label"),
             nb_points_ratio=nb_points_ratio,
+            small_mask_ratio=small_nb_ratio if small else 1.0,
         )
 
         def to_reference(points_camera: np.ndarray) -> np.ndarray:
@@ -277,6 +284,7 @@ def refilter_frame(
             "id": instance["id"],
             "track_id": instance.get("track_id"),
             "label": instance.get("label"),
+            "is_small_mask": small,
             "num_points_raw": int(raw.shape[0]),
             "num_points_kept": int(filtered.shape[0]),
             "points_raw_ego": points_to_json(reduced_raw),

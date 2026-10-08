@@ -612,6 +612,8 @@ def refilter_sample(
                 # 推論時と違う結果になる
                 "label": fit.get("tracking_label") or fit.get("label"),
                 "mask_rle_closed": fit["mask_rle_closed"],
+                # 推論時の小物体判定。ROR / DBSCAN の倍率を同じ対象にかける
+                "is_small_mask": bool(fit.get("is_small_mask")),
             }
             for fit in items if fit.get("mask_rle_closed")
         ]
@@ -647,6 +649,12 @@ def refilter_sample(
     depth_params = dict(depth_params)
     if "max_depth" not in depth_params and run_depth_params.get("max_depth"):
         depth_params["max_depth"] = run_depth_params["max_depth"]
+    # 小物体の倍率も Filter Params に無いので run から補う。
+    # 補わないと、推論時に残った小物体の点が Apply で消える
+    if "small_mask_nb_points_ratio" not in depth_params:
+        depth_params["small_mask_nb_points_ratio"] = float(
+            run_depth_params.get("small_mask_nb_points_ratio", 1.0)
+        )
 
     response = refilter_boxfitting({
         "frames": payload_frames,

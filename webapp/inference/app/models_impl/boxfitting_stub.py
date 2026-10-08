@@ -208,12 +208,16 @@ class BoxFittingStub:
             xmin, ymin, xmax, ymax = rle_bbox(mask_rle)
             area = max(0, (xmax - xmin) * (ymax - ymin))
 
+            short_side = min(xmax - xmin, ymax - ymin)
+            threshold = int((mask_params or {}).get("small_mask_short_side", 0))
             base = {
                 "instance_tracking_2d_id": instance["instance_tracking_2d_id"],
                 "sample_data_token": instance["sample_data_token"],
                 "track_id": str(instance["track_id"]),
                 "label": instance["label"],
                 "mask_rle_closed": mask_rle,
+                # 本実装と同じ判定（外接矩形の短辺が閾値以下）
+                "is_small_mask": bool(threshold > 0 and 0 < short_side <= threshold),
             }
             if area == 0:
                 results.append({**base, "status": "no_points",

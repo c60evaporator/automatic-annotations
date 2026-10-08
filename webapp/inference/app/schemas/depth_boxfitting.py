@@ -166,6 +166,8 @@ class BoxFittingResult(BaseModel):
     global_track_id: str | None = None
     # グループの代表行か（ボックスは代表 1 行にだけ入る）
     is_primary: bool = True
+    # 小物体用の処理（収縮・ROR/DBSCAN の緩和）を適用したか
+    is_small_mask: bool = False
     error: str | None = None
 
 
@@ -176,6 +178,8 @@ class RefilterInstance(BaseModel):
     label: str | None = None
     # クロージング後のマスク（DB に保存済みのものをそのまま渡す）
     mask_rle_closed: dict[str, Any]
+    # 推論時に小物体と判定されたか。ROR / DBSCAN の倍率を同じにかける
+    is_small_mask: bool = False
 
 
 class RefilterFrame(BaseModel):
@@ -218,6 +222,7 @@ class RefilterInstanceResult(BaseModel):
     id: str
     track_id: str | None = None
     label: str | None = None
+    is_small_mask: bool = False
     # 間引き前の点数（フィルタ前 / フィルタ後）
     num_points_raw: int = 0
     num_points_kept: int = 0

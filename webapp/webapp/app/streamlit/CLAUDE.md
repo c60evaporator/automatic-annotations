@@ -127,14 +127,17 @@
         - Use LiDAR: LiDAR点群を使用するかどうかを指定するチェックボックス
         - Dilation: インスタンスマスクのクロージング処理の膨張カーネルサイズ
         - Erosion: インスタンスマスクのクロージング処理の収縮カーネルサイズ
-    - Depth Estimation: 深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
+        - Small Mask Short Side: 各種小マスク向け倍率を適用するためのマスクの短辺サイズ閾値（これより小さければ収縮カーネルサイズにはSmall Mask Erosion Ratioを、Depth ROR nb_points, Depth DBSCANにはSmall Mask nb_points / min_samples Ratioを適用）
+        - Small Mask Erosion Ratio: 短辺がSmall Mask Short Side以下のマスクの収縮カーネルサイズに適用する倍率。適用後カーネルサイズは`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`
+    - Depth Estimationタブ: 深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
             - radius: radiusパラメータ（注目する点を中心とした球の半径）
         - DBSCAN: ノイズ除去の2段階目の処理であるDBSCANに使用するパラメータ
             - eps: epsパラメータ（近傍とみなす半径）
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
-    - LiDAR Pointcloud: LiDAR点群の結合・ノイズ除去・Depth点群とのに使用するパラメータ
+        - Small Mask nb_points / min_samples Ratio: 短辺がSmall Mask Short Side以下のマスクのSmall Mask nb_points / min_samples Ratioに適用する倍率
+    - LiDAR Pointcloudタブ: LiDAR点群の結合・ノイズ除去・Depth点群とのに使用するパラメータ
         - Depth Correction: Depth点群の深さ方向位置をLiDAR点群で補正する際のアルゴリズムを選択するプルダウン。"scale"（中央値の比で補正）、"shift"（中央値の差で補正）、"affine"（2パラメータ）の選択肢を持つ
         - LiDAR Sweeps: キーフレームあたりで結合するLiDAR点群のsweep数
         - Min LiDAR Points to use LiDAR: インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）
@@ -145,7 +148,7 @@
         - DBSCAN: ノイズ除去の2段階目の処理であるDBSCANに使用するパラメータ
             - eps: epsパラメータ（近傍とみなす半径）
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
-    - Inter-cam Merge: 複数カメラ間での同一インスタンス結合に使用するパラメータ
+    - Inter-cam Mergeタブ: 複数カメラ間での同一インスタンス結合に使用するパラメータ
         - Enable Merge: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス
         - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン。以下の選択肢を持つ
             - BEV convex-hull: XY平面での凸包の重なりがしきい値以上＆重心距離がしきい値以下なら同一判定。同一判定されたフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。以下のパラメータを使用
@@ -157,7 +160,7 @@
             - Label: ラベルが一致する場合のみマッチング対象とする
             - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
             - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
-    - Box Fitting: 3Dバウンディングボックスのインスタンスごと点群へのフィッティングに使用するパラメータ
+    - Box Fittingタブ: 3Dバウンディングボックスのインスタンスごと点群へのフィッティングに使用するパラメータ
         - Min Points to fit Box: Box Fittingを行うためのglobal_track点数の下限しきい値（これを下回ったglobal_trackは3Dバウンディングボックスを推定しない）
         - Method: 3Dバウンディングボックスのフィッティングに使用するアルゴリズム。以下の選択肢をもつ
             - convex_hull_moa: [こちらの論文](https://arxiv.org/abs/2302.01034)の手法。以下のパラメータを指定可能

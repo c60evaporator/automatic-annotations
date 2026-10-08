@@ -348,6 +348,31 @@ with param_col:
                 "Erosion", 1, settings.MASK_EROSION_MAX,
                 value=settings.MASK_EROSION_DEFAULT, step=1,
             )
+            st.markdown("**Small Mask**")
+            small_mask_short_side = st.slider(
+                "Small Mask Short Side [px]", 0,
+                settings.SMALL_MASK_SHORT_SIDE_MAX,
+                value=settings.SMALL_MASK_SHORT_SIDE_DEFAULT, step=5,
+                help=("マスクの外接矩形の短辺（元画像の px）がこの値以下なら"
+                      "小物体として扱い、収縮と深度点群の ROR / DBSCAN を緩める。"
+                      "面積ではなく短辺で判定するのは、収縮で失われる割合が"
+                      "マスクの太さで決まるため。0 で無効"),
+            )
+            small_mask_erosion_ratio = st.slider(
+                "Small Mask Erosion Ratio", 0.0, 1.0,
+                value=settings.SMALL_MASK_EROSION_RATIO_DEFAULT, step=0.05,
+                help=("小物体の Erosion を Dilation + (Erosion − Dilation) × 倍率 に"
+                      "弱める（四捨五入）。Erosion ≤ Dilation なら適用しない"),
+            )
+            if mask_erosion > mask_dilation:
+                small_erosion_preview = int(
+                    mask_dilation
+                    + (mask_erosion - mask_dilation) * small_mask_erosion_ratio
+                    + 0.5
+                )
+                st.caption(
+                    f"小物体の Erosion: {mask_erosion} → {small_erosion_preview}"
+                )
 
         with depth_tab:
             st.markdown("**ROR**")
@@ -371,6 +396,16 @@ with param_col:
                 "min_samples", 2, settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX,
                 value=settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT, step=1,
                 key="_w_depth_dbscan_min",
+            )
+            st.markdown("**Small Mask**")
+            small_mask_nb_ratio = st.slider(
+                "Small Mask nb_points / min_samples Ratio", 0.1, 1.0,
+                value=settings.SMALL_MASK_NB_POINTS_RATIO_DEFAULT, step=0.05,
+                key="_w_depth_small_mask_ratio",
+                help=("小物体（General タブの Small Mask Short Side 以下）の"
+                      "ROR nb_points と DBSCAN min_samples にかける倍率。"
+                      "nb_points はラベル別の倍率（NB_POINTS_RATIO）をかけた後に"
+                      "さらにかける。下限は nb_points=1 / min_samples=2"),
             )
 
         with lidar_tab:
@@ -525,7 +560,12 @@ with param_col:
                       "フレームごとに数える**（深度点＋LiDAR 点の合計）"),
             )
 
-mask_params = {"dilation": int(mask_dilation), "erosion": int(mask_erosion)}
+mask_params = {
+    "dilation": int(mask_dilation), "erosion": int(mask_erosion),
+    # 小物体（短辺が閾値以下）は収縮を弱める
+    "small_mask_short_side": int(small_mask_short_side),
+    "small_mask_erosion_ratio": float(small_mask_erosion_ratio),
+}
 # 結合しない場合は空の dict を渡す（推論側が結合を飛ばす）
 merge_params = {
     "method": merge_method,
@@ -545,6 +585,8 @@ box_fitting_params = {
 depth_params = {
     "ror_nb_points": int(depth_ror_nb), "ror_radius": float(depth_ror_radius),
     "dbscan_eps": float(depth_dbscan_eps), "dbscan_min_samples": int(depth_dbscan_min),
+    # 小物体の ROR nb_points / DBSCAN min_samples にかける倍率（深度のみ）
+    "small_mask_nb_points_ratio": float(small_mask_nb_ratio),
 }
 lidar_params = {
     "min_points": int(min_lidar_points),
@@ -1270,6 +1312,10 @@ with pointcloud_tab_view:
                             "ror_radius": float(depth_ror_radius_new),
                             "dbscan_eps": float(depth_eps_new),
                             "dbscan_min_samples": int(depth_min_new),
+                            # スライダーは無いが、run の値を引き継がないと
+                            # 推論時に残った小物体の点が消える
+                            "small_mask_nb_points_ratio": float(run_depth.get(
+                                "small_mask_nb_points_ratio", 1.0)),
                         },
                         "lidar": {
                             "ror_nb_points": int(lidar_ror_nb_new),
