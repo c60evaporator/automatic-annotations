@@ -543,6 +543,7 @@ def refilter_sample(
     depth_params: dict[str, Any],
     lidar_params: dict[str, Any] | None = None,
     channels: list[str] | None = None,
+    lshape_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """1 sample のインスタンス点群を、新しいパラメータで作り直す.
 
@@ -672,7 +673,10 @@ def refilter_sample(
         for key, value in source.items():
             if key.startswith("lshape_") and key not in target:
                 target[key] = value
-    lshape_params = (run.get("box_fitting_params") or {}).get("lshape") or {}
+    # L 字フィルタの共通設定。Filter Params で指定されていればそれを、
+    # 無ければ run の設定を使う
+    if lshape_params is None:
+        lshape_params = (run.get("box_fitting_params") or {}).get("lshape") or {}
 
     response = refilter_boxfitting({
         "frames": payload_frames,

@@ -373,6 +373,8 @@ def refilter_instance_points(
         depth_params=params.get("depth", {}),
         lidar_params=params.get("lidar", {}),
         channels=list(channels) if channels else None,
+        # L 字フィルタの共通設定（無ければ run の設定を使う）
+        lshape_params=params.get("lshape"),
     )
 
 

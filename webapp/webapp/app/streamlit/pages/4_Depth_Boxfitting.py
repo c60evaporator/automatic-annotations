@@ -126,6 +126,72 @@ PC_VIEW = "boxfit_pc_view"
 PC_VIEW_REVISION = "boxfit_pc_view_rev"
 # Apply で確定した再フィルタのパラメータ。None なら run 保存時の点群を使う
 PC_REFILTER_PARAMS = "boxfit_refilter_params"
+# L 字フィルタの設定キー（深度・LiDAR ごと）
+LSHAPE_DEPTH_KEYS = (
+    "lshape_bin_deg", "lshape_quantile", "lshape_margin_min", "lshape_margin_ratio",
+)
+LSHAPE_LIDAR_KEYS = ("lshape_bin_deg", "lshape_quantile", "lshape_margin")
+
+
+def run_refilter_params(run_info: dict) -> dict:
+    """run の設定そのままの再フィルタ条件.
+
+    Filter Params の初期値と同じ値になるようにしている。Instance Points を
+    途中段階（Raw・ROR/DBSCAN）に切り替えたときの自動の再計算に使う。
+    スライダーを触らずに Apply した場合と同じ条件になるので、
+    キャッシュも共有される。
+    """
+    run_depth = run_info.get("depth_params") or {}
+    run_lidar = run_info.get("lidar_params") or {}
+    run_lshape = (run_info.get("box_fitting_params") or {}).get("lshape") or {}
+    return {
+        "depth": {
+            "ror_nb_points": int(run_depth.get(
+                "ror_nb_points", settings.DEPTH_ROR_NB_POINTS_DEFAULT)),
+            "ror_radius": float(run_depth.get(
+                "ror_radius", settings.DEPTH_ROR_RADIUS_DEFAULT)),
+            "dbscan_eps": float(run_depth.get(
+                "dbscan_eps", settings.DEPTH_DBSCAN_EPS_DEFAULT)),
+            "dbscan_min_samples": int(run_depth.get(
+                "dbscan_min_samples", settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT)),
+            "small_mask_nb_points_ratio": float(run_depth.get(
+                "small_mask_nb_points_ratio", 1.0)),
+            **{k: float(run_depth[k]) for k in LSHAPE_DEPTH_KEYS if k in run_depth},
+        },
+        "lidar": {
+            "ror_nb_points": int(run_lidar.get(
+                "ror_nb_points", settings.LIDAR_ROR_NB_POINTS_DEFAULT)),
+            "ror_radius": float(run_lidar.get(
+                "ror_radius", settings.LIDAR_ROR_RADIUS_DEFAULT)),
+            "dbscan_eps": float(run_lidar.get(
+                "dbscan_eps", settings.LIDAR_DBSCAN_EPS_DEFAULT)),
+            "dbscan_min_samples": int(run_lidar.get(
+                "dbscan_min_samples", settings.LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT)),
+            "min_points": int(run_lidar.get(
+                "min_points", settings.LIDAR_MIN_POINTS_DEFAULT)),
+            "max_points_for_depth": int(run_lidar.get(
+                "max_points_for_depth", settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT)),
+            **{k: float(run_lidar[k]) for k in LSHAPE_LIDAR_KEYS if k in run_lidar},
+        },
+        # L 字の設定が無い run（L 字フィルタ導入前）は無効のまま
+        "lshape": dict(run_lshape),
+    }
+
+
+def lshape_params_differ(params: dict, run_info: dict) -> bool:
+    """再フィルタの L 字の設定が、run（推論時）と違うか."""
+    base = run_refilter_params(run_info)
+    applied = params.get("lshape") or {}
+    if not applied.get("enabled") and not base["lshape"].get("enabled"):
+        # どちらも無効なら、他の値が違っても結果は同じ
+        return False
+    if applied != base["lshape"]:
+        return True
+    return any(
+        (params.get(kind) or {}).get(k) != base[kind].get(k)
+        for kind, keys in (("depth", LSHAPE_DEPTH_KEYS), ("lidar", LSHAPE_LIDAR_KEYS))
+        for k in keys
+    )
 # 深度点群を補正前・補正後のどちらで表示するか
 OPT_PC_DEPTH_INST, W_PC_DEPTH_INST = "boxfit_pc_depth_inst", "_w_boxfit_pc_depth_inst"
 DEPTH_INSTANCE_RAW = "raw"
@@ -1129,15 +1195,15 @@ with pointcloud_tab_view:
             "Depth Instances", value=True, key="_w_pc_depth_inst",
         )
 
-        # 保存済みの点群はフィルタ後のみ。Raw を見るには再フィルタが要る
-        has_refilter = st.session_state.get(PC_REFILTER_PARAMS) is not None
+        # 保存済みの点群は最終段階（L 字フィルタ後）だけ。途中段階を選ぶと、
+        # 推論時と同じパラメータで自動的に再計算して表示する
         points_mode = st.radio(
             "Instance Points", POINTS_MODES, key=W_PC_POINTS,
             on_change=S.sync_sticky, args=(W_PC_POINTS, OPT_PC_POINTS),
-            disabled=not has_refilter,
             help=("外れ値除去（ROR / DBSCAN）と L 字フィルタの適用前後を切り替える。"
                   "保存済みの点群は L 字フィルタ後（当てはめに使ったもの）。"
-                  "下の Filter Params で Apply すると選べるようになる"),
+                  "それ以外を選ぶと、推論時と同じパラメータで再計算して表示する"
+                  "（Filter Params で Apply した後はその値で再計算する）"),
         )
 
         S.init_sticky(W_PC_DEPTH_INST, OPT_PC_DEPTH_INST, DEPTH_INSTANCE_RAW)
@@ -1183,6 +1249,8 @@ with pointcloud_tab_view:
     instance_groups: list[dict] = []
     lshape_items: list[dict] = []
     lshape_missing = 0
+    # 途中段階を見るために、推論時と同じパラメータで自動的に再計算したか
+    auto_refilter = False
     fitted_boxes: list[dict] = []
     refilter_summary: dict[str, int] | None = None
 
@@ -1222,6 +1290,12 @@ with pointcloud_tab_view:
                 f["token"] for f in frames if f["channel"] in enabled_channels
             )
             refilter_params = st.session_state.get(PC_REFILTER_PARAMS)
+            if (not refilter_params and run_info
+                    and points_mode != POINTS_MODE_LSHAPE):
+                # 途中段階は保存していないので、推論時と同じパラメータで
+                # 作り直す（Apply していなくても選べるようにするため）
+                refilter_params = run_refilter_params(run_info)
+                auto_refilter = True
 
             if refilter_params and tokens:
                 # 調整したパラメータで作り直した点群を使う。
@@ -1466,12 +1540,86 @@ with pointcloud_tab_view:
                     settings.DEPTH_DBSCAN_MIN_SAMPLES_MAX,
                     int(run_depth.get("dbscan_min_samples",
                                       settings.DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT)), 1)
-            st.caption("LiDAR 側は点群の混合を実装したあとに効きます")
+            st.markdown("**L-shape Filter**")
+            run_lshape = (
+                ((run_info or {}).get("box_fitting_params") or {}).get("lshape") or {}
+            )
+            lshape_on_new = st.checkbox(
+                "Enable L-shape Filter",
+                # L 字の設定が無い run（導入前）は無効から始める
+                value=bool(run_lshape.get("enabled", False)),
+                key=f"{prefix}_lshape_enabled",
+            )
+            common_cols = st.columns(3)
+            with common_cols[0]:
+                lshape_angle_new = _slider(
+                    "Angle Step [deg]", "ls_angle", 0.25, 5.0,
+                    float(run_lshape.get("angle_step_deg",
+                                         settings.LSHAPE_ANGLE_STEP_DEG_DEFAULT)), 0.25)
+            with common_cols[1]:
+                lshape_range_new = _slider(
+                    "Adjust Range [deg]", "ls_range", 0.0, 30.0,
+                    float(run_lshape.get("adjust_range_deg",
+                                         settings.LSHAPE_ADJUST_RANGE_DEG_DEFAULT)), 1.0)
+            with common_cols[2]:
+                lshape_astep_new = _slider(
+                    "Adjust Step [deg]", "ls_astep", 0.25, 5.0,
+                    float(run_lshape.get("adjust_step_deg",
+                                         settings.LSHAPE_ADJUST_STEP_DEG_DEFAULT)), 0.25)
+            st.caption("Depth")
+            ld_cols = st.columns(4)
+            with ld_cols[0]:
+                d_lbin_new = _slider(
+                    "Azimuth Bin [deg]", "d_lbin", 0.1, 5.0,
+                    float(run_depth.get("lshape_bin_deg",
+                                        settings.DEPTH_LSHAPE_BIN_DEG_DEFAULT)), 0.1)
+            with ld_cols[1]:
+                d_lq_new = _slider(
+                    "Near Quantile [%]", "d_lq", 0.0, 50.0,
+                    float(run_depth.get("lshape_quantile",
+                                        settings.DEPTH_LSHAPE_QUANTILE_DEFAULT)), 1.0)
+            with ld_cols[2]:
+                d_lmin_new = _slider(
+                    "Margin Min [m]", "d_lmin", 0.05, 2.0,
+                    float(run_depth.get("lshape_margin_min",
+                                        settings.DEPTH_LSHAPE_MARGIN_MIN_DEFAULT)), 0.05)
+            with ld_cols[3]:
+                d_lratio_new = _slider(
+                    "Margin Ratio", "d_lratio", 0.0, 0.2,
+                    float(run_depth.get("lshape_margin_ratio",
+                                        settings.DEPTH_LSHAPE_MARGIN_RATIO_DEFAULT)), 0.01)
+            st.caption("LiDAR")
+            ll_cols = st.columns(4)
+            with ll_cols[0]:
+                l_lbin_new = _slider(
+                    "Azimuth Bin [deg]", "l_lbin", 0.1, 5.0,
+                    float(run_lidar.get("lshape_bin_deg",
+                                        settings.LIDAR_LSHAPE_BIN_DEG_DEFAULT)), 0.1)
+            with ll_cols[1]:
+                l_lq_new = _slider(
+                    "Near Quantile [%]", "l_lq", 0.0, 50.0,
+                    float(run_lidar.get("lshape_quantile",
+                                        settings.LIDAR_LSHAPE_QUANTILE_DEFAULT)), 1.0)
+            with ll_cols[2]:
+                l_lmargin_new = _slider(
+                    "Margin [m]", "l_lmargin", 0.05, 2.0,
+                    float(run_lidar.get("lshape_margin",
+                                        settings.LIDAR_LSHAPE_MARGIN_DEFAULT)), 0.05)
 
             apply_col, reset_col, _spacer = st.columns([1, 1, 6])
             with apply_col:
                 if st.button("Apply", type="primary", width="stretch",
                              disabled=not view_run_id):
+                    # 対象ラベルや内部の定数（境界の分位点など）は run の値を
+                    # 引き継ぎ、UI で変えた値だけ上書きする。L 字の設定が無い
+                    # run（導入前）には config の値を補う
+                    lshape_base = {
+                        "labels": list(settings.LSHAPE_FILTER_LABELS),
+                        "boundary_quantile": float(settings.LSHAPE_BOUNDARY_QUANTILE),
+                        "support_band": float(settings.LSHAPE_SUPPORT_BAND),
+                        "violation_weight": float(settings.LSHAPE_VIOLATION_WEIGHT),
+                        **run_lshape,
+                    }
                     st.session_state[PC_REFILTER_PARAMS] = {
                         "depth": {
                             "ror_nb_points": int(depth_ror_nb_new),
@@ -1482,6 +1630,10 @@ with pointcloud_tab_view:
                             # 推論時に残った小物体の点が消える
                             "small_mask_nb_points_ratio": float(run_depth.get(
                                 "small_mask_nb_points_ratio", 1.0)),
+                            "lshape_bin_deg": float(d_lbin_new),
+                            "lshape_quantile": float(d_lq_new),
+                            "lshape_margin_min": float(d_lmin_new),
+                            "lshape_margin_ratio": float(d_lratio_new),
                         },
                         "lidar": {
                             "ror_nb_points": int(lidar_ror_nb_new),
@@ -1497,6 +1649,16 @@ with pointcloud_tab_view:
                             "max_points_for_depth": int(run_lidar.get(
                                 "max_points_for_depth",
                                 settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT)),
+                            "lshape_bin_deg": float(l_lbin_new),
+                            "lshape_quantile": float(l_lq_new),
+                            "lshape_margin": float(l_lmargin_new),
+                        },
+                        "lshape": {
+                            **lshape_base,
+                            "enabled": bool(lshape_on_new),
+                            "angle_step_deg": float(lshape_angle_new),
+                            "adjust_range_deg": float(lshape_range_new),
+                            "adjust_step_deg": float(lshape_astep_new),
                         },
                     }
                     st.rerun()
@@ -1546,12 +1708,22 @@ with pointcloud_tab_view:
                     f" / LiDAR {lidar_raw:,} → {lidar_kept:,} 点"
                     if lidar_raw else ""
                 )
+                head = (
+                    "推論時と同じパラメータで途中段階を再計算して表示中"
+                    if auto_refilter else "再フィルタ適用中"
+                )
                 st.caption(
-                    f"再フィルタ適用中: {n_inst} インスタンス / "
+                    f"{head}: {n_inst} インスタンス / "
                     f"深度 {raw_total:,} → {kept_total:,} 点 ({ratio:.0f}% 残存)"
                     f"{lidar_text}。"
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
+                applied = st.session_state.get(PC_REFILTER_PARAMS)
+                if applied and run_info and lshape_params_differ(applied, run_info):
+                    st.caption(
+                        "L 字フィルタの設定が推論時と異なるため、"
+                        "下の比較の「L 字除去」は一致しなくて正常です"
+                    )
                 # 推論時との比較。**raw が一致するかで原因を切り分けられる**
                 # 一致しない → マスク・深度の範囲（max_depth）が違う
                 # raw だけ一致 → 外れ値除去の条件かラベルの倍率が違う
