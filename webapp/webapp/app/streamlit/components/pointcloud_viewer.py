@@ -279,6 +279,101 @@ def add_ego_axes(
         ))
 
 
+# L 字フィルタの途中経過（輪郭点と L 字の面）の表示。
+# 点群の上に重ねて目立つよう、通常のインスタンス点より大きく、形も変える
+COLOR_LSHAPE = "#e53935"
+MARKER_SIZE_LSHAPE = 5
+SYMBOL_LSHAPE = {"depth": "x", "lidar": "cross"}
+LSHAPE_PLANE_OPACITY = 0.25
+LSHAPE_LABEL = {"depth": "L-shape contour (Depth)", "lidar": "L-shape contour (LiDAR)"}
+LSHAPE_PLANE_LABEL = {"depth": "L-shape faces (Depth)", "lidar": "L-shape faces (LiDAR)"}
+
+
+def lshape_overlays(
+    items: Iterable[dict[str, Any]], *, depth: bool, lidar: bool
+) -> tuple[list[dict[str, Any]], int]:
+    """インスタンスの lshape_filter 記録から、表示用のデータを集める.
+
+    Returns:
+        (``{"kind", "contour", "segments", "z_range"}`` のリスト,
+         記録はあるが表示用の情報が無いインスタンス数)。
+        後者は L 字の可視化に対応する前に推論した run で発生する
+    """
+    overlays, missing = [], 0
+    kinds = [k for k, on in (("depth", depth), ("lidar", lidar)) if on]
+    for item in items:
+        info = item.get("lshape_filter") or {}
+        for kind in kinds:
+            record = info.get(kind) or {}
+            if not record.get("applied"):
+                continue
+            if not record.get("contour") or not record.get("segments"):
+                missing += 1
+                continue
+            overlays.append({
+                "kind": kind,
+                "contour": np.asarray(record["contour"], dtype=np.float64),
+                "segments": record["segments"],
+                "z_range": record.get("z_range") or [0.0, 1.5],
+            })
+    return overlays, missing
+
+
+def add_lshape_overlays(fig: go.Figure, overlays: Sequence[dict[str, Any]]) -> int:
+    """輪郭点（赤い ×／＋）と L 字の面（半透明の赤い縦の面）を描く.
+
+    面は線分を底辺として、インスタンス点群の高さの範囲（5〜95 パーセンタイル）
+    に立てる。輪郭点は BEV の 2 次元の点なので、面の下端の高さに置く。
+    深度と LiDAR でそれぞれ 1 トレースにまとめる（凡例を増やしすぎないため）。
+
+    Returns:
+        描いた輪郭点の数
+    """
+    drawn = 0
+    for kind in ("depth", "lidar"):
+        group = [o for o in overlays if o["kind"] == kind]
+        if not group:
+            continue
+        # --- 輪郭点 -------------------------------------------------
+        points = np.vstack([
+            np.column_stack([o["contour"][:, :2],
+                             np.full(len(o["contour"]), o["z_range"][0])])
+            for o in group
+        ])
+        fig.add_trace(go.Scatter3d(
+            x=points[:, 0], y=points[:, 1], z=points[:, 2],
+            mode="markers", name=LSHAPE_LABEL[kind],
+            marker=dict(size=MARKER_SIZE_LSHAPE, color=COLOR_LSHAPE,
+                        symbol=SYMBOL_LSHAPE[kind]),
+            hoverinfo="name",
+        ))
+        drawn += len(points)
+        # --- L 字の面（線分ごとに縦の長方形 = 三角形 2 枚） ------------
+        xs, ys, zs, i, j, k = [], [], [], [], [], []
+        for o in group:
+            z_low, z_high = o["z_range"]
+            if z_high - z_low < 0.3:
+                # 点の高さがほぼ揃っている（LiDAR が 1 リングだけ等）と面が
+                # 潰れて見えないので、最低限の高さを付ける
+                z_high = z_low + 0.3
+            for (x0, y0), (x1, y1) in o["segments"]:
+                base = len(xs)
+                xs += [x0, x1, x1, x0]
+                ys += [y0, y1, y1, y0]
+                zs += [z_low, z_low, z_high, z_high]
+                i += [base, base]
+                j += [base + 1, base + 2]
+                k += [base + 2, base + 3]
+        if xs:
+            fig.add_trace(go.Mesh3d(
+                x=xs, y=ys, z=zs, i=i, j=j, k=k,
+                color=COLOR_LSHAPE, opacity=LSHAPE_PLANE_OPACITY,
+                name=LSHAPE_PLANE_LABEL[kind], showlegend=True,
+                hoverinfo="name", flatshading=True,
+            ))
+    return drawn
+
+
 def build_pointcloud_figure(
     *,
     raw_lidar: np.ndarray | None = None,
@@ -286,6 +381,7 @@ def build_pointcloud_figure(
     raw_depth: np.ndarray | None = None,
     instance_groups: Sequence[dict[str, Any]] = (),
     boxes: Sequence[dict[str, Any]] = (),
+    lshape: Sequence[dict[str, Any]] = (),
     max_points_per_trace: int = 50_000,
     height: int = 720,
     camera: dict[str, Any] | None = None,
@@ -297,6 +393,7 @@ def build_pointcloud_figure(
     Args:
         instance_groups: ``{"key": 表示名, "color": 色, "points": (N,3)}`` のリスト
         boxes: ``{"key", "color", "center", "size_wlh", "yaw"}`` のリスト
+        lshape: L 字フィルタの途中経過（lshape_overlays() の戻り値）
         camera: Plotly の scene.camera 設定。None なら Plotly 既定
         view_revision: uirevision に渡す値。**同じ値の間はユーザーの回転操作が
             保持され、値が変わったときだけ視点がプリセットへ戻る**。
@@ -342,6 +439,9 @@ def build_pointcloud_figure(
 
     if boxes:
         counts["Fitted boxes"] = add_boxes(fig, boxes)
+
+    if lshape:
+        counts["L-shape contour"] = add_lshape_overlays(fig, lshape)
 
     # 軸は最後に足す。点群より手前に描いて隠れないようにする
     if axis_length:

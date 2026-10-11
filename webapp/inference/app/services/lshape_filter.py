@@ -256,6 +256,48 @@ def fit_lshape(
     return lines, best_theta, score
 
 
+def line_segments(
+    contour: np.ndarray, weights: np.ndarray, lines, band: float,
+    violation_weight: float = DEFAULT_VIOLATION_WEIGHT,
+) -> list[list[list[float]]]:
+    """表示用に、各線を「担当する輪郭点の範囲」の線分にする.
+
+    線そのものは無限に伸びるので、担当する輪郭点のうち**線に乗っている
+    （線から band 以内の）点**を線上へ射影した範囲に切り出す。手前の塊など
+    線から外れた点まで含めると、面が角を越えて伸びて見える。
+    2 本ある場合は角（2 本の交点）まで伸ばして L 字にする。
+
+    Returns:
+        ``[[[x0, y0], [x1, y1]], ...]``（線と同じ順）
+    """
+    _, nearest = _evaluate(contour, weights, lines, band, violation_weight)
+    corner = None
+    if len(lines) == 2:
+        normals = np.array([lines[0][0], lines[1][0]])
+        if abs(np.linalg.det(normals)) > 1e-6:
+            corner = np.linalg.solve(normals, np.array([lines[0][1], lines[1][1]]))
+    segments = []
+    for index, (u, t) in enumerate(lines):
+        direction = np.array([-u[1], u[0]])
+        base = u * t
+        own = contour[nearest == index]
+        on_line = own[np.abs(own @ u - t) <= band]
+        if len(on_line):
+            own = on_line
+        elif len(own) == 0:
+            own = contour
+        s = (own - base) @ direction
+        s_min, s_max = float(s.min()), float(s.max())
+        if corner is not None:
+            s_corner = float((corner - base) @ direction)
+            s_min, s_max = min(s_min, s_corner), max(s_max, s_corner)
+        segments.append([
+            [round(float(v), 3) for v in base + s_min * direction],
+            [round(float(v), 3) for v in base + s_max * direction],
+        ])
+    return segments
+
+
 def front_deficit(
     points_xy: np.ndarray, origin: np.ndarray, lines
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -355,6 +397,20 @@ def lshape_filter(
         # 遠くへ逃げる）ため、垂直方向の条件が無いと面そのものを消してしまう
         front = (deficit > margin) & (perp > support_band)
     keep = ~np.nan_to_num(front, nan=False).astype(bool)
+
+    # 表示用（PointCloud タブの L-shape Filter）。輪郭点と L 字の線分、
+    # 面を立てる高さの範囲を残す
+    z_low, z_high = (
+        (float(np.percentile(points[:, 2], 5)), float(np.percentile(points[:, 2], 95)))
+        if points.shape[1] >= 3 else (0.0, 1.5)
+    )
+    info.update({
+        "contour": np.round(contour, 2).tolist(),
+        "segments": line_segments(
+            contour, weights, lines, support_band, violation_weight
+        ),
+        "z_range": [round(z_low, 2), round(z_high, 2)],
+    })
 
     info.update({
         "applied": True,

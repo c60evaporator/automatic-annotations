@@ -73,6 +73,7 @@ from app.streamlit.components.pointcloud_viewer import (
     build_pointcloud_figure,
     global_camera,
     group_instance_points,
+    lshape_overlays,
     render_pointcloud,
 )
 from app.streamlit.components.waypoint_viewer import render_scene_waypoint_view
@@ -1148,6 +1149,15 @@ with pointcloud_tab_view:
                   "補正できなかったインスタンスは補正前で表示する"),
         )
 
+        show_lshape = st.checkbox(
+            "L-shape Filter", value=False, key="_w_pc_lshape",
+            help=("L 字フィルタの途中経過を重ねる。赤い × / ＋ が手前輪郭の点"
+                  "（深度 / LiDAR）、半透明の赤い面が検出した L 字（車両の手前 2 面）。"
+                  "Depth Instances / LiDAR Instances の表示に合わせて出す。"
+                  "深度は補正できた場合は補正後の点群で判定しているので、"
+                  "Depth Instance=raw だと点群と少しずれて見える"),
+        )
+
         show_fitted_boxes = st.checkbox(
             "Fitted Boxes", value=False, key="_w_pc_fitted_boxes",
             help=("Box Fitting で推定した 3D ボックスを点群に重ねる。"
@@ -1171,6 +1181,8 @@ with pointcloud_tab_view:
 
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
+    lshape_items: list[dict] = []
+    lshape_missing = 0
     fitted_boxes: list[dict] = []
     refilter_summary: dict[str, int] | None = None
 
@@ -1309,6 +1321,13 @@ with pointcloud_tab_view:
                     depth_key = "_depth_display"
                 refilter_summary = None
                 box_source = fittings
+
+            if show_lshape:
+                # 推論時の記録（DB）または Apply の結果のどちらでも、
+                # 各インスタンスの lshape_filter に入っている
+                lshape_items, lshape_missing = lshape_overlays(
+                    flat, depth=show_depth_instances, lidar=show_lidar_instances,
+                )
 
             if show_depth_instances:
                 instance_groups += group_instance_points(
@@ -1497,6 +1516,7 @@ with pointcloud_tab_view:
                 raw_depth=raw_depth_points,
                 instance_groups=instance_groups,
                 boxes=fitted_boxes,
+                lshape=lshape_items,
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
                 axis_length=settings.POINTCLOUD_AXIS_LENGTH_M,
                 camera=camera,
@@ -1508,6 +1528,12 @@ with pointcloud_tab_view:
                 ),
             )
             render_pointcloud(fig, counts)
+            if show_lshape and lshape_missing:
+                st.caption(
+                    f"L 字の可視化情報が無いインスタンスが {lshape_missing} 件あります"
+                    "（可視化に対応する前の run）。再推論するか、Filter Params で "
+                    "Apply すると表示されます"
+                )
             if refilter_summary is not None:
                 s = refilter_summary
                 raw_total, kept_total, n_inst = s["raw"], s["kept"], s["instances"]
