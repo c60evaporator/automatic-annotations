@@ -390,9 +390,13 @@ class Settings(BaseSettings):
     # IoU は 0.3 程度まで落ちる（IoS なら 0.5 前後）
     DEFAULT_MERGE_OVERLAP_THRESHOLD: float = 0.15
     MERGE_OVERLAP_THRESHOLD_MAX: float = 1.0
-    # 重心距離の上限 [m]。これを超える組は凸包を作る前に捨てる
-    DEFAULT_MERGE_MAX_CENTROID_DISTANCE: float = 3.0
-    MERGE_MAX_CENTROID_DISTANCE_MAX: float = 10.0
+    # BEV 凸包どうしの隙間の上限 [m]。これを超える組は重なりを計算しない
+    # （足切り）。重なっていれば隙間は 0 なので、長い車両がカメラの境界で
+    # 分かれても落ちない（重心距離だと車長の半分ほど離れて落ちていた）。
+    # 重なり率は凸包が接していないと 0 なので、結合の結果には影響しない。
+    # 効くのは計算量と、「重なりは無いが近い組」を診断に残す範囲
+    DEFAULT_MERGE_MAX_HULL_GAP: float = 0.5
+    MERGE_MAX_HULL_GAP_MAX: float = 5.0
     # 何フレームでマッチしたら結合するか。
     # 同じ物体が複数カメラに写るキーフレームは高々 1〜2 なので、
     # 割合ではなくフレーム数で判定する（割合だと 0/0.5/1 の 3 値しか取れない）

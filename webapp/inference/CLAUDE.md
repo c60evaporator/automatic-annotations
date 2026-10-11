@@ -426,7 +426,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Inter-cam Merge Enabled|bool|カメラ間の同一インスタンス結合を実施するかどうかを指定||
 |Inter-cam Merge Match Method|"BEV convex-hull"|カメラ間の同一インスタンス結合に使用する手法を選択|"BEV convex-hull"ならXY平面での凸包の重なりがしきい値以上＆重心距離がしきい値以下のフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。|`settings.DEFAULT_MERGE_METHOD`で指定|
 |Inter-cam Merge Overlap Threshold|float|Match Method="BEV convex-hull"のとき使用。XY平面での凸包の重なりのしきい値||
-|Inter-cam Merge Max Centroid Distance|float|Match Method="BEV convex-hull"のとき使用。インスタンス間の重心距離のしきい値||
+|Inter-cam Merge Max Hull Gap|float|Match Method="BEV convex-hull"のとき使用。インスタンス凸包間距離のしきい値||
 |Inter-cam Merge Min Match Frames|float|Match Method="BEV convex-hull"のとき使用。同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する||
 |Inter-cam Merge Max Same-Camera Gap|int|同一カメラのトラック同士は、このキーフレーム数を超えて離れている場合は結合されない（同一キーフレームを含む場合も結合されない）|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`で指定|
 |Inter-cam Merge Label Match|"Label", "Category Group", or None|カメラ間同一インスタンス結合時にラベルまたはカテゴリグループの一致も考慮するかを指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`で指定|
@@ -482,8 +482,8 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEFAULT_MERGE_METHOD`|str|Inter-cam Merge Match Methodパラメータのデフォルト値|
 |`settings.DEFAULT_MERGE_OVERLAP_THRESHOLD`|float|Inter-cam Merge Overlap Thresholdパラメータのデフォルト値|
 |`settings.MERGE_OVERLAP_THRESHOLD_MAX`|float|Inter-cam Merge Overlap Thresholdパラメータの最大値|
-|`settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE`|float|Inter-cam Merge Max Centroid Distanceパラメータのデフォルト値|5.5|法令上のバス・トラック長上限12mの半分からオーバーラップ分を引いた概算値。国により変わるため注意|
-|`settings.MERGE_MAX_CENTROID_DISTANCE_MAX`|float|Inter-cam Merge Max Centroid Distanceパラメータの最大値|
+|`settings.DEFAULT_MERGE_MAX_HULL_GAP`|float|Inter-cam Merge Max Hull Gapパラメータのデフォルト値|0.5|実データで調整|
+|`settings.MERGE_MAX_HULL_GAP_MAX`|float|Inter-cam Merge Max Hull Gapパラメータの最大値|
 |`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`|int|Inter-cam Merge Min Match Framesパラメータのデフォルト値|
 |`settings.MERGE_MIN_MATCH_FRAMES_MAX`|int|Inter-cam Merge Min Match Framesパラメータの最大値|
 |`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`|int|Inter-cam Merge Max Same-Camera Gapパラメータのデフォルト値|

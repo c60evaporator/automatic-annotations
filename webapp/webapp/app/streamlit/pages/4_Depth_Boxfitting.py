@@ -236,6 +236,12 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
             )
 
         st.markdown("**トラック対の判定**")
+        gated = [e for e in edges if e.get("status") == "gated"]
+        if gated:
+            st.caption(
+                f"status=gated は足切り（凸包の隙間・ラベル）で、重なりの判定まで"
+                f"進まなかった組（表示中 {len(gated)} 件）"
+            )
         total = diagnostics.get("num_edges_total", len(edges))
         if total > len(edges):
             st.caption(f"重なりの大きい順に {len(edges)} / {total} 件を表示")
@@ -244,6 +250,8 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
                 {
                     "track A": e["pair"][0], "track B": e["pair"][1],
                     "max overlap": e["max_overlap"],
+                    # 古い run の診断には無い
+                    "min gap [m]": e.get("min_gap"),
                     "status": e["status"], "reason": e.get("reason", ""),
                 }
                 for e in edges
@@ -590,12 +598,16 @@ with param_col:
                     help="凸包の重なり率（IoS）の下限",
                 )
             with merge_cols[1]:
-                merge_distance = st.slider(
-                    "Max Centroid Distance [m]", 0.5,
-                    settings.MERGE_MAX_CENTROID_DISTANCE_MAX,
-                    value=settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE, step=0.5,
+                merge_hull_gap = st.slider(
+                    "Max Hull Gap [m]", 0.0,
+                    settings.MERGE_MAX_HULL_GAP_MAX,
+                    value=settings.DEFAULT_MERGE_MAX_HULL_GAP, step=0.1,
                     disabled=not enable_merge,
-                    help="重心がこれ以上離れた組は、凸包を作る前に捨てる",
+                    help=("BEV 凸包どうしの隙間がこれを超える組は、重なりを計算せず"
+                          "落とす（足切り）。重なっていれば隙間は 0 なので、長い車両が"
+                          "カメラの境界で分かれても落ちない。重なり率は凸包が接して"
+                          "いないと 0 なので結合の結果には影響せず、"
+                          "「重なりは無いが近い組」を診断に残す範囲だけが変わる"),
                 )
             with merge_cols[3]:
                 merge_same_cam_gap = st.slider(
@@ -663,7 +675,7 @@ merge_params = {
     "method": merge_method,
     "label_match": merge_label_match,
     "overlap_threshold": float(merge_overlap),
-    "max_centroid_distance": float(merge_distance),
+    "max_hull_gap": float(merge_hull_gap),
     "min_match_frames": int(merge_min_frames),
     "max_same_camera_gap": int(merge_same_cam_gap),
 } if enable_merge else {}

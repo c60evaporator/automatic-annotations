@@ -56,6 +56,9 @@ OVERLAP_IOU = "iou"
 CANDIDATE_MIN_OVERLAP = 0.01
 # 診断に残す辺の上限。全部残すとインスタンス数の 2 乗に比例して膨らむ
 MAX_DIAGNOSTIC_EDGES = 200
+# 足切り（凸包の隙間）で落とした組を診断に残す範囲 [m]。
+# max(この値, 上限の 3 倍) 以内の組だけ残す。遠い組まで残すと件数が膨らむ
+DIAGNOSTIC_GAP_LIMIT = 3.0
 # 「点数不足で当てはめなかった」トラックの診断に残す上限
 MAX_DIAGNOSTIC_TOO_FEW = 50
 
@@ -125,6 +128,22 @@ def hull_overlap(
     return float(intersection / denominator) if denominator > 0 else 0.0
 
 
+def _footprint(points_xy: np.ndarray):
+    """BEV の凸包（点・線分に潰れていても距離を測れる形で返す）."""
+    from shapely.geometry import MultiPoint
+
+    return MultiPoint([tuple(p) for p in points_xy]).convex_hull
+
+
+def hull_gap(points_a: np.ndarray, points_b: np.ndarray) -> float:
+    """BEV 凸包どうしの隙間 [m]（重なっていれば 0）."""
+    a = np.asarray(points_a, dtype=np.float64)[:, :2]
+    b = np.asarray(points_b, dtype=np.float64)[:, :2]
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        return float("inf")
+    return float(_footprint(a).distance(_footprint(b)))
+
+
 def centroid_xy(points: np.ndarray) -> np.ndarray:
     points = np.asarray(points, dtype=np.float64)
     return points[:, :2].mean(axis=0) if points.shape[0] else np.zeros(2)
@@ -184,7 +203,7 @@ def match_camera_pair(
     instances_b: Sequence[dict[str, Any]],
     *,
     overlap_threshold: float,
-    max_centroid_distance: float,
+    max_hull_gap: float,
     overlap_method: str = OVERLAP_IOS,
     label_match: str = LABEL_MATCH_CATEGORY_GROUP,
     label_to_category_group: dict[str, str] | None = None,
@@ -197,12 +216,25 @@ def match_camera_pair(
     Returns:
         ``({(a index, b index): 重なり率}, [候補の記録])``。
         2 つ目は採用されなかった対も含む診断用のリストで、
-        ``{"pair", "overlap", "status"}`` を持つ。
+        ``{"pair", "overlap", "gap", "status"}`` を持つ。
 
         status:
           accepted        … 採用
           taken_by_other  … 閾値は超えたが、Hungarian で相手が別の対に取られた
           below_threshold … 重なりが閾値未満
+          gap_too_large   … 凸包の隙間が max_hull_gap を超えた（足切り）
+          label_mismatch  … 近いが、ラベルが結合の条件に合わない（足切り）
+
+    ## 足切りは「凸包どうしの隙間」で行う
+
+    以前は重心距離で足切りしていたが、**長い車両がカメラの境界をまたぐと、
+    各カメラが見る部分の重心が車長の半分ほど離れる**（大型トラックで 4 m 超）
+    ため、明らかに重なる組まで重なりを計算する前に捨てていた。
+    凸包の隙間なら、重なっていれば 0 なので長さに関係なく残る。
+
+    NOTE: 重なり率（IoS / IoU）は凸包が接していないと 0 なので、
+    **max_hull_gap を変えても結合の結果は変わらない**。効くのは
+    「重なりの計算を省く範囲」と「重なりが無くても近い組として診断に残す範囲」。
 
     **スコアを返すのが要点。** トラック単位の集計で
     「どの辺を優先して繋ぐか」を決めるのに使う。
@@ -217,17 +249,31 @@ def match_camera_pair(
     if not instances_a or not instances_b:
         return {}, []
 
+    gated_overlap: dict[tuple[int, int], float] = {}
     score = np.zeros((len(instances_a), len(instances_b)))
+    gaps = np.full((len(instances_a), len(instances_b)), np.inf)
+    # 足切りで落とした組（診断用）。{(i, j): status}
+    gated: dict[tuple[int, int], str] = {}
+    record_limit = max(DIAGNOSTIC_GAP_LIMIT, 3.0 * max_hull_gap)
     for i, a in enumerate(instances_a):
-        centroid_a = centroid_xy(a["points"])
         for j, b in enumerate(instances_b):
+            gap = hull_gap(a["points"], b["points"])
+            gaps[i, j] = gap
+            # 凸包が離れすぎている組は重なりを計算しない（計算も減る）
+            if gap > max_hull_gap:
+                if gap <= record_limit:
+                    gated[(i, j)] = "gap_too_large"
+                continue
             if not labels_compatible(
                 a.get("label"), b.get("label"), label_match, label_to_category_group
             ):
-                continue
-            # 重心が離れすぎている組は凸包を作る前に捨てる（計算も減る）
-            distance = np.linalg.norm(centroid_a - centroid_xy(b["points"]))
-            if distance > max_centroid_distance:
+                # 近いのにラベルで落ちた組は、重なりも計算して残す
+                # （ラベルの揺れが原因かを診断で見分けるため）
+                gated[(i, j)] = "label_mismatch"
+                score_value = hull_overlap(
+                    a["points"], b["points"], method=overlap_method
+                )
+                gated_overlap[(i, j)] = score_value
                 continue
             score[i, j] = hull_overlap(
                 a["points"], b["points"], method=overlap_method
@@ -243,19 +289,30 @@ def match_camera_pair(
         if score[pair] >= overlap_threshold
     }
 
-    # 診断用。重なりが 0 の対は数が多いので記録しない
+    # 診断用。足切りを通った組は、重なりが小さくても近ければ残す
+    # （重なりが 0 でも「隙間 0.2 m で隣接」といった情報が原因の切り分けに効く）
     candidates = []
-    for i, j in zip(*np.nonzero(score > CANDIDATE_MIN_OVERLAP)):
-        pair = (int(i), int(j))
-        if pair in matched:
-            status = "accepted"
-        elif score[pair] >= overlap_threshold:
-            status = "taken_by_other"
-        else:
-            status = "below_threshold"
-        candidates.append(
-            {"pair": pair, "overlap": float(score[pair]), "status": status}
-        )
+    for i in range(len(instances_a)):
+        for j in range(len(instances_b)):
+            pair = (i, j)
+            if pair in gated:
+                candidates.append({
+                    "pair": pair, "overlap": float(gated_overlap.get(pair, 0.0)),
+                    "gap": float(gaps[pair]), "status": gated[pair],
+                })
+                continue
+            if gaps[pair] > max_hull_gap:
+                continue
+            if pair in matched:
+                status = "accepted"
+            elif score[pair] >= overlap_threshold:
+                status = "taken_by_other"
+            else:
+                status = "below_threshold"
+            candidates.append({
+                "pair": pair, "overlap": float(score[pair]),
+                "gap": float(gaps[pair]), "status": status,
+            })
     return matched, candidates
 
 
@@ -263,7 +320,7 @@ def match_frame(
     instances: Sequence[dict[str, Any]],
     *,
     overlap_threshold: float,
-    max_centroid_distance: float,
+    max_hull_gap: float,
     overlap_method: str = OVERLAP_IOS,
     label_match: str = LABEL_MATCH_CATEGORY_GROUP,
     label_to_category_group: dict[str, str] | None = None,
@@ -293,7 +350,7 @@ def match_frame(
                 [instances[i] for i in indices_a],
                 [instances[j] for j in indices_b],
                 overlap_threshold=overlap_threshold,
-                max_centroid_distance=max_centroid_distance,
+                max_hull_gap=max_hull_gap,
                 overlap_method=overlap_method,
                 label_match=label_match,
                 label_to_category_group=label_to_category_group,
@@ -408,7 +465,7 @@ def merge_instances(
     instances: Sequence[dict[str, Any]],
     *,
     overlap_threshold: float = 0.3,
-    max_centroid_distance: float = 3.0,
+    max_hull_gap: float = 0.5,
     overlap_method: str = OVERLAP_IOS,
     label_match: str = LABEL_MATCH_CATEGORY_GROUP,
     label_to_category_group: dict[str, str] | None = None,
@@ -427,7 +484,7 @@ def merge_instances(
     edges, _candidates = match_frame(
         instances,
         overlap_threshold=overlap_threshold,
-        max_centroid_distance=max_centroid_distance,
+        max_hull_gap=max_hull_gap,
         overlap_method=overlap_method,
         label_match=label_match,
         label_to_category_group=label_to_category_group,
@@ -643,7 +700,7 @@ def merge_and_fit(
         entries_by_sample: ``{sample_token: [entry, ...]}``。
             entry は ``channel`` / ``track_id`` / ``label`` / ``score`` /
             ``_summary`` を持つ（パイプラインが fit_boxes=False で返したもの）
-        merge_params: ``overlap_threshold`` / ``max_centroid_distance`` /
+        merge_params: ``overlap_threshold`` / ``max_hull_gap`` /
             ``min_match_frames`` / ``label_match``
 
     Returns:
@@ -670,7 +727,7 @@ def merge_and_fit(
     from app.services.box_fitting import fit_box
 
     overlap_threshold = float(merge_params.get("overlap_threshold", 0.3))
-    max_distance = float(merge_params.get("max_centroid_distance", 3.0))
+    max_gap = float(merge_params.get("max_hull_gap", 0.5))
     min_frames = int(merge_params.get("min_match_frames", 1))
     label_match = merge_params.get("label_match", LABEL_MATCH_CATEGORY_GROUP)
     # 当てはめに必要な点数の下限（0 で無効）。結合後の点数で判定する
@@ -714,7 +771,7 @@ def merge_and_fit(
         edges, pair_candidates = match_frame(
             instances,
             overlap_threshold=overlap_threshold,
-            max_centroid_distance=max_distance,
+            max_hull_gap=max_gap,
             label_match=label_match,
             label_to_category_group=label_to_category_group,
         )
@@ -723,14 +780,22 @@ def merge_and_fit(
             (key_of(i), key_of(j)): value for (i, j), value in edges.items()
         })
         # 診断用。採用されなかった対も、トラック対ごとに最良の記録だけ残す
+        # （重なりが最大のフレーム。重なりが同じなら隙間が最小のフレーム）
         for entry in pair_candidates:
             i, j = entry["pair"]
             pair = tuple(sorted((key_of(i), key_of(j))))
             previous = candidate_stats.get(pair)
-            if previous is None or entry["overlap"] > previous["overlap"]:
+            rank = (entry["overlap"], -entry["gap"])
+            if previous is None or rank > (previous["overlap"], -previous["gap"]):
                 candidate_stats[pair] = {
-                    "overlap": entry["overlap"], "status": entry["status"]
+                    "overlap": entry["overlap"], "gap": entry["gap"],
+                    "status": entry["status"],
+                    "labels": (instances[i]["label"], instances[j]["label"]),
+                    "min_gap": min(entry["gap"], (previous or {}).get(
+                        "min_gap", float("inf"))),
                 }
+            else:
+                previous["min_gap"] = min(previous["min_gap"], entry["gap"])
 
     # --- 2) トラック単位の集計 -------------------------------------------
     tracks = [
@@ -839,7 +904,8 @@ def merge_and_fit(
     rejected_by_pair = {tuple(sorted(r["pair"])): r for r in rejected_edges}
     edge_rows: list[dict[str, Any]] = []
     for pair, stats in sorted(
-        candidate_stats.items(), key=lambda kv: -kv[1]["overlap"]
+        candidate_stats.items(),
+        key=lambda kv: (-kv[1]["overlap"], kv[1]["min_gap"]),
     ):
         same_group = global_ids.get(pair[0]) == global_ids.get(pair[1])
         rejected = rejected_by_pair.get(pair)
@@ -850,11 +916,23 @@ def merge_and_fit(
         elif stats["status"] == "taken_by_other":
             status = "rejected"
             reason = "1 対 1 の割り当てで別の相手に取られた"
+        elif stats["status"] == "gap_too_large":
+            # 足切り。重なりは計算していない（凸包が離れているので 0）
+            status = "gated"
+            reason = (f"凸包の隙間 {stats['min_gap']:.2f} m が"
+                      f"上限（{max_gap} m）を超えた")
+        elif stats["status"] == "label_mismatch":
+            status = "gated"
+            label_a, label_b = stats["labels"]
+            reason = (f"ラベルが結合の条件（{label_match}）に合わない"
+                      f"（{label_a} / {label_b}）")
         else:
             status = "rejected"
             reason = f"重なりが閾値（{overlap_threshold}）未満"
         edge_rows.append({
             "pair": list(pair), "max_overlap": round(stats["overlap"], 4),
+            # 全フレームでの凸包の最小の隙間 [m]（重なっていれば 0）
+            "min_gap": round(stats["min_gap"], 3),
             "status": status, "reason": reason,
         })
 
@@ -897,7 +975,7 @@ def merge_and_fit(
         },
         "params": {
             "overlap_threshold": overlap_threshold,
-            "max_centroid_distance": max_distance,
+            "max_hull_gap": max_gap,
             "min_match_frames": min_frames,
             "label_match": label_match,
             "max_same_camera_gap": merge_params.get("max_same_camera_gap"),
