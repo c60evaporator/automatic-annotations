@@ -1218,7 +1218,8 @@ with pointcloud_tab_view:
         show_lshape = st.checkbox(
             "L-shape Filter", value=False, key="_w_pc_lshape",
             help=("L 字フィルタの途中経過を重ねる。赤い × / ＋ が手前輪郭の点"
-                  "（深度 / LiDAR）、半透明の赤い面が検出した L 字（車両の手前 2 面）。"
+                  "（深度 / LiDAR）、半透明の面が検出した L 字（車両の手前 2 面）。"
+                  "面の色は Instance Color の指定に従う。"
                   "Depth Instances / LiDAR Instances の表示に合わせて出す。"
                   "深度は補正できた場合は補正後の点群で判定しているので、"
                   "Depth Instance=raw だと点群と少しずれて見える"),
@@ -1401,6 +1402,8 @@ with pointcloud_tab_view:
                 # 各インスタンスの lshape_filter に入っている
                 lshape_items, lshape_missing = lshape_overlays(
                     flat, depth=show_depth_instances, lidar=show_lidar_instances,
+                    # 面は点群と同じ色（Instance Color の指定）で塗る
+                    color_fn=lambda f: instance_color(f, pc_color_mode),
                 )
 
             if show_depth_instances:

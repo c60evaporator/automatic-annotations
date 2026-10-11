@@ -290,12 +290,17 @@ LSHAPE_PLANE_LABEL = {"depth": "L-shape faces (Depth)", "lidar": "L-shape faces 
 
 
 def lshape_overlays(
-    items: Iterable[dict[str, Any]], *, depth: bool, lidar: bool
+    items: Iterable[dict[str, Any]], *, depth: bool, lidar: bool,
+    color_fn: Callable[[dict[str, Any]], str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """インスタンスの lshape_filter 記録から、表示用のデータを集める.
 
+    Args:
+        color_fn: インスタンス → L 字の面の色。Instance Color の指定に
+            合わせて、点群と同じ色で塗る。None なら赤
+
     Returns:
-        (``{"kind", "contour", "segments", "z_range"}`` のリスト,
+        (``{"kind", "contour", "segments", "z_range", "color"}`` のリスト,
          記録はあるが表示用の情報が無いインスタンス数)。
         後者は L 字の可視化に対応する前に推論した run で発生する
     """
@@ -315,16 +320,19 @@ def lshape_overlays(
                 "contour": np.asarray(record["contour"], dtype=np.float64),
                 "segments": record["segments"],
                 "z_range": record.get("z_range") or [0.0, 1.5],
+                "color": color_fn(item) if color_fn else COLOR_LSHAPE,
             })
     return overlays, missing
 
 
 def add_lshape_overlays(fig: go.Figure, overlays: Sequence[dict[str, Any]]) -> int:
-    """輪郭点（赤い ×／＋）と L 字の面（半透明の赤い縦の面）を描く.
+    """輪郭点（赤い ×／＋）と L 字の面（半透明の縦の面）を描く.
 
     面は線分を底辺として、インスタンス点群の高さの範囲（5〜95 パーセンタイル）
-    に立てる。輪郭点は BEV の 2 次元の点なので、面の下端の高さに置く。
-    深度と LiDAR でそれぞれ 1 トレースにまとめる（凡例を増やしすぎないため）。
+    に立てる。面の色はインスタンスごと（Instance Color の指定に従う）。
+    輪郭点は目立たせるため赤で固定し、BEV の 2 次元の点なので面の下端の
+    高さに置く。深度と LiDAR でそれぞれ 1 トレースにまとめ、面の色は三角形
+    ごとに指定する（インスタンスごとにトレースを分けると凡例が増えすぎる）。
 
     Returns:
         描いた輪郭点の数
@@ -349,7 +357,7 @@ def add_lshape_overlays(fig: go.Figure, overlays: Sequence[dict[str, Any]]) -> i
         ))
         drawn += len(points)
         # --- L 字の面（線分ごとに縦の長方形 = 三角形 2 枚） ------------
-        xs, ys, zs, i, j, k = [], [], [], [], [], []
+        xs, ys, zs, i, j, k, face_colors = [], [], [], [], [], [], []
         for o in group:
             z_low, z_high = o["z_range"]
             if z_high - z_low < 0.3:
@@ -364,10 +372,11 @@ def add_lshape_overlays(fig: go.Figure, overlays: Sequence[dict[str, Any]]) -> i
                 i += [base, base]
                 j += [base + 1, base + 2]
                 k += [base + 2, base + 3]
+                face_colors += [o.get("color", COLOR_LSHAPE)] * 2
         if xs:
             fig.add_trace(go.Mesh3d(
                 x=xs, y=ys, z=zs, i=i, j=j, k=k,
-                color=COLOR_LSHAPE, opacity=LSHAPE_PLANE_OPACITY,
+                facecolor=face_colors, opacity=LSHAPE_PLANE_OPACITY,
                 name=LSHAPE_PLANE_LABEL[kind], showlegend=True,
                 hoverinfo="name", flatshading=True,
             ))
