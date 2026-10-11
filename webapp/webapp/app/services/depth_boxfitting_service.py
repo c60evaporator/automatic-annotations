@@ -594,6 +594,8 @@ def refilter_sample(
          if f["channel"] == settings.EGO_REFERENCE_CHANNEL and f.get("ego_pose")),
         None,
     )
+    # この sample の LiDAR キーフレーム（L 字フィルタで LiDAR の位置に使う）
+    lidar_frame = next((f for f in frames if f["modality"] == "lidar"), None)
     payload_frames = []
     # {box_fitting_id: 推論時の点数}
     stored_counts: dict[str, dict[str, Any]] = {}
@@ -619,11 +621,15 @@ def refilter_sample(
         ]
         # 推論時の点数。再フィルタ結果と突き合わせて差分の原因を切り分ける
         for fit in items:
+            lshape = fit.get("lshape_filter") or {}
             stored_counts[fit["id"]] = {
                 "stored_raw": fit.get("num_points_depth"),
                 "stored_kept": fit.get("num_points_depth_kept"),
                 "stored_lidar_raw": fit.get("num_points_lidar"),
                 "stored_lidar_kept": fit.get("num_points_lidar_kept"),
+                # L 字フィルタで落とした点数（推論時）
+                "stored_lshape_depth": (lshape.get("depth") or {}).get("num_removed", 0),
+                "stored_lshape_lidar": (lshape.get("lidar") or {}).get("num_removed", 0),
             }
         if not instances:
             continue
@@ -638,6 +644,9 @@ def refilter_sample(
             "lidar_path": lidar.get("pointcloud_path"),
             "ego_pose": frame.get("ego_pose"),
             "reference_ego_pose": reference_ego_pose,
+            # L 字フィルタで LiDAR 点の「手前」を決めるのに使う
+            "lidar_calibrated_sensor": (lidar_frame or {}).get("calibrated_sensor"),
+            "lidar_ego_pose": (lidar_frame or {}).get("ego_pose"),
         })
 
     if not payload_frames:
@@ -655,6 +664,15 @@ def refilter_sample(
         depth_params["small_mask_nb_points_ratio"] = float(
             run_depth_params.get("small_mask_nb_points_ratio", 1.0)
         )
+    # L 字フィルタの設定も Filter Params に無いので run から補う
+    # （深度・LiDAR それぞれの lshape_* と、共通の box_fitting_params["lshape"]）
+    lidar_params = dict(lidar_params or {})
+    for target, source in ((depth_params, run_depth_params),
+                           (lidar_params, run_lidar_params)):
+        for key, value in source.items():
+            if key.startswith("lshape_") and key not in target:
+                target[key] = value
+    lshape_params = (run.get("box_fitting_params") or {}).get("lshape") or {}
 
     response = refilter_boxfitting({
         "frames": payload_frames,
@@ -673,6 +691,7 @@ def refilter_sample(
         ),
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
+        "lshape_params": lshape_params,
     })
     logger.info(
         "refiltered %d instances in %.2fs",

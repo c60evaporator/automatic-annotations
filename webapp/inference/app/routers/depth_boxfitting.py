@@ -161,6 +161,20 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
         depth_by_token = {d["sample_data_token"]: d for d in depth_results}
         frame_by_token = {f.sample_data_token: f for f in req.camera_frames}
+        # sample ごとの LiDAR の位置（基準 ego 座標の XY）。
+        # L 字フィルタで LiDAR 点の「手前」を決めるのに使う。
+        # sweep を統合した点群でも、キーフレーム時の位置で代表させる
+        # （BEV の方位がわずかにずれるだけで、判定への影響は小さい）
+        from app.services.lshape_filter import sensor_origin_xy
+
+        lidar_origins = {
+            f.sample_token: sensor_origin_xy(
+                f.calibrated_sensor, f.ego_pose,
+                (req.reference_ego_poses or {}).get(f.sample_token),
+            )
+            for f in req.lidar_frames
+            if (f.calibrated_sensor or {}).get("translation")
+        }
 
         for token, frame_instances in instances_by_frame.items():
             if job.cancel_requested():
@@ -207,6 +221,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         ),
                         # 結合する場合は当てはめを後回しにする
                         fit_boxes=not merge_enabled,
+                        lidar_origin_xy=lidar_origins.get(frame.sample_token),
                         stub_delay_sec=req.stub_delay_sec,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -339,6 +354,7 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
             depth_correction_method=req.depth_correction_method,
             max_lidar_points_for_depth=req.max_lidar_points_for_depth,
             stored_points_max=req.stored_points_max,
+            lshape_params=req.lshape_params,
             # 推論本体と同じ読み方にする。depth_params を無視すると、
             # 点群の範囲が変わって外れ値除去の結果がずれる
             max_depth=(req.depth_params or {}).get(

@@ -87,6 +87,8 @@ def refilter_frame(
     reference_ego_pose: dict[str, Any] | None = None,
     depth_correction_method: str | None = None,
     max_lidar_points_for_depth: int = 0,
+    lshape_params: dict[str, Any] | None = None,
+    lidar_origin_xy: tuple[float, float] | None = None,
 ) -> list[dict[str, Any]]:
     """1 フレーム分のインスタンスを、新しいパラメータで作り直す.
 
@@ -102,6 +104,8 @@ def refilter_frame(
             **外れ値除去の条件を変えると LiDAR 点群が変わり、補正係数も変わる**
             ので、再フィルタでも作り直す
         max_lidar_points_for_depth: LiDAR 点がこの数以上なら深度点群を使わない
+        lshape_params: L 字フィルタの共通設定（run の box_fitting_params["lshape"]）
+        lidar_origin_xy: LiDAR の位置（基準 ego 座標の XY）
 
     Returns:
         インスタンスごとの ``{id, num_points_raw, num_points_kept,
@@ -109,7 +113,13 @@ def refilter_frame(
         num_lidar_raw, num_lidar_kept,
         points_lidar_raw_ego, points_lidar_filtered_ego,
         depth_used, depth_correction,
-        points_corrected_raw_ego, points_corrected_filtered_ego}``
+        points_corrected_raw_ego, points_corrected_filtered_ego,
+        points_lshape_ego, points_corrected_lshape_ego,
+        points_lidar_lshape_ego, lshape_filter}``
+
+    **推論（BoxFittingPipeline.process_frame_instances）と同じ順序で処理する。**
+    ROR/DBSCAN → LiDAR の L 字フィルタ → 深度を使うかの判定 → 補正 →
+    深度の L 字フィルタ。順序が違うと、推論時と違う点群になる
 
     NOTE: LiDAR 側は **深度マップとは独立**に作り直す。
     点の出所が違うので、外れ値除去のパラメータも別に渡すこと。
@@ -148,6 +158,18 @@ def refilter_frame(
     # （box_fittings.is_small_mask）に従う。クロージング後のマスクからは
     # 元の短辺が分からないため、ここで判定し直さない
     small_nb_ratio = float(depth_params.get("small_mask_nb_points_ratio", 1.0))
+
+    # L 字フィルタ（推論と同じ解釈をするため、設定の組み立ては共通の関数で行う）
+    from app.services.lshape_filter import (
+        lshape_applies, lshape_filter, lshape_settings, sensor_origin_xy,
+    )
+    depth_lshape = lshape_settings(
+        lshape_params, depth_params, margin_ratio_default=0.0
+    )
+    lidar_lshape = lshape_settings(lshape_params, lidar_params)
+    camera_origin = sensor_origin_xy(
+        calibrated_sensor, camera_ego_pose, reference_ego_pose
+    )
 
     results: list[dict[str, Any]] = []
     for instance in instances:
@@ -230,16 +252,30 @@ def refilter_frame(
             lidar_raw, lidar_kept, stored_points_max
         )
 
+        # --- L 字フィルタ（LiDAR） --------------------------------------
+        # 以降（深度を使うかの判定・補正の基準）はフィルタ後の点群で行う
+        lshape_info: dict[str, Any] = {}
+        applies = lshape_applies(lshape_params, instance.get("label"))
+        lidar_used = lidar_kept
+        if (applies and lidar_lshape and lidar_origin_xy is not None
+                and lidar_kept.shape[0]):
+            keep, lshape_info["lidar"] = lshape_filter(
+                lidar_kept, lidar_origin_xy, **lidar_lshape
+            )
+            lidar_used = lidar_kept[keep]
+
         # --- 深度点群の補正 -------------------------------------------
         # 外れ値除去の条件を変えると LiDAR 点群が変わるので、
         # 補正係数も作り直す（推論時の値を流用しない）
         correction = None
         corrected_raw_reduced = corrected_filtered_reduced = None
-        depth_used = not (
+        corrected_filtered_ego: np.ndarray | None = None
+        # 推論と同じ条件（深度点が 1 つも残らなければ深度は使わない）
+        depth_used = filtered.shape[0] > 0 and not (
             max_lidar_points_for_depth > 0
-            and lidar_kept.shape[0] >= max_lidar_points_for_depth
+            and lidar_used.shape[0] >= max_lidar_points_for_depth
         )
-        if depth_used and depth_correction_method and lidar_kept.shape[0]:
+        if depth_used and depth_correction_method and lidar_used.shape[0]:
             from app.services.depth_correction import (
                 apply_correction, fit_correction, sample_depth_at,
             )
@@ -247,8 +283,8 @@ def refilter_frame(
 
             lidar_camera = ego_to_camera(
                 ego_to_ego(
-                    lidar_kept, reference_ego_pose or {}, camera_ego_pose or {}
-                ) if reference_ego_pose else lidar_kept,
+                    lidar_used, reference_ego_pose or {}, camera_ego_pose or {}
+                ) if reference_ego_pose else lidar_used,
                 calibrated_sensor,
             )
             z_lidar, z_pred = sample_depth_at(
@@ -256,13 +292,42 @@ def refilter_frame(
             )
             correction = fit_correction(z_lidar, z_pred, depth_correction_method)
             if correction is not None:
+                corrected_filtered_ego = to_reference(
+                    apply_correction(filtered, correction)
+                )
                 corrected_raw_reduced, corrected_filtered_reduced = _reduce_pair(
                     to_reference(apply_correction(raw, correction)),
-                    to_reference(apply_correction(filtered, correction)),
+                    corrected_filtered_ego,
                     stored_points_max,
                 )
 
+        # --- L 字フィルタ（深度） ---------------------------------------
+        # 補正できた場合は補正後で判定し、同じマスクを補正前にも当てる
+        filtered_lshape = corrected_lshape = None
+        if applies and depth_lshape and filtered_ego.shape[0]:
+            keep, lshape_info["depth"] = lshape_filter(
+                corrected_filtered_ego if corrected_filtered_ego is not None
+                else filtered_ego,
+                camera_origin, **depth_lshape,
+            )
+            filtered_lshape = filtered_ego[keep]
+            if corrected_filtered_ego is not None:
+                corrected_lshape = corrected_filtered_ego[keep]
+
+        def _stored(points: np.ndarray | None) -> dict[str, Any] | None:
+            # 推論時の保存と同じ間引き方にする（表示が一致するように）
+            if points is None or points.shape[0] == 0:
+                return None
+            return points_to_json(downsample_to_max(points, stored_points_max))
+
         results.append({
+            # L 字フィルタ後。適用しなかった場合は None（ROR/DBSCAN 後と同じ）
+            "points_lshape_ego": _stored(filtered_lshape),
+            "points_corrected_lshape_ego": _stored(corrected_lshape),
+            "points_lidar_lshape_ego": (
+                _stored(lidar_used) if "lidar" in lshape_info else None
+            ),
+            "lshape_filter": lshape_info or None,
             "depth_used": depth_used,
             "depth_correction": correction,
             "points_corrected_raw_ego": (
@@ -293,6 +358,18 @@ def refilter_frame(
     return results
 
 
+def _lidar_origin(frame: dict[str, Any]) -> tuple[float, float] | None:
+    """フレームに付いた LiDAR の位置情報から、基準 ego 座標の XY を求める."""
+    from app.services.lshape_filter import sensor_origin_xy
+
+    calib = frame.get("lidar_calibrated_sensor") or {}
+    if not calib.get("translation"):
+        return None
+    return sensor_origin_xy(
+        calib, frame.get("lidar_ego_pose"), frame.get("reference_ego_pose")
+    )
+
+
 def refilter(
     derived_root: Path,
     frames: list[dict[str, Any]],
@@ -305,6 +382,7 @@ def refilter(
     max_lidar_points_for_depth: int = 0,
     stored_points_max: int = 500,
     max_depth: float | None = None,
+    lshape_params: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], float]:
     """複数フレームをまとめて再フィルタする.
 
@@ -336,6 +414,8 @@ def refilter(
                 ),
                 camera_ego_pose=frame.get("ego_pose"),
                 reference_ego_pose=frame.get("reference_ego_pose"),
+                lshape_params=lshape_params,
+                lidar_origin_xy=_lidar_origin(frame),
                 stored_points_max=stored_points_max,
                 max_depth=max_depth,
                 camera_intrinsic=(frame.get("calibrated_sensor") or {}).get(

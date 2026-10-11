@@ -315,6 +315,14 @@ class Settings(BaseSettings):
     DEPTH_DBSCAN_EPS_MAX: float = 5.0
     DEPTH_DBSCAN_MIN_SAMPLES_DEFAULT: int = 10
     DEPTH_DBSCAN_MIN_SAMPLES_MAX: int = 100
+    # 深度点群の L 字フィルタ（Depth Estimation タブ）。
+    # 手前輪郭を作る方位ビンの幅 [度] と、各ビンで取る距離の分位点 [%]
+    DEPTH_LSHAPE_BIN_DEG_DEFAULT: float = 0.5
+    DEPTH_LSHAPE_QUANTILE_DEFAULT: float = 10.0
+    # 除去の閾値 max(Margin Min, Margin Ratio × 距離) [m]。
+    # 単眼深度の誤差は距離とともに大きくなるので、距離に比例させる
+    DEPTH_LSHAPE_MARGIN_MIN_DEFAULT: float = 0.3
+    DEPTH_LSHAPE_MARGIN_RATIO_DEFAULT: float = 0.03
 
     # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）
     LIDAR_NUM_SWEEPS_DEFAULT: int = 5
@@ -333,6 +341,11 @@ class Settings(BaseSettings):
     LIDAR_DBSCAN_EPS_MAX: float = 5.0
     LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT: int = 5
     LIDAR_DBSCAN_MIN_SAMPLES_MAX: int = 100
+    # LiDAR 点群の L 字フィルタ（LiDAR Pointcloud タブ）。LiDAR は点が疎なので
+    # ビンを深度より広くする。距離の誤差は小さいので閾値は固定値 [m]
+    LIDAR_LSHAPE_BIN_DEG_DEFAULT: float = 1.0
+    LIDAR_LSHAPE_QUANTILE_DEFAULT: float = 10.0
+    LIDAR_LSHAPE_MARGIN_DEFAULT: float = 0.2
 
     # Use LiDAR の既定。インスタンスごとの LiDAR 点群を作るかどうか。
     # 深度点群との混合（座標補正）は未実装で、現在は表示と外れ値除去まで
@@ -416,6 +429,32 @@ class Settings(BaseSettings):
     # 行う**（実際に当てはめへ渡す点群で数えるため）
     BOXFIT_MIN_POINTS_DEFAULT: int = 10
     BOXFIT_MIN_POINTS_MAX: int = 100
+
+    # --- L 字フィルタ（General タブ） --------------------------------------
+    # 車両の手前 2 面（L 字）を検出し、それより手前へ突き出た点を落とす。
+    # Convex-hull MOA は手前の輪郭で向きと大きさを決めるので、ROR / DBSCAN で
+    # 落ちない程度の小さな突出でも箱が大きく引きずられる。
+    # 深度と LiDAR に別々に適用する（ROR / DBSCAN の後、カメラ間結合の前）
+    LSHAPE_FILTER_ENABLED_DEFAULT: bool = True
+    # 適用するラベル（L 字の形がはっきりしている車両系）
+    LSHAPE_FILTER_LABELS: list[str] = [
+        "car", "truck", "bus", "trailer", "construction_vehicle",
+    ]
+    # L 字の向きを総当たりする刻み [度]
+    LSHAPE_ANGLE_STEP_DEG_DEFAULT: float = 1.0
+    # 直交から各線の角度を個別に調整する幅（±）と刻み [度]。
+    # 単眼深度では 2 面が直交からずれることがあるため。0 で調整しない
+    LSHAPE_ADJUST_RANGE_DEG_DEFAULT: float = 10.0
+    LSHAPE_ADJUST_STEP_DEG_DEFAULT: float = 1.0
+    # 以下は UI に出さない（run には box_fitting_params["lshape"] として残る）。
+    # 面が見えているか（I 字か L 字か）の判定に使う分位点 [%]
+    LSHAPE_BOUNDARY_QUANTILE: float = 5.0
+    # 輪郭点が面に「乗っている」とみなす幅 [m]。面からの垂直距離がこれ以上の
+    # 点だけを除去の対象にする（浅い角度で見えている面の点を守るため）
+    LSHAPE_SUPPORT_BAND: float = 0.3
+    # 面より手前に残る点 1 つあたりの減点（面に乗る点 1 つに対する比）。
+    # 大きいとノイズを取り逃がし、小さいと真の点を消しやすい
+    LSHAPE_VIOLATION_WEIGHT: float = 0.25
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

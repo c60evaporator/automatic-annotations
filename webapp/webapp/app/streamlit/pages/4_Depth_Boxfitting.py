@@ -277,10 +277,13 @@ MASK_MODES = ("None", "Original", "Closed")
 # エンドポイントを実装するまで Raw は選べない。
 POINTS_MODE_RAW = "Raw"
 POINTS_MODE_FILTERED = "ROR/DBSCAN"
-POINTS_MODES = (POINTS_MODE_RAW, POINTS_MODE_FILTERED)
+# ROR/DBSCAN の後に L 字フィルタをかけたもの。保存済みの点群（＝当てはめに
+# 使った点群）はこれに当たる。対象外のラベルは ROR/DBSCAN と同じ
+POINTS_MODE_LSHAPE = "ROR/DBSCAN + L-shape"
+POINTS_MODES = (POINTS_MODE_RAW, POINTS_MODE_FILTERED, POINTS_MODE_LSHAPE)
 # 表示モード → BoxFitting3D のカラム名
 POINTS_COLUMNS = {
-    POINTS_MODE_FILTERED: ("points_depth_ego", "points_lidar_ego"),
+    POINTS_MODE_LSHAPE: ("points_depth_ego", "points_lidar_ego"),
 }
 
 # --- 初期表示: 保存済みの run --------------------------------------------------
@@ -340,13 +343,17 @@ with param_col:
                       "現在は表示と外れ値除去までが動く"),
             )
             st.markdown("**Mask Closing**")
+            # カーネルサイズは奇数のみ。偶数だとカーネルの中心を画素の真ん中に
+            # 置けず、クロージング後のマスクが右下へ 1 画素ずれる
             mask_dilation = st.slider(
                 "Dilation", 1, settings.MASK_DILATION_MAX,
-                value=settings.MASK_DILATION_DEFAULT, step=1,
+                value=settings.MASK_DILATION_DEFAULT, step=2,
+                help="膨張のカーネルサイズ（奇数のみ）",
             )
             mask_erosion = st.slider(
                 "Erosion", 1, settings.MASK_EROSION_MAX,
-                value=settings.MASK_EROSION_DEFAULT, step=1,
+                value=settings.MASK_EROSION_DEFAULT, step=2,
+                help="収縮のカーネルサイズ（奇数のみ）",
             )
             st.markdown("**Small Mask**")
             small_mask_short_side = st.slider(
@@ -361,18 +368,56 @@ with param_col:
             small_mask_erosion_ratio = st.slider(
                 "Small Mask Erosion Ratio", 0.0, 1.0,
                 value=settings.SMALL_MASK_EROSION_RATIO_DEFAULT, step=0.05,
-                help=("小物体の Erosion を Dilation + (Erosion − Dilation) × 倍率 に"
-                      "弱める（四捨五入）。Erosion ≤ Dilation なら適用しない"),
+                help=("小物体の収縮を弱める。片側で削る画素数 (Erosion − Dilation) / 2 に"
+                      "倍率をかけて四捨五入し、Dilation + 2 × (片側の画素数) を"
+                      "小物体の Erosion にする（奇数のまま保つため）。"
+                      "Erosion ≤ Dilation なら適用しない"),
             )
             if mask_erosion > mask_dilation:
-                small_erosion_preview = int(
-                    mask_dilation
-                    + (mask_erosion - mask_dilation) * small_mask_erosion_ratio
+                # 推論側（depth_ops.small_mask_erosion）と同じ式
+                per_side = int(
+                    (mask_erosion - mask_dilation) / 2 * small_mask_erosion_ratio
                     + 0.5
                 )
                 st.caption(
-                    f"小物体の Erosion: {mask_erosion} → {small_erosion_preview}"
+                    f"小物体の Erosion: {mask_erosion} → "
+                    f"{mask_dilation + 2 * per_side}"
                 )
+
+            st.markdown("**L-shape Filter**")
+            lshape_enabled = st.checkbox(
+                "Enable L-shape Filter",
+                value=settings.LSHAPE_FILTER_ENABLED_DEFAULT,
+                key="_w_lshape_enabled",
+                help=("車両の手前 2 面（BEV で L 字）を検出し、それより手前へ"
+                      "突き出た点を落とす（ROR / DBSCAN の後、深度と LiDAR に"
+                      "別々に適用）。MOA は手前の輪郭で向きと大きさを決めるため、"
+                      "小さな突出でも箱が引きずられる"),
+            )
+            st.caption(
+                "対象ラベル: " + ", ".join(settings.LSHAPE_FILTER_LABELS)
+                + "（config の LSHAPE_FILTER_LABELS で指定）"
+            )
+            lshape_angle_step = st.slider(
+                "L-shape Angle Step [deg]", 0.25, 5.0,
+                value=settings.LSHAPE_ANGLE_STEP_DEG_DEFAULT, step=0.25,
+                disabled=not lshape_enabled, key="_w_lshape_angle_step",
+                help="L 字の向きを 0〜90° で総当たりする刻み（深度・LiDAR 共通）",
+            )
+            lshape_adjust_range = st.slider(
+                "L-shape Adjust Range [deg]", 0.0, 30.0,
+                value=settings.LSHAPE_ADJUST_RANGE_DEG_DEFAULT, step=1.0,
+                disabled=not lshape_enabled, key="_w_lshape_adjust_range",
+                help=("直交で当てはめた後、各線の角度を ± この範囲で個別に調整する"
+                      "（単眼深度で 2 面が直交からずれる場合への対応）。0 で調整しない"),
+            )
+            lshape_adjust_step = st.slider(
+                "L-shape Adjust Step [deg]", 0.25, 5.0,
+                value=settings.LSHAPE_ADJUST_STEP_DEG_DEFAULT, step=0.25,
+                disabled=not lshape_enabled or lshape_adjust_range <= 0,
+                key="_w_lshape_adjust_step",
+                help="角度の調整の刻み",
+            )
 
         with depth_tab:
             st.markdown("**ROR**")
@@ -406,6 +451,34 @@ with param_col:
                       "ROR nb_points と DBSCAN min_samples にかける倍率。"
                       "nb_points はラベル別の倍率（NB_POINTS_RATIO）をかけた後に"
                       "さらにかける。下限は nb_points=1 / min_samples=2"),
+            )
+            st.markdown("**L-shape Filter**")
+            depth_lshape_bin = st.slider(
+                "Azimuth Bin [deg]", 0.1, 5.0,
+                value=settings.DEPTH_LSHAPE_BIN_DEG_DEFAULT, step=0.1,
+                key="_w_depth_lshape_bin", disabled=not lshape_enabled,
+                help=("手前輪郭を作るときの方位ビンの幅。各ビンで距離の分位点を取り、"
+                      "センサーに見えている輪郭を取り出す"),
+            )
+            depth_lshape_quantile = st.slider(
+                "Near Quantile [%]", 0.0, 50.0,
+                value=settings.DEPTH_LSHAPE_QUANTILE_DEFAULT, step=1.0,
+                key="_w_depth_lshape_quantile", disabled=not lshape_enabled,
+                help=("各ビンで取る距離の分位点。0 だと孤立した 1 点に輪郭が"
+                      "引っ張られ、大きいとボンネットなど奥の面に輪郭が下がる"),
+            )
+            depth_lshape_margin_min = st.slider(
+                "Margin Min [m]", 0.05, 2.0,
+                value=settings.DEPTH_LSHAPE_MARGIN_MIN_DEFAULT, step=0.05,
+                key="_w_depth_lshape_margin_min", disabled=not lshape_enabled,
+                help=("L 字の面より視線方向にこれ以上手前にある点を落とす。"
+                      "実際の閾値は max(Margin Min, Margin Ratio × 距離)"),
+            )
+            depth_lshape_margin_ratio = st.slider(
+                "Margin Ratio", 0.0, 0.2,
+                value=settings.DEPTH_LSHAPE_MARGIN_RATIO_DEFAULT, step=0.01,
+                key="_w_depth_lshape_margin_ratio", disabled=not lshape_enabled,
+                help="単眼深度の誤差は距離とともに大きくなるので、閾値を距離に比例させる",
             )
 
         with lidar_tab:
@@ -459,6 +532,25 @@ with param_col:
                 "min_samples", 2, settings.LIDAR_DBSCAN_MIN_SAMPLES_MAX,
                 value=settings.LIDAR_DBSCAN_MIN_SAMPLES_DEFAULT, step=1,
                 key="_w_lidar_dbscan_min",
+            )
+            st.markdown("**L-shape Filter**")
+            lidar_lshape_bin = st.slider(
+                "Azimuth Bin [deg]", 0.1, 5.0,
+                value=settings.LIDAR_LSHAPE_BIN_DEG_DEFAULT, step=0.1,
+                key="_w_lidar_lshape_bin", disabled=not lshape_enabled,
+                help="手前輪郭を作るときの方位ビンの幅（LiDAR は点が疎なので深度より広く）",
+            )
+            lidar_lshape_quantile = st.slider(
+                "Near Quantile [%]", 0.0, 50.0,
+                value=settings.LIDAR_LSHAPE_QUANTILE_DEFAULT, step=1.0,
+                key="_w_lidar_lshape_quantile", disabled=not lshape_enabled,
+                help="各ビンで取る距離の分位点",
+            )
+            lidar_lshape_margin = st.slider(
+                "Margin [m]", 0.05, 2.0,
+                value=settings.LIDAR_LSHAPE_MARGIN_DEFAULT, step=0.05,
+                key="_w_lidar_lshape_margin", disabled=not lshape_enabled,
+                help="L 字の面より視線方向にこれ以上手前にある点を落とす（LiDAR は固定値）",
             )
 
         with merge_tab:
@@ -581,12 +673,28 @@ box_fitting_params = {
     "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),
+    # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）
+    "lshape": {
+        "enabled": bool(lshape_enabled),
+        "labels": list(settings.LSHAPE_FILTER_LABELS),
+        "angle_step_deg": float(lshape_angle_step),
+        "adjust_range_deg": float(lshape_adjust_range),
+        "adjust_step_deg": float(lshape_adjust_step),
+        "boundary_quantile": float(settings.LSHAPE_BOUNDARY_QUANTILE),
+        "support_band": float(settings.LSHAPE_SUPPORT_BAND),
+        "violation_weight": float(settings.LSHAPE_VIOLATION_WEIGHT),
+    },
 }
 depth_params = {
     "ror_nb_points": int(depth_ror_nb), "ror_radius": float(depth_ror_radius),
     "dbscan_eps": float(depth_dbscan_eps), "dbscan_min_samples": int(depth_dbscan_min),
     # 小物体の ROR nb_points / DBSCAN min_samples にかける倍率（深度のみ）
     "small_mask_nb_points_ratio": float(small_mask_nb_ratio),
+    # L 字フィルタ（深度）
+    "lshape_bin_deg": float(depth_lshape_bin),
+    "lshape_quantile": float(depth_lshape_quantile),
+    "lshape_margin_min": float(depth_lshape_margin_min),
+    "lshape_margin_ratio": float(depth_lshape_margin_ratio),
 }
 lidar_params = {
     "min_points": int(min_lidar_points),
@@ -596,6 +704,10 @@ lidar_params = {
     "depth_correction": depth_correction_method,
     "ror_nb_points": int(lidar_ror_nb), "ror_radius": float(lidar_ror_radius),
     "dbscan_eps": float(lidar_dbscan_eps), "dbscan_min_samples": int(lidar_dbscan_min),
+    # L 字フィルタ（LiDAR）
+    "lshape_bin_deg": float(lidar_lshape_bin),
+    "lshape_quantile": float(lidar_lshape_quantile),
+    "lshape_margin": float(lidar_lshape_margin),
 }
 
 # ------------------------------------------------------------------
@@ -1010,7 +1122,8 @@ with pointcloud_tab_view:
             "Instance Points", POINTS_MODES, key=W_PC_POINTS,
             on_change=S.sync_sticky, args=(W_PC_POINTS, OPT_PC_POINTS),
             disabled=not has_refilter,
-            help=("外れ値除去（ROR / DBSCAN）の適用前後を切り替える。"
+            help=("外れ値除去（ROR / DBSCAN）と L 字フィルタの適用前後を切り替える。"
+                  "保存済みの点群は L 字フィルタ後（当てはめに使ったもの）。"
                   "下の Filter Params で Apply すると選べるようになる"),
         )
 
@@ -1042,12 +1155,12 @@ with pointcloud_tab_view:
                            key=f"_w_pc_cam_{sensor['channel']}")
         }
 
-        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_FILTERED)
+        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_LSHAPE)
 
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
     fitted_boxes: list[dict] = []
-    refilter_summary: tuple[int, int, int, int, int, int, int, int, int] | None = None
+    refilter_summary: dict[str, int] | None = None
 
     if view_run_id:
         info = lidar_info.get(selected_sample["token"])
@@ -1100,51 +1213,73 @@ with pointcloud_tab_view:
                 # ものなので、DB 側から別に読む
                 box_source = load_box_fittings(view_run_id, tokens) if (
                     show_fitted_boxes and tokens) else {}
-                # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）
-                raw = points_mode == POINTS_MODE_RAW
+                # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）。
+                # 候補を前から順に見て、最初に値のあるものを表示する。
+                # L 字フィルタ後は、適用しなかったインスタンスでは None なので
+                # ROR/DBSCAN 後へ落とす
                 corrected = depth_instance_mode == DEPTH_INSTANCE_CORRECTED
+                depth_candidates = {
+                    POINTS_MODE_RAW: ["points_raw_ego"],
+                    POINTS_MODE_FILTERED: ["points_filtered_ego"],
+                    POINTS_MODE_LSHAPE: ["points_lshape_ego", "points_filtered_ego"],
+                }[points_mode]
                 if corrected:
-                    # 補正後で見る。補正できなかったものは補正前へ落とし、
-                    # 深度を使わないインスタンス（LiDAR が十分）は出さない
-                    source = (
-                        "points_corrected_raw_ego" if raw
-                        else "points_corrected_filtered_ego"
-                    )
-                    fallback = "points_raw_ego" if raw else "points_filtered_ego"
-                    flat = [
-                        {**i, "_depth_display": (
-                            (i.get(source) or i.get(fallback))
-                            if i.get("depth_used", True) else None
-                        )}
-                        for i in flat
-                    ]
-                    depth_key = "_depth_display"
-                else:
-                    depth_key = "points_raw_ego" if raw else "points_filtered_ego"
-                # LiDAR 側も同じ Instance Points の指定に従う
-                lidar_key = (
-                    "points_lidar_raw_ego" if raw
-                    else "points_lidar_filtered_ego"
-                )
-                refilter_summary = (
-                    sum(i["num_points_raw"] for i in flat),
-                    sum(i["num_points_kept"] for i in flat),
-                    len(flat),
-                    sum(i.get("num_lidar_raw", 0) for i in flat),
-                    sum(i.get("num_lidar_kept", 0) for i in flat),
+                    # 補正後で見る。補正できなかったものは補正前へ落とす
+                    depth_candidates = {
+                        POINTS_MODE_RAW: ["points_corrected_raw_ego"],
+                        POINTS_MODE_FILTERED: ["points_corrected_filtered_ego"],
+                        POINTS_MODE_LSHAPE: ["points_corrected_lshape_ego",
+                                             "points_corrected_filtered_ego"],
+                    }[points_mode] + depth_candidates
+                lidar_candidates = {
+                    POINTS_MODE_RAW: ["points_lidar_raw_ego"],
+                    POINTS_MODE_FILTERED: ["points_lidar_filtered_ego"],
+                    POINTS_MODE_LSHAPE: ["points_lidar_lshape_ego",
+                                         "points_lidar_filtered_ego"],
+                }[points_mode]
+
+                def _first(item: dict, keys: list[str]):
+                    return next((item[k] for k in keys if item.get(k)), None)
+
+                flat = [
+                    {**i,
+                     # 深度を使わないインスタンス（LiDAR が十分）は、
+                     # 補正後で見るときは出さない
+                     "_depth_display": (
+                         _first(i, depth_candidates)
+                         if not corrected or i.get("depth_used", True) else None
+                     ),
+                     "_lidar_display": _first(i, lidar_candidates)}
+                    for i in flat
+                ]
+                depth_key, lidar_key = "_depth_display", "_lidar_display"
+                def _removed(item: dict, kind: str) -> int:
+                    return int(((item.get("lshape_filter") or {}).get(kind) or {})
+                               .get("num_removed", 0))
+
+                refilter_summary = {
+                    "raw": sum(i["num_points_raw"] for i in flat),
+                    "kept": sum(i["num_points_kept"] for i in flat),
+                    "instances": len(flat),
+                    "lidar_raw": sum(i.get("num_lidar_raw", 0) for i in flat),
+                    "lidar_kept": sum(i.get("num_lidar_kept", 0) for i in flat),
+                    "lshape_depth": sum(_removed(i, "depth") for i in flat),
+                    "lshape_lidar": sum(_removed(i, "lidar") for i in flat),
                     # 推論時の点数。差が出たときの切り分けに使う
-                    sum(i.get("stored_raw") or 0 for i in flat),
-                    sum(i.get("stored_kept") or 0 for i in flat),
-                    sum(i.get("stored_lidar_raw") or 0 for i in flat),
-                    sum(i.get("stored_lidar_kept") or 0 for i in flat),
-                )
+                    "stored_raw": sum(i.get("stored_raw") or 0 for i in flat),
+                    "stored_kept": sum(i.get("stored_kept") or 0 for i in flat),
+                    "stored_lidar_raw": sum(i.get("stored_lidar_raw") or 0 for i in flat),
+                    "stored_lidar_kept": sum(i.get("stored_lidar_kept") or 0 for i in flat),
+                    "stored_lshape_depth": sum(i.get("stored_lshape_depth") or 0 for i in flat),
+                    "stored_lshape_lidar": sum(i.get("stored_lshape_lidar") or 0 for i in flat),
+                }
             else:
                 fittings = load_box_fittings(
                     view_run_id, tokens,
                     include_points=(show_depth_instances or show_lidar_instances),
                 ) if tokens else {}
                 flat = [fit for items_ in fittings.values() for fit in items_]
-                depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_FILTERED]
+                depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_LSHAPE]
                 if depth_instance_mode == DEPTH_INSTANCE_CORRECTED:
                     # 補正後の点群で表示する。補正できなかったインスタンス
                     # （LiDAR 点が足りない等）は補正前のまま表示する。
@@ -1362,9 +1497,12 @@ with pointcloud_tab_view:
             )
             render_pointcloud(fig, counts)
             if refilter_summary is not None:
-                (raw_total, kept_total, n_inst, lidar_raw, lidar_kept,
-                 stored_raw, stored_kept,
-                 stored_lidar_raw, stored_lidar_kept) = refilter_summary
+                s = refilter_summary
+                raw_total, kept_total, n_inst = s["raw"], s["kept"], s["instances"]
+                lidar_raw, lidar_kept = s["lidar_raw"], s["lidar_kept"]
+                stored_raw, stored_kept = s["stored_raw"], s["stored_kept"]
+                stored_lidar_raw = s["stored_lidar_raw"]
+                stored_lidar_kept = s["stored_lidar_kept"]
                 ratio = kept_total / raw_total * 100 if raw_total else 0.0
                 lidar_text = (
                     f" / LiDAR {lidar_raw:,} → {lidar_kept:,} 点"
@@ -1396,6 +1534,15 @@ with pointcloud_tab_view:
                             + _compare("raw", stored_lidar_raw, lidar_raw)
                             + " / "
                             + _compare("kept", stored_lidar_kept, lidar_kept)
+                        )
+                    if any(s[k] for k in ("lshape_depth", "lshape_lidar",
+                                          "stored_lshape_depth",
+                                          "stored_lshape_lidar")):
+                        lines.append(
+                            "L 字除去 "
+                            + _compare("深度", s["stored_lshape_depth"], s["lshape_depth"])
+                            + " / "
+                            + _compare("LiDAR", s["stored_lshape_lidar"], s["lshape_lidar"])
                         )
                     st.caption("推論時との比較: " + " ｜ ".join(lines))
 

@@ -43,6 +43,10 @@ def close_mask(
 
     NOTE: ここで返したマスクがそのまま DB に保存され、UI の
     「Closed」表示に使われる。webapp 側では再計算できない。
+
+    NOTE: カーネルサイズは**奇数**にすること。偶数だと中心を画素の真ん中に
+    置けず（OpenCV は ``ksize // 2``）、膨張は右下へだけ広がり、収縮は
+    左上だけ削るので、マスクが右下へ 1 画素ずれる（UI のスライダーは奇数のみ）。
     """
     import cv2
 
@@ -92,13 +96,20 @@ def is_small_mask(mask: np.ndarray, short_side_threshold: int) -> bool:
 def small_mask_erosion(dilation: int, erosion: int, ratio: float) -> int:
     """小物体用に収縮を弱める.
 
-    膨張との差に倍率をかけて縮める（膨張は変えない）。
-    例: dilation=2, erosion=4, ratio=0.5 → 2 + (4 - 2) * 0.5 = 3。
+    **片側で削る画素数** ``(erosion − dilation) / 2`` に倍率をかけて四捨五入し、
+    ``dilation + 2 × (片側の画素数)`` を返す（膨張は変えない）。
+    例: dilation=3, erosion=5, ratio=0.2 → 片側 1 × 0.2 = 0.2 → 0 → 3。
+
+    カーネルサイズの差をそのまま倍率で縮めないのは、**偶数サイズの
+    カーネルはマスクを右下へずらす**ため（OpenCV はカーネルの中心を
+    ``ksize // 2`` に置く）。dilation と erosion が奇数なら、この式の
+    結果も必ず奇数になる。
     収縮が膨張以下なら輪郭は削られないので、そのまま返す。
     """
     if erosion <= dilation:
         return erosion
-    return _round_half_up(dilation + (erosion - dilation) * float(ratio))
+    per_side = (erosion - dilation) / 2.0
+    return dilation + 2 * _round_half_up(per_side * float(ratio))
 
 
 def scale_density_param(value: int, ratio: float, minimum: int) -> int:

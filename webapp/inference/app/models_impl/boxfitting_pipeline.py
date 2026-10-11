@@ -251,6 +251,7 @@ class BoxFittingPipeline:
         max_lidar_points_for_depth: int = 0,
         depth_correction_method: str | None = None,
         fit_boxes: bool = True,
+        lidar_origin_xy: tuple[float, float] | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         """1 フレーム分のインスタンスを処理する.
@@ -269,6 +270,8 @@ class BoxFittingPipeline:
             depth_correction_method: 指定すると、LiDAR を基準に深度点群を補正し、
                 **補正後の深度点群と LiDAR 点群を混ぜて**当てはめに使う。
                 None なら補正せず、従来どおり深度点群のみで当てはめる
+            lidar_origin_xy: LiDAR の位置（基準 ego 座標の XY）。
+                L 字フィルタで LiDAR 点の「手前」を決めるのに使う
             fit_boxes: False なら当てはめを行わず、代わりに各エントリへ
                 ``"_summary"``（凸包の頂点と z 範囲）を入れて返す。
                 カメラ跨ぎの結合では、結合してから当てはめるため
@@ -314,6 +317,23 @@ class BoxFittingPipeline:
             float(mask_params.get("small_mask_erosion_ratio", 1.0)),
         )
         small_nb_ratio = float(depth_params.get("small_mask_nb_points_ratio", 1.0))
+        # L 字フィルタ（車両の手前 2 面を基準に、手前へ突き出た点を落とす）。
+        # 共通の設定は box_fitting_params["lshape"]、点群ごとの設定は
+        # depth_params / lidar_params の lshape_* に入っている
+        from app.services.lshape_filter import (
+            lshape_applies, lshape_filter, lshape_settings, sensor_origin_xy,
+        )
+        lshape_general = (box_fitting_params or {}).get("lshape")
+        depth_lshape = lshape_settings(
+            lshape_general, depth_params, margin_ratio_default=0.0
+        )
+        lidar_lshape = lshape_settings(lshape_general, lidar_params)
+        # カメラ位置（基準 ego 座標の XY）。MOA のセンサー原点と、深度点の
+        # L 字フィルタで「手前」を決めるのに使う。再フィルタと同じ関数で求める
+        camera_origin = sensor_origin_xy(
+            calib, frame.get("ego_pose"),
+            (reference_ego_poses or {}).get(frame["sample_token"]),
+        )
 
         # LiDAR は 1 フレームにつき 1 回だけ読み、全インスタンスで使い回す。
         # 地面の点はマスクにも入り込むので除いてある
@@ -434,10 +454,23 @@ class BoxFittingPipeline:
                     # 少なすぎる点は補正に使えない。表示もしない
                     lidar_instance = np.empty((0, 3))
 
-            # raw はフィルタ前、kept はフィルタ後（Min LiDAR Points 未満で
-            # 捨てた場合は 0）。深度側の num_points_depth / _kept と同じ意味
+            # raw はフィルタ前、kept は ROR/DBSCAN 後（Min LiDAR Points 未満で
+            # 捨てた場合は 0）。深度側の num_points_depth / _kept と同じ意味。
+            # L 字フィルタで落とした数は lshape_filter に別に記録する
             base["num_points_lidar"] = raw_lidar_count
             base["num_points_lidar_kept"] = int(lidar_instance.shape[0])
+
+            # --- L 字フィルタ（LiDAR） --------------------------------------
+            # 以降（補正の基準・深度を使うかの判定・当てはめ）は全て
+            # フィルタ後の点群で行う
+            lshape_info: dict[str, Any] = {}
+            applies = lshape_applies(lshape_general, instance.get("label"))
+            if (applies and lidar_lshape and lidar_origin_xy is not None
+                    and lidar_instance.shape[0]):
+                keep, lshape_info["lidar"] = lshape_filter(
+                    lidar_instance, lidar_origin_xy, **lidar_lshape
+                )
+                lidar_instance = lidar_instance[keep]
 
             # **打ち切るのは 0 点のときだけ。** 点数の下限はカメラ間結合の
             # 後、実際に当てはめへ渡す点群で判定する（merge_and_fit）。
@@ -486,8 +519,8 @@ class BoxFittingPipeline:
             )
             entry["depth_used"] = not lidar_only
 
-            # 当てはめ・結合に使う点群。補正できなければ深度点群のまま
-            fit_points = lidar_instance if lidar_only else points_ego
+            # 補正後の深度点群（補正できた場合だけ入る）
+            corrected_ego: np.ndarray | None = None
             if lidar_only:
                 # 深度は使わないので補正もしない（補正後の点群も残さない）
                 pass
@@ -526,16 +559,40 @@ class BoxFittingPipeline:
                             corrected_ego, frame.get("ego_pose") or {}, reference_pose
                         )
                     entry["depth_correction"] = correction
-                    entry["points_depth_corrected_ego"] = points_to_json(
-                        downsample_to_max(corrected_ego, stored_points_max)
-                    )
-                    # 補正後の深度点群と LiDAR 点群を混ぜる。
-                    # 深度点群は面を密に、LiDAR は距離を正確に与える
-                    fit_points = np.vstack([corrected_ego, lidar_instance])
 
-            origin_xy = _camera_origin_xy(
-                calib, frame.get("ego_pose") or {}, reference_pose
-            )
+            # --- L 字フィルタ（深度） ---------------------------------------
+            # 補正できた場合は補正後の点群で判定する（距離が正しいほうが
+            # 閾値 [m] の意味が通る）。補正は点ごとに視線方向へ動かすだけで
+            # 点の対応は変わらないので、同じマスクを補正前にも当てる
+            corrected = corrected_ego
+            if applies and depth_lshape and points_ego.shape[0]:
+                keep, lshape_info["depth"] = lshape_filter(
+                    corrected if corrected is not None else points_ego,
+                    camera_origin, **depth_lshape,
+                )
+                points_ego = points_ego[keep]
+                if corrected is not None:
+                    corrected = corrected[keep]
+            entry["lshape_filter"] = lshape_info or None
+            # 保存する深度点群は、当てはめに使ったもの（L 字フィルタ後）
+            entry["points_depth_ego"] = points_to_json(
+                downsample_to_max(points_ego, stored_points_max)
+            ) if points_ego.shape[0] else None
+            if corrected is not None:
+                entry["points_depth_corrected_ego"] = points_to_json(
+                    downsample_to_max(corrected, stored_points_max)
+                )
+            # 当てはめ・結合に使う点群（L 字フィルタ後で組み直す）
+            if lidar_only:
+                fit_points = lidar_instance
+            elif corrected is not None:
+                # 補正後の深度点群と LiDAR 点群を混ぜる。
+                # 深度点群は面を密に、LiDAR は距離を正確に与える
+                fit_points = np.vstack([corrected, lidar_instance])
+            else:
+                fit_points = points_ego
+
+            origin_xy = camera_origin
             if not fit_boxes:
                 # 結合してから当てはめる。BEV は凸包の頂点だけで厳密に
                 # 扱えるため（凸包の和集合＝結合後の凸包）、全点は持ち越さない

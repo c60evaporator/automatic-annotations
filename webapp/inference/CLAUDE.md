@@ -63,29 +63,29 @@ UI（Detection2Dページの画面上部のエクスパンダー）からは以�
 
 設定ファイル`webapp/app/core/config.py`からは、以下のパラメータを設定できます
 
-|設定名|型|内容|
-|---|---|---|
-|`settings.NUSC_CATEGORY_TO_LABEL`|dict[str, str]|nuScenes形式データセットのcategoryをDetection2Dのラベルに変換するdict。keyがnuScenesのcagtegory名、valueがDetection2Dのラベル|
-|`settings.LABEL_TO_NUSC_CATEGORY`|dict[str, str]|Detection2DのラベルをnuScenes形式データセットのcategoryに変換するdict。keyがDetection2Dのラベル、valueがnuScenesのcagtegory名|
-|`settings.LABEL_TO_SUBLABEL`|dict[str, list[str]]|Detection2DのラベルをGroundingDINO推論で使用するサブラベルに変換するdict。keyがDetection2Dのラベル、valueがサブラベル|
-|`settings.LABEL_TO_CATEGORY_GROUP`|dict[str, str]|Detection2DのラベルをGrounidingDINO推論の実行単位であるカテゴリグループに変換するdict。keyがDetection2Dのラベル、valueがカテゴリグループ|
-|`settings.DET2D_DEFAULT_SAMPLE_INTERVAL`|int|Sample Intervalパラメータのデフォルト値|
-|`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`|dict[str, float]|GroundingDINOのスコア閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがスコア閾値のデフォルト値。実際の推論時はこの値に前述のScore Thresholdパラメータを掛けた値未満のバウンディングボックスを削除する|
-|`settings.DET2D_NMS_SAME_CLASS_IOUS`|dict[str, float]|GroundingDINOの同ラベルNMSで使用する閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の同ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意。またサブラベルではなくラベルで判定することにも注意）|
-|`settings.DET2D_NMS_CROSS_CLASS_IOU`|float|GroundingDINOの別ラベルNMSで使用する閾値のデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の別ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意）|
-|`settings.RE_CLASSIFICATION_CANDIDATES`|dict[str, dict[str,str]]|Detection2Dのラベルごとに、SigLIP2によるラベル再判定のラベル候補と最終ラベルを指定するdict。keyがDetection2Dが付けたラベル、valueのkeyがラベル候補、valueのvalueが最終的に割り当てるラベルとなる。最終的に割り当てるラベルがNoneの場合、そのボックスは削除する|
-|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`|float|前述のRe-Classification Crop Marginパラメータのデフォルト値|
-|`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|float|前述のRe-Classification Crop Marginパラメータの最大値|
-|`settings.WHOLE_IMAGE_CANDIDATES`|dict[str, dict[str,str]]|Whole-Image再判定の、SigLIP2推論のラベル候補と最終ラベルを指定するdict。辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す|
-|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`|float|Whole-Image Score Thresholdパラメータのデフォルト値|
-|`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|float|Whole-Image Score Thresholdパラメータの最大値|
-|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`|float|Whole-Image Resize Ratioパラメータのデフォルト値|
-|`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|float|Whole-Image Resize Ratioパラメータの最大値|
-|`settings.DET2D_IOS_DELETE_THRESHOLD`|float|Whole-Image Resize Ratioパラメータのデフォルト値|
-|`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|float|IoS Delete Thresholdパラメータの最大値|
-|`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除|
-|`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
-|`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
+|設定名|型|内容|公式nuScenesでの適正値|適正値の根拠|
+|---|---|---|---|---|
+|`settings.NUSC_CATEGORY_TO_LABEL`|dict[str, str]|nuScenes形式データセットのcategoryをDetection2Dのラベルに変換するdict。keyがnuScenesのcagtegory名、valueがDetection2Dのラベル|[config.py参照](webapp/webapp/app/core/config.py)|[MMDetection3Dのラベル](https://github.com/open-mmlab/mmdetection3d/blob/v1.0.0rc6/mmdet3d/datasets/nuscenes_dataset.py#L56)に準拠|
+|`settings.LABEL_TO_NUSC_CATEGORY`|dict[str, str]|Detection2DのラベルをnuScenes形式データセットのcategoryに変換するdict。keyがDetection2Dのラベル、valueがnuScenesのcagtegory名|[config.py参照](webapp/webapp/app/core/config.py)|[MMDetection3Dのラベル](https://github.com/open-mmlab/mmdetection3d/blob/v1.0.0rc6/mmdet3d/datasets/nuscenes_dataset.py#L56)に準拠|
+|`settings.LABEL_TO_SUBLABEL`|dict[str, list[str]]|Detection2DのラベルをGroundingDINO推論で使用するサブラベルに変換するdict。keyがDetection2Dのラベル、valueがサブラベル|[config.py参照](webapp/webapp/app/core/config.py)|公式データセットで見逃しを減らすよう調整（後でSigLIP2で再判定するため、過検出気味セッティングにしている）|
+|`settings.LABEL_TO_CATEGORY_GROUP`|dict[str, str]|Detection2DのラベルをGrounidingDINO推論の実行単位であるカテゴリグループに変換するdict。keyがDetection2Dのラベル、valueがカテゴリグループ|[config.py参照](webapp/webapp/app/core/config.py)|サイズや機能が似たオブジェクト同士をグルーピングした（vehicle系、road_object系、two_wheeler系、pedestrian系）|
+|`settings.DET2D_DEFAULT_SAMPLE_INTERVAL`|int|Sample Intervalパラメータのデフォルト値|3|推論時間（小さなintervalはこれが増える）、短期間のみ出現するオブジェクトの見逃し防止（大きなintervalはこれが増える）、Tracking伝播（大きすぎるとオブジェクトを見失い、小さすぎると伝播の意味がなくなる）のバランスを取った|
+|`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`|dict[str, float]|GroundingDINOのスコア閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがスコア閾値のデフォルト値。実際の推論時はこの値に前述のScore Thresholdパラメータを掛けた値未満のバウンディングボックスを削除する|[config.py参照](webapp/webapp/app/core/config.py)|実データで見逃しを減らすよう調整|
+|`settings.DET2D_NMS_SAME_CLASS_IOUS`|dict[str, float]|GroundingDINOの同ラベルNMSで使用する閾値のカテゴリグループごとのデフォルト値。keyがカテゴリグループ、valueがデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の同ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意。またサブラベルではなくラベルで判定することにも注意）|[config.py参照](webapp/webapp/app/core/config.py)|実データで誤結合とダブルカウントのバランスを取るよう調整|
+|`settings.DET2D_NMS_CROSS_CLASS_IOU`|float|GroundingDINOの別ラベルNMSで使用する閾値のデフォルト値。実際の推論時はこの値に前述のNMS Thresholdパラメータを掛けた値以上の別ラベルバウンディングボックス同士をNMS結合する（実際にはしきい値を超えたら自動結合されるわけではなく、貪欲マッチングで結合対象を選ぶことに注意）|0.85|実データで誤結合とダブルカウントのバランスを取るよう調整|
+|`settings.RE_CLASSIFICATION_CANDIDATES`|dict[str, dict[str,str]]|Detection2Dのラベルごとに、SigLIP2によるラベル再判定のラベル候補と最終ラベルを指定するdict。keyがDetection2Dが付けたラベル、valueのkeyがラベル候補、valueのvalueが最終的に割り当てるラベルとなる。最終的に割り当てるラベルがNoneの場合、そのボックスは削除する|[config.py参照](webapp/webapp/app/core/config.py)|Detectionの間違いを、ラベル違いと過検出に分けて判断。ラベル違いは正しいラベルをkey・label共に指定し、過検出はその物体の真の種類（判定対象のラベルには含まれない）をkeyに、Noneをvalueに指定する|
+|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`|float|前述のRe-Classification Crop Marginパラメータのデフォルト値|0.1|実データで調整。多少ずれてもSigLIPの分類能力が高いので割とうまくいきそうな印象|
+|`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|float|前述のRe-Classification Crop Marginパラメータの最大値|1.0|原理上の最大値|
+|`settings.WHOLE_IMAGE_CANDIDATES`|dict[str, dict[str,str]]|Whole-Image再判定の、SigLIP2推論のラベル候補と最終ラベルを指定するdict。辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す|[config.py参照](webapp/webapp/app/core/config.py)|①truckやbus等の画面いっぱいに映ってDetection2Dで見逃されやすいオブジェクト、②road,building,vegetation等のありがちな背景クラスをkeyに加える。①はvalueを正解ラベル名、②はvalueをNoneとする|
+|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`|float|Whole-Image Score Thresholdパラメータのデフォルト値|0.04|実データで調整。SigLIP2のスコアは確率ではないシグモイド値なので、1よりかなり小さな値が適正値になる|
+|`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|float|Whole-Image Score Thresholdパラメータの最大値|1.0|原理上の最大値|
+|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`|float|Whole-Image Resize Ratioパラメータのデフォルト値|0.5|処理時間と物体の写りの綺麗さのバランス。画像サイズが500x300pixになるくらいが、SigLIP2 NaFlexでmax_num_patches=576程度となってちょうど良さそう|
+|`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|float|Whole-Image Resize Ratioパラメータの最大値|1.0|原理上の最大値|
+|`settings.DET2D_IOS_DELETE_THRESHOLD`|float|Whole-Image Resize Ratioパラメータのデフォルト値|0.8|実データで誤結合とダブルカウントのバランスを取るよう調整|
+|`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|float|IoS Delete Thresholdパラメータの最大値|1.0|原理上の最大値|
+|`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除|[config.py参照](webapp/webapp/app/core/config.py)|同じ物体で複数box検出されやすいラベル（車両系）は"small"で小さい方を削除し、複数物体がまとめて検出されやすいラベル（barrier,traffic_cone等の小物体系）は"big"で大きい方を削除|
+|`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
+|`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名|"groundingdino_swinb_cogcoor"|重み名を指定。推論サーバー側の実体と合わせる必要がある|
 
 ### 推論の実行単位
 
@@ -221,15 +221,15 @@ UI（Instance Trackingページの画面上部のエクスパンダー）から�
 
 |設定名|型|内容|
 |---|---|---|
-|`settings.DEFAULT_TRACKING_NUM_SWEEPS`|int|Sweeps per Sampleパラメータのデフォルト値|
-|`settings.DEFAULT_TRACKING_IOU_THRESHOLD`|float|IoU Thresholdパラメータのデフォルト値|
-|`settings.DEFAULT_TRACKING_IOU_METHOD`|"box" or "mask"|IoU Methodパラメータのデフォルト値|
-|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`|"label", "category_group" or None|IoU Label Matchパラメータのデフォルト値|
-|`settings.DEFAULT_TRACK_ID_INHERITANCE`|"continuous_id" or "forward_backward_matching"|Track ID Inheritanceパラメータのデフォルト値|
-|`settings.TRACKING_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|
-|`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
-|`settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD`|float|現状使用していない（将来的にマスクにスコアを付けるトラッキングアルゴリズムを使用する場合のために準備）|
-|`settings.TRACKING_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|
+|`settings.DEFAULT_TRACKING_NUM_SWEEPS`|int|Sweeps per Sampleパラメータのデフォルト値|[config.py参照](webapp/webapp/app/core/config.py)|2|推論時間と伝播ミスのバランスをとるよう、実データで調整|
+|`settings.DEFAULT_TRACKING_IOU_THRESHOLD`|float|IoU Thresholdパラメータのデフォルト値|0.4|結合見逃しと誤結合のバランスをとるよう、実データで調整|
+|`settings.DEFAULT_TRACKING_IOU_METHOD`|"box" or "mask"|IoU Methodパラメータのデフォルト値|"box"|"mask"だと計算時間がネックとなるため|
+|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`|"label", "category_group" or None|IoU Label Matchパラメータのデフォルト値|"category_group"|"label"だとDetection2Dのラベルミスの影響を強く受け、Noneだと制約が弱く誤結合されやすいため、バランスを取って"category_group"|
+|`settings.DEFAULT_TRACK_ID_INHERITANCE`|"continuous_id" or "forward_backward_matching"|Track ID Inheritanceパラメータのデフォルト値|"forward_backward_matching"|"continuous_id"だとIntervalの途中から現れた物体が見逃されるため|
+|`settings.TRACKING_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
+|`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|"sam2.1_hiera_large"|重み名を指定。推論サーバー側の実体と合わせる必要がある|
+|`settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD`|float|現状使用していない（将来的にマスクにスコアを付けるトラッキングアルゴリズムを使用する場合のために準備）|-|-|
+|`settings.TRACKING_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|-|-|
 
 ### 推論の実行単位
 
@@ -408,7 +408,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |Instance Tracking|-|入力とするInstance Trackingの結果を選択（`instance_tracking_2d_params`テーブルのレコードをラジオボタン付きでリスト表示）|`started_at`が最新のレコード|
 |Use LiDAR|bool|LiDAR点群を使用するかどうかを指定|`settings.BOXFIT_USE_LIDAR_DEFAULT`で指定|
 |Dilation|int|インスタンスマスクのクロージング処理の膨張カーネルサイズ||
-|Erosion|int|インスタンスマスクのクロージング処理の収縮カーネルサイズ（）||
+|Erosion|int|インスタンスマスクのクロージング処理の収縮カーネルサイズ||
 |Small Mask Short Side|int|各種小マスク向け倍率を適用するためのマスクの短辺サイズ閾値（これより小さければ収縮カーネルサイズにはSmall Mask Erosion Ratioを、Depth ROR nb_points, Depth DBSCANにはSmall Mask nb_points / min_samples Ratioを適用）|`settings.SMALL_MASK_SHORT_SIDE_DEFAULT`|
 |Small Mask Erosion Ratio|float|短辺がSmall Mask Short Side以下のマスクの収縮カーネルサイズに適用する倍率。適用後カーネルサイズは`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`|`settings.SMALL_MASK_EROSION_RATIO_DEFAULT`|
 |Depth ROR nb_points|int|インスタンスごとDepth点群に適用するRORのnb_pointsパラメータ||
@@ -482,7 +482,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEFAULT_MERGE_METHOD`|str|Inter-cam Merge Match Methodパラメータのデフォルト値|
 |`settings.DEFAULT_MERGE_OVERLAP_THRESHOLD`|float|Inter-cam Merge Overlap Thresholdパラメータのデフォルト値|
 |`settings.MERGE_OVERLAP_THRESHOLD_MAX`|float|Inter-cam Merge Overlap Thresholdパラメータの最大値|
-|`settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE`|float|Inter-cam Merge Max Centroid Distanceパラメータのデフォルト値|
+|`settings.DEFAULT_MERGE_MAX_CENTROID_DISTANCE`|float|Inter-cam Merge Max Centroid Distanceパラメータのデフォルト値|5.5|法令上のバス・トラック長上限12mの半分からオーバーラップ分を引いた概算値。国により変わるため注意|
 |`settings.MERGE_MAX_CENTROID_DISTANCE_MAX`|float|Inter-cam Merge Max Centroid Distanceパラメータの最大値|
 |`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`|int|Inter-cam Merge Min Match Framesパラメータのデフォルト値|
 |`settings.MERGE_MIN_MATCH_FRAMES_MAX`|int|Inter-cam Merge Min Match Framesパラメータの最大値|

@@ -168,6 +168,8 @@ class BoxFittingResult(BaseModel):
     is_primary: bool = True
     # 小物体用の処理（収縮・ROR/DBSCAN の緩和）を適用したか
     is_small_mask: bool = False
+    # L 字フィルタの結果（{"depth": {...}, "lidar": {...}}、適用しなければ None）
+    lshape_filter: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -195,6 +197,9 @@ class RefilterFrame(BaseModel):
     lidar_path: str | None = None
     ego_pose: dict[str, Any] | None = None
     reference_ego_pose: dict[str, Any] | None = None
+    # L 字フィルタで LiDAR 点の「手前」を決めるのに使う（LiDAR の位置）
+    lidar_calibrated_sensor: dict[str, Any] | None = None
+    lidar_ego_pose: dict[str, Any] | None = None
 
 
 class RefilterRequest(BaseModel):
@@ -216,6 +221,9 @@ class RefilterRequest(BaseModel):
     nb_points_ratio: dict[str, float] = Field(default_factory=dict)
     stored_points_max: int = 500
     max_depth: float | None = None
+    # L 字フィルタの共通設定（run の box_fitting_params["lshape"]）。
+    # 点群ごとの設定は depth_params / lidar_params の lshape_* に入る
+    lshape_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class RefilterInstanceResult(BaseModel):
@@ -239,6 +247,11 @@ class RefilterInstanceResult(BaseModel):
     depth_correction: dict[str, Any] | None = None
     points_corrected_raw_ego: dict[str, Any] | None = None
     points_corrected_filtered_ego: dict[str, Any] | None = None
+    # L 字フィルタ後。適用しなかったインスタンスは None（ROR/DBSCAN 後と同じ）
+    points_lshape_ego: dict[str, Any] | None = None
+    points_corrected_lshape_ego: dict[str, Any] | None = None
+    points_lidar_lshape_ego: dict[str, Any] | None = None
+    lshape_filter: dict[str, Any] | None = None
 
 
 class RefilterResponse(BaseModel):
