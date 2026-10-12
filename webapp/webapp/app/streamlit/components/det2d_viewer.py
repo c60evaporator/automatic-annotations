@@ -269,7 +269,7 @@ def _chip(
         f'height:100%;line-height:1;{nudge}">'
         f'<span style="width:{LEGEND_SWATCH_PX}px;height:{LEGEND_SWATCH_PX}px;'
         f"border-radius:3px;flex:0 0 {LEGEND_SWATCH_PX}px;"
-        f'background:{color_for(label)};"></span>'
+        f'background:{color_fn(label)};"></span>'
         f'<span style="font-size:{LEGEND_CHIP_FONT}rem;white-space:nowrap;">{text}</span>'
         "</div>"
     )
@@ -442,7 +442,9 @@ def render_label_legend(
                     label, key=key, label_visibility="collapsed", width="content"
                 )
                 st.markdown(
-                    _chip(label, None if counts is None else counts.get(label, 0)),
+                    # 色は呼び出し側の指定（Track ID 別など）に従う
+                    _chip(label, None if counts is None else counts.get(label, 0),
+                          color_fn=color_fn),
                     unsafe_allow_html=True,
                 )
             if checked:
