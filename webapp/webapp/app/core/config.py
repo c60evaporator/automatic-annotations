@@ -444,21 +444,32 @@ class Settings(BaseSettings):
     LSHAPE_FILTER_LABELS: list[str] = [
         "car", "truck", "bus", "trailer", "construction_vehicle",
     ]
+    # 輪郭点が面に「乗っている」とみなす幅 [m]（General タブ / Filter Params）。
+    # 1 つで 4 役を兼ねる重要なパラメータ:
+    #   (1) 輪郭点の重み（輪郭から ±この幅の点の数）
+    #   (2) 面に乗っているとみなす幅（L 字の当てはめの評価）
+    #   (3) 面より手前に残っているとみなす許容幅（同上の減点）
+    #   (4) 除去の条件（面から垂直方向にこれを超えて手前の点だけ消す。
+    #       浅い角度で見えている面の点を守るため）
+    LSHAPE_SUPPORT_BAND_DEFAULT: float = 0.3
+    LSHAPE_SUPPORT_BAND_MAX: float = 1.0
+    # 以下は UI に出さない（run には box_fitting_params["lshape"] として残る）。
     # L 字の向きを総当たりする刻み [度]
-    LSHAPE_ANGLE_STEP_DEG_DEFAULT: float = 1.0
+    LSHAPE_ANGLE_STEP_DEG: float = 1.0
     # 直交から各線の角度を個別に調整する幅（±）と刻み [度]。
     # 単眼深度では 2 面が直交からずれることがあるため。0 で調整しない
-    LSHAPE_ADJUST_RANGE_DEG_DEFAULT: float = 10.0
-    LSHAPE_ADJUST_STEP_DEG_DEFAULT: float = 1.0
-    # 以下は UI に出さない（run には box_fitting_params["lshape"] として残る）。
+    LSHAPE_ADJUST_RANGE_DEG: float = 10.0
+    LSHAPE_ADJUST_STEP_DEG: float = 1.0
     # 面が見えているか（I 字か L 字か）の判定に使う分位点 [%]
     LSHAPE_BOUNDARY_QUANTILE: float = 5.0
-    # 輪郭点が面に「乗っている」とみなす幅 [m]。面からの垂直距離がこれ以上の
-    # 点だけを除去の対象にする（浅い角度で見えている面の点を守るため）
-    LSHAPE_SUPPORT_BAND: float = 0.3
     # 面より手前に残る点 1 つあたりの減点（面に乗る点 1 つに対する比）。
-    # 大きいとノイズを取り逃がし、小さいと真の点を消しやすい
-    LSHAPE_VIOLATION_WEIGHT: float = 0.25
+    # （General タブ / Filter Params）
+    # 大きいと L 字が外側（センサー側）に寄り、小さいと点の多い内側に寄る。
+    # 大きすぎると手前のノイズの塊に面が乗ってノイズを取り逃がし、
+    # 小さすぎると短辺（前後面）がボンネット等の内側の点に引きずられて
+    # めり込み、手前の真の点を消す。実データでは 5 前後が良かった
+    LSHAPE_VIOLATION_WEIGHT_DEFAULT: float = 5.0
+    LSHAPE_VIOLATION_WEIGHT_MAX: float = 20.0
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

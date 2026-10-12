@@ -473,25 +473,30 @@ with param_col:
                 "対象ラベル: " + ", ".join(settings.LSHAPE_FILTER_LABELS)
                 + "（config の LSHAPE_FILTER_LABELS で指定）"
             )
-            lshape_angle_step = st.slider(
-                "L-shape Angle Step [deg]", 0.25, 5.0,
-                value=settings.LSHAPE_ANGLE_STEP_DEG_DEFAULT, step=0.25,
-                disabled=not lshape_enabled, key="_w_lshape_angle_step",
-                help="L 字の向きを 0〜90° で総当たりする刻み（深度・LiDAR 共通）",
+            lshape_support_band = st.slider(
+                "L-shape Support Band [m]", 0.05,
+                settings.LSHAPE_SUPPORT_BAND_MAX,
+                value=settings.LSHAPE_SUPPORT_BAND_DEFAULT, step=0.05,
+                disabled=not lshape_enabled, key="_w_lshape_support_band",
+                help=("輪郭点が面に「乗っている」とみなす幅（深度・LiDAR 共通）。"
+                      "輪郭点の重み・L 字の当てはめ（面に乗る点／手前に残る点の判定）・"
+                      "除去の条件（面から垂直方向にこれを超えて手前の点だけ消す）の"
+                      "4 つに効く。大きくすると L 字は見つけやすくなるが、"
+                      "面に近い突出は消えにくくなる"),
             )
-            lshape_adjust_range = st.slider(
-                "L-shape Adjust Range [deg]", 0.0, 30.0,
-                value=settings.LSHAPE_ADJUST_RANGE_DEG_DEFAULT, step=1.0,
-                disabled=not lshape_enabled, key="_w_lshape_adjust_range",
-                help=("直交で当てはめた後、各線の角度を ± この範囲で個別に調整する"
-                      "（単眼深度で 2 面が直交からずれる場合への対応）。0 で調整しない"),
+            lshape_violation_weight = st.slider(
+                "L-shape Violation Weight", 0.0,
+                settings.LSHAPE_VIOLATION_WEIGHT_MAX,
+                value=settings.LSHAPE_VIOLATION_WEIGHT_DEFAULT, step=0.25,
+                disabled=not lshape_enabled, key="_w_lshape_violation_weight",
+                help=("面より手前（センサー側）に残る輪郭点 1 つあたりの減点"
+                      "（面に乗る点 1 つ = 1）。大きいほど L 字が外側に寄る。"
+                      "小さいと短辺がボンネット等の内側の点に引きずられてめり込み、"
+                      "大きすぎると手前のノイズの塊に面が乗ってノイズが残る"),
             )
-            lshape_adjust_step = st.slider(
-                "L-shape Adjust Step [deg]", 0.25, 5.0,
-                value=settings.LSHAPE_ADJUST_STEP_DEG_DEFAULT, step=0.25,
-                disabled=not lshape_enabled or lshape_adjust_range <= 0,
-                key="_w_lshape_adjust_step",
-                help="角度の調整の刻み",
+            st.caption(
+                "角度の刻み・調整幅は config の LSHAPE_ANGLE_STEP_DEG / "
+                "LSHAPE_ADJUST_RANGE_DEG / LSHAPE_ADJUST_STEP_DEG で指定"
             )
 
         with depth_tab:
@@ -756,12 +761,12 @@ box_fitting_params = {
     "lshape": {
         "enabled": bool(lshape_enabled),
         "labels": list(settings.LSHAPE_FILTER_LABELS),
-        "angle_step_deg": float(lshape_angle_step),
-        "adjust_range_deg": float(lshape_adjust_range),
-        "adjust_step_deg": float(lshape_adjust_step),
+        "angle_step_deg": float(settings.LSHAPE_ANGLE_STEP_DEG),
+        "adjust_range_deg": float(settings.LSHAPE_ADJUST_RANGE_DEG),
+        "adjust_step_deg": float(settings.LSHAPE_ADJUST_STEP_DEG),
         "boundary_quantile": float(settings.LSHAPE_BOUNDARY_QUANTILE),
-        "support_band": float(settings.LSHAPE_SUPPORT_BAND),
-        "violation_weight": float(settings.LSHAPE_VIOLATION_WEIGHT),
+        "support_band": float(lshape_support_band),
+        "violation_weight": float(lshape_violation_weight),
     },
 }
 depth_params = {
@@ -1553,22 +1558,19 @@ with pointcloud_tab_view:
                 value=bool(run_lshape.get("enabled", False)),
                 key=f"{prefix}_lshape_enabled",
             )
-            common_cols = st.columns(3)
+            common_cols = st.columns(4)
             with common_cols[0]:
-                lshape_angle_new = _slider(
-                    "Angle Step [deg]", "ls_angle", 0.25, 5.0,
-                    float(run_lshape.get("angle_step_deg",
-                                         settings.LSHAPE_ANGLE_STEP_DEG_DEFAULT)), 0.25)
+                lshape_band_new = _slider(
+                    "Support Band [m]", "ls_band", 0.05,
+                    settings.LSHAPE_SUPPORT_BAND_MAX,
+                    float(run_lshape.get("support_band",
+                                         settings.LSHAPE_SUPPORT_BAND_DEFAULT)), 0.05)
             with common_cols[1]:
-                lshape_range_new = _slider(
-                    "Adjust Range [deg]", "ls_range", 0.0, 30.0,
-                    float(run_lshape.get("adjust_range_deg",
-                                         settings.LSHAPE_ADJUST_RANGE_DEG_DEFAULT)), 1.0)
-            with common_cols[2]:
-                lshape_astep_new = _slider(
-                    "Adjust Step [deg]", "ls_astep", 0.25, 5.0,
-                    float(run_lshape.get("adjust_step_deg",
-                                         settings.LSHAPE_ADJUST_STEP_DEG_DEFAULT)), 0.25)
+                lshape_violation_new = _slider(
+                    "Violation Weight", "ls_violation", 0.0,
+                    settings.LSHAPE_VIOLATION_WEIGHT_MAX,
+                    float(run_lshape.get("violation_weight",
+                                         settings.LSHAPE_VIOLATION_WEIGHT_DEFAULT)), 0.25)
             st.caption("Depth")
             ld_cols = st.columns(4)
             with ld_cols[0]:
@@ -1618,9 +1620,10 @@ with pointcloud_tab_view:
                     # run（導入前）には config の値を補う
                     lshape_base = {
                         "labels": list(settings.LSHAPE_FILTER_LABELS),
+                        "angle_step_deg": float(settings.LSHAPE_ANGLE_STEP_DEG),
+                        "adjust_range_deg": float(settings.LSHAPE_ADJUST_RANGE_DEG),
+                        "adjust_step_deg": float(settings.LSHAPE_ADJUST_STEP_DEG),
                         "boundary_quantile": float(settings.LSHAPE_BOUNDARY_QUANTILE),
-                        "support_band": float(settings.LSHAPE_SUPPORT_BAND),
-                        "violation_weight": float(settings.LSHAPE_VIOLATION_WEIGHT),
                         **run_lshape,
                     }
                     st.session_state[PC_REFILTER_PARAMS] = {
@@ -1659,9 +1662,8 @@ with pointcloud_tab_view:
                         "lshape": {
                             **lshape_base,
                             "enabled": bool(lshape_on_new),
-                            "angle_step_deg": float(lshape_angle_new),
-                            "adjust_range_deg": float(lshape_range_new),
-                            "adjust_step_deg": float(lshape_astep_new),
+                            "support_band": float(lshape_band_new),
+                            "violation_weight": float(lshape_violation_new),
                         },
                     }
                     st.rerun()

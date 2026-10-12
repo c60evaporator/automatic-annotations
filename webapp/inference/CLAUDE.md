@@ -371,12 +371,40 @@ Depth Boxfittingは、以下のフローで行われます
             - 膨張: 基本はErosionパラメータを使用するが、マスクの短辺がSmall Mask Short Side以下なら`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`を使用する
         - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
         - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
-            - RORのnb_points: Depth ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛け、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
+            - RORのnb_points: Depth ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛け、マスクの 短辺がSmall Mask Short Side以下ならさらに掛ける
             - RORのradius: Depth ROR nb_pointsパラメータをそのまま用いる
             - DBSCANのmin_samples: Depth DBSCAN min_samplesパラメータを用い、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
             - DBSCANのeps: Depth DBSCAN epsパラメータをそのまま用いる
+        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、Depth点群に以下手順でL字平面をフィッティングし、平面から自車側に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
+            - 手順1: ビンごとに輪郭点検出と重み付け（Support BandパラメータはInference ParametersのGeneralタブで、Azimuth Bin、Near QuantileはDepth Estimationタブで指定）
+                - 自車から見た方位角を、Azimuth Bin幅のビンに分ける
+                - 各ビンで、自車からの距離のNear Quantileパーセンタイルの位置にある点（横方向座標はビンの中心）を輪郭点とする
+                - 各ビンで、自車から輪郭点までの距離から ±Support Band以内にある点の数で、輪郭点に重み付けする
+                - 点が3点未満、または手前輪郭のビンが3つ未満、または見えている面が1つも無い場合は、手順2以降を実施せず全点を残して終了
+            - 手順2: 以下手順で直交L字平面のフィッティング（[こちらの論文](https://ieeexplore.ieee.org/document/7995698)がベース。Angle Step、L-shape Violation WeightパラメータはGeneralタブで指定。Support Bandパラメータは手順1と同じ値を使用）
+                - 向きθを0〜90°の範囲でAngle Step刻みにループし、その向きの軸と直交する軸の2軸に対し、以下の評価値が最大のθを採用する
+                    - センサ位置と全輪郭点を2軸それぞれに射影し、センサの射影座標が輪郭点の`settings.LSHAPE_BOUNDARY_QUANTILE`よりも外側にあれば、その軸に直交する面はセンサから見えるとみなす。そうでなければその軸はセンサから見えないとみなして使用しない（例えば車を真横から見る場合、車の進行方向の軸に射影したセンサ座標は全輪郭点の中央付近にあるため、この軸に直交する車の前面や後面は見えないと考えると理解しやすい）。
+                    - 「センサから見える」判定された軸に関して、軸方向のオフセット座標t（これがL字平面の位置を決める）を変化させ、t ± Support Bandの軸座標範囲にある輪郭点を「面に乗る点」、tよりSupport Band 以上手前にある輪郭点を「手前に残る点」とする
+                    - 点あたりの評価値を`max(0, 1 − |輪郭点の射影値 − t| / Support Band)`とし、面に乗る点の評価値の合計 - (L shape Violation Weight × 手前に残る点の評価値の合計)」を軸評価値とする（L shape Violation Weightが大きいほどノイズを取り逃がし、小さいと真の点を消しやすい）
+                    - 2軸それぞれについて軸評価値が最大となるtを採用
+                    - 2軸にtを代入して得られる2平面（BEV座標上では2直線）に対し、以下手順で求めた2軸全体の評価値が最大となるθを最終的に採用
+                        - 面に乗る点：各輪郭点を近いほうの平面だけに割り当て、その平面との距離で数える
+                        - 手前に残る点：どれか1つの平面よりSupport Band以上手前にある輪郭点を、1回だけ数える
+                - このθとtで決まる2つの平面（`settings.LSHAPE_BOUNDARY_QUANTILE`の条件を満たさない場合1平面または0平面）を、直交L字平面とする
+            - 手順3: 角度の微調整（直交L字平面の角度を一定範囲内でずらし、最もフィットする角度を探す）
+                - 手順2で決めた直交L字平面をBEV座標上で直交する2直線とみなし、線を1本ずつ、もう一方を固定したまま、角度を±`settings.LSHAPE_ADJUST_RANGE_DEG`の範囲で`settings.LSHAPE_ADJUST_STEP_DEG`刻みに振る
+                - 各角度でオフセットtを手順2と同じ評価値・方法で決め直し、L字全体の評価値が最大の角度を採用する
+                - 担当する輪郭点が3点未満の線は調整しない。センサーが面の内側に入ってしまう角度は除外する
+                - 1本目を確定させてから2本目を調整する（順番に1回ずつ）
+            - 手順4: L字平面手前の点の除去
+                - 点群の各点に関して、以下手順でL字平面でより一定以上手前にあるかを判定し、条件を満たす場合インスタンスごと点群から削除する
+                    - センサ位置から各点へ向かう視線が、各L字平面を越える距離を求める。視線と交わらない平面は判定対象外とし、どの平面とも交わらない点は以降の判定をしない（残す）
+                    - 各L字平面を越える距離の最大値を基準距離とする（視線がL字平面で囲われた領域に入る距離を意味する）
+                    - 次の2条件を両方満たす点を消す（基準より奥の点は消さない）
+                        - 視線方向の不足量（基準距離 − 点の距離）＞ max(Margin Min, Margin Ratio × 基準距離)
+                        - 基準距離を決めた線から、垂直方向にも Support Band を超えて手前に出ている（浅い角度で見えている面の点は、視線方向の不足量だけが大きく出るので、この条件で守る）
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
-        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて合体する
+        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
         - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
         - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
         - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
@@ -384,6 +412,11 @@ Depth Boxfittingは、以下のフローで行われます
             - RORのradius: LiDAR ROR nb_pointsパラメータをそのまま用いる
             - DBSCANのmin_samples: LiDAR DBSCAN min_samplesパラメータをそのまま用いる
             - DBSCANのeps: LiDAR DBSCAN epxパラメータをそのまま用いる
+        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順でL字平面をフィッティングし、平面から自車側に外れた点を削除する。各種パラメータは以下の値を使用する
+            - L-shape Support Band、L-shape Violation Weight、`settings.LSHAPE_ANGLE_STEP_DEG`、`settings.LSHAPE_ADJUST_RANGE_DEG`、`settings.LSHAPE_ADJUST_STEP_DEG`、`settings.LSHAPE_BOUNDARY_QUANTILE`: Depth点群のL字平面フィッティングと同じ値を使用する
+            - Azimuth Bin: LiDAR L-shape Azimuth Binパラメータを使用
+            - Near Quantile: LiDAR L-shape Near Quantileパラメータを使用
+            - Margin Min: LiDAR L-shape Marginパラメータを使用（LiDARは距離測定精度が高いため、Depth点群のときのように距離に応じて動的に閾値は変えない。すなわちMargin Ratioパラメータは使用しない。なお、LiDAR L-shape Margin < L-shape Support Bandなら、LiDAR L-shape Marginは判定に寄与しない）
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
