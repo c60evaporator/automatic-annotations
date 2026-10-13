@@ -27,7 +27,7 @@ import numpy as np
 from PIL import Image
 
 from app.core.logging import get_logger
-from app.services.box_fitting import BOXFIT_METHOD_CONVEX_HULL_MOA, fit_box
+from app.services.box_fitting import fit_box, method_for_label
 from app.services.depth_ops import (
     close_mask,
     is_small_mask,
@@ -328,6 +328,11 @@ class BoxFittingPipeline:
             lshape_general, depth_params, margin_ratio_default=0.0
         )
         lidar_lshape = lshape_settings(lshape_general, lidar_params)
+        # 距離フィルタ（想定サイズから奥へ伸びた尾状ノイズを落とす）。
+        # L 字フィルタの直後に、深度と LiDAR に別々に適用する
+        from app.services.distance_filter import distance_filter, distance_settings
+        distance_general = (box_fitting_params or {}).get("distance_filter")
+        box_sizes = (box_fitting_params or {}).get("box_sizes")
         # カメラ位置（基準 ego 座標の XY）。MOA のセンサー原点と、深度点の
         # L 字フィルタで「手前」を決めるのに使う。再フィルタと同じ関数で求める
         camera_origin = sensor_origin_xy(
@@ -472,6 +477,18 @@ class BoxFittingPipeline:
                 )
                 lidar_instance = lidar_instance[keep]
 
+            # --- 距離フィルタ（LiDAR） --------------------------------------
+            distance_info: dict[str, Any] = {}
+            distance = distance_settings(
+                distance_general, box_sizes, instance.get("label")
+            )
+            if (distance and lidar_origin_xy is not None
+                    and lidar_instance.shape[0]):
+                keep, distance_info["lidar"] = distance_filter(
+                    lidar_instance, lidar_origin_xy, **distance
+                )
+                lidar_instance = lidar_instance[keep]
+
             # **打ち切るのは 0 点のときだけ。** 点数の下限はカメラ間結合の
             # 後、実際に当てはめへ渡す点群で判定する（merge_and_fit）。
             # ここで深度点だけを見て落とすと、「深度は疎だが LiDAR は十分」
@@ -574,7 +591,20 @@ class BoxFittingPipeline:
                 if corrected is not None:
                     corrected = corrected[keep]
             entry["lshape_filter"] = lshape_info or None
-            # 保存する深度点群は、当てはめに使ったもの（L 字フィルタ後）
+
+            # --- 距離フィルタ（深度） ---------------------------------------
+            # L 字フィルタと同じく、補正できた場合は補正後で判定して
+            # 同じマスクを補正前にも当てる。LiDAR と混ぜる前に落とす
+            if distance and points_ego.shape[0]:
+                keep, distance_info["depth"] = distance_filter(
+                    corrected if corrected is not None else points_ego,
+                    camera_origin, **distance,
+                )
+                points_ego = points_ego[keep]
+                if corrected is not None:
+                    corrected = corrected[keep]
+            entry["distance_filter"] = distance_info or None
+            # 保存する深度点群は、当てはめに使ったもの（L 字・距離フィルタ後）
             entry["points_depth_ego"] = points_to_json(
                 downsample_to_max(points_ego, stored_points_max)
             ) if points_ego.shape[0] else None
@@ -582,7 +612,7 @@ class BoxFittingPipeline:
                 entry["points_depth_corrected_ego"] = points_to_json(
                     downsample_to_max(corrected, stored_points_max)
                 )
-            # 当てはめ・結合に使う点群（L 字フィルタ後で組み直す）
+            # 当てはめ・結合に使う点群（L 字・距離フィルタ後で組み直す）
             if lidar_only:
                 fit_points = lidar_instance
             elif corrected is not None:
@@ -619,13 +649,15 @@ class BoxFittingPipeline:
 
             # MOA はセンサーから見た隠れ方を使うため、ego 座標での
             # カメラ位置を渡す（(0,0) はセンサー座標系のときの値）
+            # 手法はラベルごと（config の BOXFIT_METHODS）
             fit = fit_box(
                 fit_points,
-                (box_fitting_params or {}).get("method", BOXFIT_METHOD_CONVEX_HULL_MOA),
+                method_for_label(box_fitting_params, instance.get("label")),
                 box_fitting_params,
                 # 原点も同じ座標系へ移す。点群だけ変換して原点を
                 # 据え置くと、MOA のオクルージョン判定が崩れる
                 sensor_origin_xy=origin_xy,
+                label=instance.get("label"),
             )
             if fit is None:
                 entry["status"] = "not_fitted"

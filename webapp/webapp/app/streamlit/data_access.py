@@ -375,6 +375,8 @@ def refilter_instance_points(
         channels=list(channels) if channels else None,
         # L 字フィルタの共通設定（無ければ run の設定を使う）
         lshape_params=params.get("lshape"),
+        # 距離フィルタの分位点・余裕（無ければ run の設定を使う）
+        distance_params=params.get("distance"),
     )
 
 

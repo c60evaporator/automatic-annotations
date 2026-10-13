@@ -170,6 +170,8 @@ class BoxFittingResult(BaseModel):
     is_small_mask: bool = False
     # L 字フィルタの結果（{"depth": {...}, "lidar": {...}}、適用しなければ None）
     lshape_filter: dict[str, Any] | None = None
+    # 距離フィルタの結果（{"depth": {...}, "lidar": {...}}、適用しなければ None）
+    distance_filter: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -224,6 +226,9 @@ class RefilterRequest(BaseModel):
     # L 字フィルタの共通設定（run の box_fitting_params["lshape"]）。
     # 点群ごとの設定は depth_params / lidar_params の lshape_* に入る
     lshape_params: dict[str, Any] = Field(default_factory=dict)
+    # 距離フィルタの設定（run の box_fitting_params["distance_filter"] に
+    # 想定サイズ box_sizes を足したもの）
+    distance_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class RefilterInstanceResult(BaseModel):
@@ -252,6 +257,11 @@ class RefilterInstanceResult(BaseModel):
     points_corrected_lshape_ego: dict[str, Any] | None = None
     points_lidar_lshape_ego: dict[str, Any] | None = None
     lshape_filter: dict[str, Any] | None = None
+    # 距離フィルタ後（L 字フィルタの後）。適用しなかったインスタンスは None
+    points_distance_ego: dict[str, Any] | None = None
+    points_corrected_distance_ego: dict[str, Any] | None = None
+    points_lidar_distance_ego: dict[str, Any] | None = None
+    distance_filter: dict[str, Any] | None = None
 
 
 class RefilterResponse(BaseModel):

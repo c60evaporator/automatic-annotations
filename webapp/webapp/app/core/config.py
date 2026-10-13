@@ -413,12 +413,46 @@ class Settings(BaseSettings):
     # 判定にはトラック内で多数決したラベルを使う
     DEFAULT_MERGE_LABEL_MATCH: str = "category_group"
 
+    # --- 物体の想定サイズ ---------------------------------------------------
+    # ラベルごとの (length, width, height) [m]。距離フィルタと
+    # twowheeler_convex_hull_moa の「側面が見えているか」の判定に使う。
+    # run には box_fitting_params["box_sizes"] として残る。
+    # TODO: 仮の値（nuScenes の各カテゴリの平均的な寸法の目安）。
+    #       統計を取って差し替える
+    DEFAULT_BOX_SIZES: dict[str, tuple[float, float, float]] = {
+        "car": (4.63, 1.97, 1.74),
+        "truck": (6.93, 2.51, 2.84),
+        "bus": (11.10, 2.95, 3.47),
+        "trailer": (12.29, 2.90, 3.87),
+        "construction_vehicle": (6.37, 2.85, 3.19),
+        "bicycle": (1.76, 0.60, 1.44),
+        "motorcycle": (2.11, 0.77, 1.47),
+        "pedestrian": (0.73, 0.66, 1.77),
+        "traffic_cone": (0.41, 0.41, 1.07),
+        "barrier": (2.50, 0.50, 0.98),
+    }
+
     # --- Box Fitting -------------------------------------------------------
-    # 当てはめ手法。convex_hull_moa は BEV の凸包に対し、角度を刻んで
-    # 外接矩形の面積が最小になる向きを探す
-    BOXFIT_METHOD_DEFAULT: str = "convex_hull_moa"
-    BOXFIT_METHODS: list[str] = ["convex_hull_moa"]
+    # ラベルごとの当てはめ手法。ここに無いラベルは convex_hull_moa。
+    #   convex_hull_moa: BEV の凸包に対し、角度を刻んで
+    #     センサーから見たオクルージョン面積が最小になる向きを探す
+    #   twowheeler_convex_hull_moa: 二輪車用。MOA で当てはめた後、
+    #     前後面しか見えていなければ（見かけの幅が DEFAULT_BOX_SIZES の
+    #     (length + width) / 2 以下）向きを視線方向へ直す
+    BOXFIT_METHODS: dict[str, str] = {
+        "car": "convex_hull_moa",
+        "truck": "convex_hull_moa",
+        "bus": "convex_hull_moa",
+        "trailer": "convex_hull_moa",
+        "construction_vehicle": "convex_hull_moa",
+        "bicycle": "twowheeler_convex_hull_moa",
+        "motorcycle": "twowheeler_convex_hull_moa",
+        "pedestrian": "convex_hull_moa",
+        "traffic_cone": "convex_hull_moa",
+        "barrier": "convex_hull_moa",
+    }
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
+    # （手法ごとに設定する。twowheeler も内部で MOA を使う）
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
     BOXFIT_ANGLE_STEP_DEG_MAX: float = 10.0
@@ -470,6 +504,22 @@ class Settings(BaseSettings):
     # めり込み、手前の真の点を消す。実データでは 5 前後が良かった
     LSHAPE_VIOLATION_WEIGHT_DEFAULT: float = 5.0
     LSHAPE_VIOLATION_WEIGHT_MAX: float = 20.0
+
+    # --- 距離フィルタ（General タブ） --------------------------------------
+    # 想定サイズ（DEFAULT_BOX_SIZES）から、視線方向に奥へ伸びた尾状ノイズを
+    # 落とす。L 字フィルタの直後に、深度と LiDAR に別々に適用する
+    # （深度は LiDAR と混ぜる前に落とす）。有効／無効の切り替えは無く、
+    # 対象ラベルを空にすれば無効になる
+    DISTANCE_FILTER_LABELS: list[str] = [
+        "bicycle", "motorcycle", "pedestrian", "traffic_cone",
+    ]
+    # 基準距離に使う、センサーからの距離の分位点 [%]。
+    # **これより手前の点も落ちる**（ref 〜 ref + 奥行き + Margin を残す）
+    DISTANCE_FILTER_QUANTILE_DEFAULT: float = 5.0
+    DISTANCE_FILTER_QUANTILE_MAX: float = 50.0
+    # 奥側の余裕 [m]
+    DISTANCE_FILTER_MARGIN_DEFAULT: float = 0.3
+    DISTANCE_FILTER_MARGIN_MAX: float = 3.0
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

@@ -355,6 +355,7 @@ def refilter_instances(req: RefilterRequest) -> RefilterResponse:
             max_lidar_points_for_depth=req.max_lidar_points_for_depth,
             stored_points_max=req.stored_points_max,
             lshape_params=req.lshape_params,
+            distance_params=req.distance_params,
             # 推論本体と同じ読み方にする。depth_params を無視すると、
             # 点群の範囲が変わって外れ値除去の結果がずれる
             max_depth=(req.depth_params or {}).get(

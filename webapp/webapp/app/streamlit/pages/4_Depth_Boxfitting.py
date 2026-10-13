@@ -144,6 +144,9 @@ def run_refilter_params(run_info: dict) -> dict:
     run_depth = run_info.get("depth_params") or {}
     run_lidar = run_info.get("lidar_params") or {}
     run_lshape = (run_info.get("box_fitting_params") or {}).get("lshape") or {}
+    run_distance = (
+        (run_info.get("box_fitting_params") or {}).get("distance_filter") or {}
+    )
     return {
         "depth": {
             "ror_nb_points": int(run_depth.get(
@@ -175,6 +178,8 @@ def run_refilter_params(run_info: dict) -> dict:
         },
         # L 字の設定が無い run（L 字フィルタ導入前）は無効のまま
         "lshape": dict(run_lshape),
+        # 距離フィルタも同じ（導入前の run は対象ラベルが無いので適用されない）
+        "distance": dict(run_distance),
     }
 
 
@@ -192,6 +197,13 @@ def lshape_params_differ(params: dict, run_info: dict) -> bool:
         for kind, keys in (("depth", LSHAPE_DEPTH_KEYS), ("lidar", LSHAPE_LIDAR_KEYS))
         for k in keys
     )
+
+
+def distance_params_differ(params: dict, run_info: dict) -> bool:
+    """再フィルタの距離フィルタの設定が、run（推論時）と違うか."""
+    base = run_refilter_params(run_info)["distance"]
+    applied = params.get("distance") or {}
+    return any(applied.get(k) != base.get(k) for k in ("labels", "quantile", "margin"))
 # 深度点群を補正前・補正後のどちらで表示するか
 OPT_PC_DEPTH_INST, W_PC_DEPTH_INST = "boxfit_pc_depth_inst", "_w_boxfit_pc_depth_inst"
 DEPTH_INSTANCE_RAW = "raw"
@@ -352,13 +364,19 @@ MASK_MODES = ("None", "Original", "Closed")
 # エンドポイントを実装するまで Raw は選べない。
 POINTS_MODE_RAW = "Raw"
 POINTS_MODE_FILTERED = "ROR/DBSCAN"
-# ROR/DBSCAN の後に L 字フィルタをかけたもの。保存済みの点群（＝当てはめに
-# 使った点群）はこれに当たる。対象外のラベルは ROR/DBSCAN と同じ
-POINTS_MODE_LSHAPE = "ROR/DBSCAN + L-shape"
-POINTS_MODES = (POINTS_MODE_RAW, POINTS_MODE_FILTERED, POINTS_MODE_LSHAPE)
+# ROR/DBSCAN の後に L 字フィルタをかけたもの。対象外のラベルは ROR/DBSCAN と同じ
+POINTS_MODE_LSHAPE = "L-shape Filter"
+# L 字フィルタの後に距離フィルタをかけたもの。保存済みの点群（＝当てはめに
+# 使った点群）はこれに当たる。対象外のラベルは L-shape Filter と同じ
+POINTS_MODE_DISTANCE = "Distance Filter"
+POINTS_MODES = (
+    POINTS_MODE_RAW, POINTS_MODE_FILTERED, POINTS_MODE_LSHAPE, POINTS_MODE_DISTANCE,
+)
+# 保存済みの点群に当たる（最終段階の）表示モード
+POINTS_MODE_FINAL = POINTS_MODE_DISTANCE
 # 表示モード → BoxFitting3D のカラム名
 POINTS_COLUMNS = {
-    POINTS_MODE_LSHAPE: ("points_depth_ego", "points_lidar_ego"),
+    POINTS_MODE_FINAL: ("points_depth_ego", "points_lidar_ego"),
 }
 
 # --- 初期表示: 保存済みの run --------------------------------------------------
@@ -498,6 +516,35 @@ with param_col:
                 "角度の刻み・調整幅は config の LSHAPE_ANGLE_STEP_DEG / "
                 "LSHAPE_ADJUST_RANGE_DEG / LSHAPE_ADJUST_STEP_DEG で指定"
             )
+
+            st.markdown("**Distance Filter**")
+            st.caption(
+                "対象ラベル: " + (", ".join(settings.DISTANCE_FILTER_LABELS) or "なし")
+                + "（config の DISTANCE_FILTER_LABELS で指定。想定サイズは "
+                "DEFAULT_BOX_SIZES）"
+            )
+            distance_cols = st.columns(2)
+            with distance_cols[0]:
+                distance_quantile = st.slider(
+                    "Distance Quantile [%]", 0.0,
+                    settings.DISTANCE_FILTER_QUANTILE_MAX,
+                    value=settings.DISTANCE_FILTER_QUANTILE_DEFAULT, step=1.0,
+                    key="_w_distance_quantile",
+                    help=("L 字フィルタの後、深度と LiDAR に別々に適用する。"
+                          "センサーからの距離のこの分位点を基準距離 ref とし、"
+                          "ref 〜 ref + 奥行き + Margin の点だけを残す（**ref より"
+                          "手前の点も落ちる**）。奥行きは、視線と垂直な見かけの幅が"
+                          "想定サイズの (length + width) / 2 を超えれば width"
+                          "（側面が見えている）、そうでなければ length"),
+                )
+            with distance_cols[1]:
+                distance_margin = st.slider(
+                    "Distance Margin [m]", 0.0,
+                    settings.DISTANCE_FILTER_MARGIN_MAX,
+                    value=settings.DISTANCE_FILTER_MARGIN_DEFAULT, step=0.05,
+                    key="_w_distance_margin",
+                    help="奥側の余裕。深度推定の誤差や想定サイズとの差を吸収する",
+                )
 
         with depth_tab:
             st.markdown("**ROR**")
@@ -704,20 +751,15 @@ with param_col:
                 )
 
         with fitting_tab:
-            boxfit_method = st.selectbox(
-                "Method", settings.BOXFIT_METHODS,
-                index=settings.BOXFIT_METHODS.index(settings.BOXFIT_METHOD_DEFAULT)
-                if settings.BOXFIT_METHOD_DEFAULT in settings.BOXFIT_METHODS else 0,
-                help=("convex_hull_moa: BEV の凸包に対し、センサーから見た"
-                      "オクルージョン面積が最小になる向きを探す"),
+            def _method_labels(method: str) -> str:
+                labels = [k for k, v in settings.BOXFIT_METHODS.items() if v == method]
+                return ", ".join(labels) or "なし"
+
+            st.caption(
+                "手法はラベルごとに config の BOXFIT_METHODS で指定する"
+                "（指定の無いラベルは convex_hull_moa）"
             )
-            angle_step_deg = st.slider(
-                "angle_step_deg",
-                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
-                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
-                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
-                help="向きの探索刻み。細かいほど遅くなる",
-            )
+            st.markdown("**Common**")
             z_percentiles = st.slider(
                 "z_percentiles", 0.0, 100.0,
                 value=(settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT,
@@ -736,6 +778,37 @@ with param_col:
                       "フレームごとに数える**（深度点＋LiDAR 点の合計）"),
             )
 
+            st.markdown("**convex_hull_moa**")
+            st.caption("対象ラベル: " + _method_labels("convex_hull_moa"))
+            angle_step_deg = st.slider(
+                "Angle Step [deg]",
+                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
+                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
+                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
+                key="_w_boxfit_moa_angle_step",
+                help=("BEV の凸包に対し、センサーから見たオクルージョン面積が"
+                      "最小になる向きを探す。その向きの探索刻み（細かいほど遅い）"),
+            )
+
+            st.markdown("**twowheeler_convex_hull_moa**")
+            st.caption("対象ラベル: " + _method_labels("twowheeler_convex_hull_moa"))
+            twowheeler_angle_step_deg = st.slider(
+                "Angle Step [deg]",
+                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
+                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
+                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
+                key="_w_boxfit_twowheeler_angle_step",
+                help=("内部で使う MOA の向きの探索刻み。MOA で当てはめた後、"
+                      "見かけの幅（凸包の方位角の広がり × 箱の中心までの距離）が"
+                      "想定サイズの (length + width) / 2 以下なら前後面しか見えて"
+                      "いないとみなし、MOA の 2 軸のうち視線に近い方を進行方向にして"
+                      "向きを視線方向へ直す（大きさは MOA のまま）"),
+            )
+            st.caption(
+                "側面／前後面の判定は距離フィルタと同じ規則"
+                "（想定サイズは config の DEFAULT_BOX_SIZES）"
+            )
+
 mask_params = {
     "dilation": int(mask_dilation), "erosion": int(mask_erosion),
     # 小物体（短辺が閾値以下）は収縮を弱める
@@ -752,8 +825,16 @@ merge_params = {
     "max_same_camera_gap": int(merge_same_cam_gap),
 } if enable_merge else {}
 box_fitting_params = {
-    "method": boxfit_method,
-    "angle_step_deg": float(angle_step_deg),
+    # ラベルごとの手法と、手法ごとの設定
+    "methods": dict(settings.BOXFIT_METHODS),
+    "convex_hull_moa": {"angle_step_deg": float(angle_step_deg)},
+    "twowheeler_convex_hull_moa": {
+        "angle_step_deg": float(twowheeler_angle_step_deg),
+    },
+    # ラベルごとの想定サイズ (length, width, height)。
+    # 距離フィルタと twowheeler の判定に使う
+    "box_sizes": {k: [float(x) for x in v]
+                  for k, v in settings.DEFAULT_BOX_SIZES.items()},
     "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),
@@ -767,6 +848,12 @@ box_fitting_params = {
         "boundary_quantile": float(settings.LSHAPE_BOUNDARY_QUANTILE),
         "support_band": float(lshape_support_band),
         "violation_weight": float(lshape_violation_weight),
+    },
+    # 距離フィルタ（L 字フィルタの直後、深度と LiDAR に別々に適用）
+    "distance_filter": {
+        "labels": list(settings.DISTANCE_FILTER_LABELS),
+        "quantile": float(distance_quantile),
+        "margin": float(distance_margin),
     },
 }
 depth_params = {
@@ -1200,13 +1287,19 @@ with pointcloud_tab_view:
             "Depth Instances", value=True, key="_w_pc_depth_inst",
         )
 
-        # 保存済みの点群は最終段階（L 字フィルタ後）だけ。途中段階を選ぶと、
-        # 推論時と同じパラメータで自動的に再計算して表示する
+        # 保存済みの点群は最終段階（距離フィルタ後）だけ。途中段階を選ぶと、
+        # 推論時と同じパラメータで自動的に再計算して表示する。
+        # 既定は最終段階。名前を変えた古い選択肢が残っていたら戻す
+        for _key in (W_PC_POINTS, OPT_PC_POINTS):
+            if st.session_state.get(_key) not in (None, *POINTS_MODES):
+                st.session_state.pop(_key, None)
+        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_FINAL)
         points_mode = st.radio(
             "Instance Points", POINTS_MODES, key=W_PC_POINTS,
             on_change=S.sync_sticky, args=(W_PC_POINTS, OPT_PC_POINTS),
-            help=("外れ値除去（ROR / DBSCAN）と L 字フィルタの適用前後を切り替える。"
-                  "保存済みの点群は L 字フィルタ後（当てはめに使ったもの）。"
+            help=("外れ値除去（ROR / DBSCAN）・L 字フィルタ・距離フィルタの"
+                  "適用前後を切り替える。"
+                  "保存済みの点群は距離フィルタ後（当てはめに使ったもの）。"
                   "それ以外を選ぶと、推論時と同じパラメータで再計算して表示する"
                   "（Filter Params で Apply した後はその値で再計算する）"),
         )
@@ -1249,7 +1342,6 @@ with pointcloud_tab_view:
                            key=f"_w_pc_cam_{sensor['channel']}")
         }
 
-        S.init_sticky(W_PC_POINTS, OPT_PC_POINTS, POINTS_MODE_LSHAPE)
 
     raw_lidar_points = ground_points = raw_depth_points = None
     instance_groups: list[dict] = []
@@ -1297,7 +1389,7 @@ with pointcloud_tab_view:
             )
             refilter_params = st.session_state.get(PC_REFILTER_PARAMS)
             if (not refilter_params and run_info
-                    and points_mode != POINTS_MODE_LSHAPE):
+                    and points_mode != POINTS_MODE_FINAL):
                 # 途中段階は保存していないので、推論時と同じパラメータで
                 # 作り直す（Apply していなくても選べるようにするため）
                 refilter_params = run_refilter_params(run_info)
@@ -1319,13 +1411,15 @@ with pointcloud_tab_view:
                     show_fitted_boxes and tokens) else {}
                 # 再フィルタの結果はカラム名が違う（DB のものと混ぜない）。
                 # 候補を前から順に見て、最初に値のあるものを表示する。
-                # L 字フィルタ後は、適用しなかったインスタンスでは None なので
-                # ROR/DBSCAN 後へ落とす
+                # L 字・距離フィルタ後は、適用しなかったインスタンスでは None
+                # なので 1 つ前の段階へ落とす
                 corrected = depth_instance_mode == DEPTH_INSTANCE_CORRECTED
                 depth_candidates = {
                     POINTS_MODE_RAW: ["points_raw_ego"],
                     POINTS_MODE_FILTERED: ["points_filtered_ego"],
                     POINTS_MODE_LSHAPE: ["points_lshape_ego", "points_filtered_ego"],
+                    POINTS_MODE_DISTANCE: ["points_distance_ego", "points_lshape_ego",
+                                           "points_filtered_ego"],
                 }[points_mode]
                 if corrected:
                     # 補正後で見る。補正できなかったものは補正前へ落とす
@@ -1334,12 +1428,18 @@ with pointcloud_tab_view:
                         POINTS_MODE_FILTERED: ["points_corrected_filtered_ego"],
                         POINTS_MODE_LSHAPE: ["points_corrected_lshape_ego",
                                              "points_corrected_filtered_ego"],
+                        POINTS_MODE_DISTANCE: ["points_corrected_distance_ego",
+                                               "points_corrected_lshape_ego",
+                                               "points_corrected_filtered_ego"],
                     }[points_mode] + depth_candidates
                 lidar_candidates = {
                     POINTS_MODE_RAW: ["points_lidar_raw_ego"],
                     POINTS_MODE_FILTERED: ["points_lidar_filtered_ego"],
                     POINTS_MODE_LSHAPE: ["points_lidar_lshape_ego",
                                          "points_lidar_filtered_ego"],
+                    POINTS_MODE_DISTANCE: ["points_lidar_distance_ego",
+                                           "points_lidar_lshape_ego",
+                                           "points_lidar_filtered_ego"],
                 }[points_mode]
 
                 def _first(item: dict, keys: list[str]):
@@ -1357,8 +1457,8 @@ with pointcloud_tab_view:
                     for i in flat
                 ]
                 depth_key, lidar_key = "_depth_display", "_lidar_display"
-                def _removed(item: dict, kind: str) -> int:
-                    return int(((item.get("lshape_filter") or {}).get(kind) or {})
+                def _removed(item: dict, kind: str, column: str = "lshape_filter") -> int:
+                    return int(((item.get(column) or {}).get(kind) or {})
                                .get("num_removed", 0))
 
                 refilter_summary = {
@@ -1369,6 +1469,10 @@ with pointcloud_tab_view:
                     "lidar_kept": sum(i.get("num_lidar_kept", 0) for i in flat),
                     "lshape_depth": sum(_removed(i, "depth") for i in flat),
                     "lshape_lidar": sum(_removed(i, "lidar") for i in flat),
+                    "distance_depth": sum(
+                        _removed(i, "depth", "distance_filter") for i in flat),
+                    "distance_lidar": sum(
+                        _removed(i, "lidar", "distance_filter") for i in flat),
                     # 推論時の点数。差が出たときの切り分けに使う
                     "stored_raw": sum(i.get("stored_raw") or 0 for i in flat),
                     "stored_kept": sum(i.get("stored_kept") or 0 for i in flat),
@@ -1376,6 +1480,10 @@ with pointcloud_tab_view:
                     "stored_lidar_kept": sum(i.get("stored_lidar_kept") or 0 for i in flat),
                     "stored_lshape_depth": sum(i.get("stored_lshape_depth") or 0 for i in flat),
                     "stored_lshape_lidar": sum(i.get("stored_lshape_lidar") or 0 for i in flat),
+                    "stored_distance_depth": sum(
+                        i.get("stored_distance_depth") or 0 for i in flat),
+                    "stored_distance_lidar": sum(
+                        i.get("stored_distance_lidar") or 0 for i in flat),
                 }
             else:
                 fittings = load_box_fittings(
@@ -1383,7 +1491,7 @@ with pointcloud_tab_view:
                     include_points=(show_depth_instances or show_lidar_instances),
                 ) if tokens else {}
                 flat = [fit for items_ in fittings.values() for fit in items_]
-                depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_LSHAPE]
+                depth_key, lidar_key = POINTS_COLUMNS[POINTS_MODE_FINAL]
                 if depth_instance_mode == DEPTH_INSTANCE_CORRECTED:
                     # 補正後の点群で表示する。補正できなかったインスタンス
                     # （LiDAR 点が足りない等）は補正前のまま表示する。
@@ -1610,6 +1718,29 @@ with pointcloud_tab_view:
                     "Margin [m]", "l_lmargin", 0.05, 2.0,
                     float(run_lidar.get("lshape_margin",
                                         settings.LIDAR_LSHAPE_MARGIN_DEFAULT)), 0.05)
+            st.markdown("**Distance Filter**")
+            run_distance = (
+                ((run_info or {}).get("box_fitting_params") or {})
+                .get("distance_filter") or {}
+            )
+            # 対象ラベルは run の値（導入前の run は config の値で試せるようにする）
+            distance_labels = list(
+                run_distance.get("labels", settings.DISTANCE_FILTER_LABELS)
+            )
+            st.caption("対象ラベル: " + (", ".join(distance_labels) or "なし"))
+            dist_cols = st.columns(4)
+            with dist_cols[0]:
+                dist_q_new = _slider(
+                    "Distance Quantile [%]", "dist_q", 0.0,
+                    settings.DISTANCE_FILTER_QUANTILE_MAX,
+                    float(run_distance.get(
+                        "quantile", settings.DISTANCE_FILTER_QUANTILE_DEFAULT)), 1.0)
+            with dist_cols[1]:
+                dist_margin_new = _slider(
+                    "Distance Margin [m]", "dist_margin", 0.0,
+                    settings.DISTANCE_FILTER_MARGIN_MAX,
+                    float(run_distance.get(
+                        "margin", settings.DISTANCE_FILTER_MARGIN_DEFAULT)), 0.05)
 
             apply_col, reset_col, _spacer = st.columns([1, 1, 6])
             with apply_col:
@@ -1664,6 +1795,13 @@ with pointcloud_tab_view:
                             "enabled": bool(lshape_on_new),
                             "support_band": float(lshape_band_new),
                             "violation_weight": float(lshape_violation_new),
+                        },
+                        # 想定サイズ（box_sizes）は送らない。サービスが run の
+                        # 値で補う（導入前の run は config の値）
+                        "distance": {
+                            "labels": distance_labels,
+                            "quantile": float(dist_q_new),
+                            "margin": float(dist_margin_new),
                         },
                     }
                     st.rerun()
@@ -1729,6 +1867,11 @@ with pointcloud_tab_view:
                         "L 字フィルタの設定が推論時と異なるため、"
                         "下の比較の「L 字除去」は一致しなくて正常です"
                     )
+                if applied and run_info and distance_params_differ(applied, run_info):
+                    st.caption(
+                        "距離フィルタの設定が推論時と異なるため、"
+                        "下の比較の「距離除去」は一致しなくて正常です"
+                    )
                 # 推論時との比較。**raw が一致するかで原因を切り分けられる**
                 # 一致しない → マスク・深度の範囲（max_depth）が違う
                 # raw だけ一致 → 外れ値除去の条件かラベルの倍率が違う
@@ -1758,6 +1901,17 @@ with pointcloud_tab_view:
                             + _compare("深度", s["stored_lshape_depth"], s["lshape_depth"])
                             + " / "
                             + _compare("LiDAR", s["stored_lshape_lidar"], s["lshape_lidar"])
+                        )
+                    if any(s[k] for k in ("distance_depth", "distance_lidar",
+                                          "stored_distance_depth",
+                                          "stored_distance_lidar")):
+                        lines.append(
+                            "距離除去 "
+                            + _compare("深度", s["stored_distance_depth"],
+                                       s["distance_depth"])
+                            + " / "
+                            + _compare("LiDAR", s["stored_distance_lidar"],
+                                       s["distance_lidar"])
                         )
                     st.caption("推論時との比較: " + " ｜ ".join(lines))
 

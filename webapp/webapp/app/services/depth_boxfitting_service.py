@@ -544,6 +544,7 @@ def refilter_sample(
     lidar_params: dict[str, Any] | None = None,
     channels: list[str] | None = None,
     lshape_params: dict[str, Any] | None = None,
+    distance_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """1 sample のインスタンス点群を、新しいパラメータで作り直す.
 
@@ -623,6 +624,7 @@ def refilter_sample(
         # 推論時の点数。再フィルタ結果と突き合わせて差分の原因を切り分ける
         for fit in items:
             lshape = fit.get("lshape_filter") or {}
+            distance = fit.get("distance_filter") or {}
             stored_counts[fit["id"]] = {
                 "stored_raw": fit.get("num_points_depth"),
                 "stored_kept": fit.get("num_points_depth_kept"),
@@ -631,6 +633,9 @@ def refilter_sample(
                 # L 字フィルタで落とした点数（推論時）
                 "stored_lshape_depth": (lshape.get("depth") or {}).get("num_removed", 0),
                 "stored_lshape_lidar": (lshape.get("lidar") or {}).get("num_removed", 0),
+                # 距離フィルタで落とした点数（推論時）
+                "stored_distance_depth": (distance.get("depth") or {}).get("num_removed", 0),
+                "stored_distance_lidar": (distance.get("lidar") or {}).get("num_removed", 0),
             }
         if not instances:
             continue
@@ -675,8 +680,22 @@ def refilter_sample(
                 target[key] = value
     # L 字フィルタの共通設定。Filter Params で指定されていればそれを、
     # 無ければ run の設定を使う
+    run_boxfit = run.get("box_fitting_params") or {}
     if lshape_params is None:
-        lshape_params = (run.get("box_fitting_params") or {}).get("lshape") or {}
+        lshape_params = run_boxfit.get("lshape") or {}
+    # 距離フィルタも同様。Filter Params に無いキー（対象ラベル・想定サイズ）は
+    # run から補う。距離フィルタ導入前の run は対象ラベルが無いので適用しない
+    distance_params = {
+        **(run_boxfit.get("distance_filter") or {}),
+        **(distance_params or {}),
+    }
+    # 想定サイズは run の値。導入前の run（box_sizes が無い）は config の値
+    distance_params.setdefault(
+        "box_sizes",
+        run_boxfit.get("box_sizes") or {
+            k: [float(x) for x in v] for k, v in settings.DEFAULT_BOX_SIZES.items()
+        },
+    )
 
     response = refilter_boxfitting({
         "frames": payload_frames,
@@ -696,6 +715,7 @@ def refilter_sample(
         "nb_points_ratio": dict(settings.NB_POINTS_RATIO),
         "stored_points_max": settings.BOXFIT_STORED_POINTS_MAX,
         "lshape_params": lshape_params,
+        "distance_params": distance_params,
     })
     logger.info(
         "refiltered %d instances in %.2fs",
