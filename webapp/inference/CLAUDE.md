@@ -421,7 +421,8 @@ Depth Boxfittingは、以下のフローで行われます
         - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
-        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下の組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
+        - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下かつLabel Matchパラメータで指定した属性が一致する組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
+            - 例外処理として、Label Match=category_groupの場合に結合候補が2つ以上存在する場合、IoSが閾値を超えている限りは、IoSの大小よりもlabelの一致を優先する（labelが異なる結合されにくくするため）
         - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
     - global_track_idごとに結合した点群に対して、以下のようにバウンディングボックスをフィッティングする
         - global_track_idあたりの点数がMin Points to fit Box未満なら、バウンディングボックスをフィッティングしない

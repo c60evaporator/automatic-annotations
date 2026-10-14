@@ -221,6 +221,8 @@ def match_camera_pair(
         status:
           accepted        … 採用
           taken_by_other  … 閾値は超えたが、Hungarian で相手が別の対に取られた
+          taken_by_same_label … 閾値は超えたが、ラベルが同じ別の対が優先された
+                            （label_match=category_group のときだけ）
           below_threshold … 重なりが閾値未満
           gap_too_large   … 凸包の隙間が max_hull_gap を超えた（足切り）
           label_mismatch  … 近いが、ラベルが結合の条件に合わない（足切り）
@@ -245,6 +247,16 @@ def match_camera_pair(
     NOTE: 「閾値を緩めても結合されない」ときの原因は閾値ではなく、
     **1 対 1 の割り当てで別の相手に取られている**ことが多い。
     それを切り分けられるよう、候補の記録を返している。
+
+    ## label_match=category_group ではラベルの一致を優先する
+
+    閾値を超えた候補が複数あるときは、**重なり率の大小よりラベルの一致を
+    優先**する。例えばバリアの列に沿ってコーンが置かれていると、小さい
+    コーンの凸包はバリアの凸包にほぼ丸ごと入るので IoS が 1 近くになり、
+    同じバリアの別カメラのトラックより先にコーンと組んでしまう。
+    閾値を超えた同ラベルの組に、全ての重なり率の和より大きい加点をして
+    Hungarian に渡す（＝同ラベルの採用数を最大にし、その中で重なり率の
+    和を最大にする）。閾値未満の組には加点しないので、閾値の意味は変わらない。
     """
     if not instances_a or not instances_b:
         return {}, []
@@ -281,13 +293,28 @@ def match_camera_pair(
 
     from scipy.optimize import linear_sum_assignment
 
-    rows, cols = linear_sum_assignment(-score)
+    weight = score
+    same_label = np.zeros_like(score, dtype=bool)
+    if label_match == LABEL_MATCH_CATEGORY_GROUP:
+        for i, a in enumerate(instances_a):
+            for j, b in enumerate(instances_b):
+                same_label[i, j] = bool(a.get("label")) and a.get("label") == b.get("label")
+        preferred = same_label & (score >= overlap_threshold)
+        if preferred.any():
+            # 重なり率は 0〜1 なので、和は min(行数, 列数) を超えない
+            bonus = float(min(score.shape)) + 1.0
+            weight = score + bonus * preferred
+    rows, cols = linear_sum_assignment(-weight)
     assigned = {(int(i), int(j)) for i, j in zip(rows, cols)}
     matched = {
         pair: float(score[pair])
         for pair in assigned
         if score[pair] >= overlap_threshold
     }
+
+    # 同ラベルの組として採用された行・列（診断の status 分けに使う）
+    same_label_rows = {i for (i, j) in matched if same_label[i, j]}
+    same_label_cols = {j for (i, j) in matched if same_label[i, j]}
 
     # 診断用。足切りを通った組は、重なりが小さくても近ければ残す
     # （重なりが 0 でも「隙間 0.2 m で隣接」といった情報が原因の切り分けに効く）
@@ -305,6 +332,10 @@ def match_camera_pair(
                 continue
             if pair in matched:
                 status = "accepted"
+            elif (score[pair] >= overlap_threshold and not same_label[pair]
+                  and (i in same_label_rows or j in same_label_cols)):
+                # どちらかが、同ラベルの組として採用された
+                status = "taken_by_same_label"
             elif score[pair] >= overlap_threshold:
                 status = "taken_by_other"
             else:
@@ -374,6 +405,7 @@ def merge_by_edges(
     *,
     min_match_frames: int = 1,
     max_same_camera_gap: int | None = None,
+    prefer_same_label: bool = False,
 ) -> tuple[list[list[int]], list[dict[str, Any]]]:
     """辺の集計結果からグループを作る.
 
@@ -384,6 +416,11 @@ def merge_by_edges(
         min_match_frames: この回数以上マッチした辺だけを繋ぐ
         max_same_camera_gap: 同一カメラのトラックを同じグループへ入れてよい
             **時間的な隔たりの上限**（フレーム数）。None なら同一カメラを一切許さない
+        prefer_same_label: True なら、ラベル（nodes の ``label``）が同じ辺を
+            重なり率に関係なく先につなぐ。同一カメラの重複禁止で後の辺が
+            却下されるため、つなぐ順がそのまま優先順位になる。
+            フレーム単位で同ラベルを優先しても、相手が写っていないフレームで
+            別ラベルと組んだ辺は残るので、ここでも優先する必要がある
 
     Returns:
         ``(グループ, 却下した辺の記録)``。
@@ -427,13 +464,23 @@ def merge_by_edges(
                         return f"同一カメラで時間が離れすぎ（{gap} フレーム）"
         return None
 
+    labels = [n.get("label") for n in nodes]
+
+    def _same_label(pair: tuple[int, int]) -> bool:
+        a, b = pair
+        return bool(labels[a]) and labels[a] == labels[b]
+
     candidates = sorted(
         (
             (stats.get("max_overlap", 0.0), pair)
             for pair, stats in edges.items()
             if stats.get("frames", 0) >= min_match_frames
         ),
-        key=lambda item: -item[0],
+        key=lambda item: (
+            # 同ラベルの辺を先に（prefer_same_label のときだけ）
+            -int(prefer_same_label and _same_label(item[1])),
+            -item[0],
+        ),
     )
     for pair, stats in edges.items():
         if stats.get("frames", 0) < min_match_frames:
@@ -490,10 +537,11 @@ def merge_instances(
         label_to_category_group=label_to_category_group,
     )
     groups, _rejected = merge_by_edges(
-        [{"key": str(i), "channel": inst["channel"]}
+        [{"key": str(i), "channel": inst["channel"], "label": inst.get("label")}
          for i, inst in enumerate(instances)],
         {pair: {"frames": 1, "max_overlap": value} for pair, value in edges.items()},
         min_match_frames=1,
+        prefer_same_label=label_match == LABEL_MATCH_CATEGORY_GROUP,
     )
     return groups
 
@@ -532,11 +580,13 @@ def assign_global_track_ids(
     min_match_frames: int = 1,
     max_same_camera_gap: int | None = None,
     start_id: int = 0,
+    prefer_same_label: bool = False,
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """トラックを結合し、グローバル ID を割り当てる.
 
     Args:
-        tracks: ``{"key", "channel", "frames"}`` のリスト（key は一意な文字列）
+        tracks: ``{"key", "channel", "frames", "label"}`` のリスト
+            （key は一意な文字列。label は prefer_same_label で使う）
         frame_matches: フレームごとの照合結果（キー対 → 重なり率）
         max_same_camera_gap: 同一カメラのトラックを同居させてよい隔たり
 
@@ -556,6 +606,7 @@ def assign_global_track_ids(
         tracks, edges,
         min_match_frames=min_match_frames,
         max_same_camera_gap=max_same_camera_gap,
+        prefer_same_label=prefer_same_label,
     )
 
     assigned: dict[str, str] = {}
@@ -803,6 +854,8 @@ def merge_and_fit(
             "key": key, "channel": key.rsplit(":", 1)[0],
             # 同一カメラのトラックが同時に存在するかの判定に使う
             "frames": frames_by_track.get(key, set()),
+            # 同ラベルの辺を先につなぐのに使う（category_group のとき）
+            "label": track_label.get(key),
         }
         for key in sorted(labels_by_track)
     ]
@@ -810,6 +863,7 @@ def merge_and_fit(
         tracks, frame_matches,
         min_match_frames=min_frames,
         max_same_camera_gap=merge_params.get("max_same_camera_gap"),
+        prefer_same_label=label_match == LABEL_MATCH_CATEGORY_GROUP,
     )
 
     # --- 3) グローバルトラック単位でラベルを多数決 -----------------------
@@ -919,6 +973,11 @@ def merge_and_fit(
         elif stats["status"] == "taken_by_other":
             status = "rejected"
             reason = "1 対 1 の割り当てで別の相手に取られた"
+        elif stats["status"] == "taken_by_same_label":
+            status = "rejected"
+            label_a, label_b = stats["labels"]
+            reason = (f"ラベルが同じ別の組を優先した（{label_a} / {label_b}。"
+                      "category_group では閾値を超えた組のうちラベル一致を優先）")
         elif stats["status"] == "gap_too_large":
             # 足切り。重なりは計算していない（凸包が離れているので 0）
             status = "gated"
