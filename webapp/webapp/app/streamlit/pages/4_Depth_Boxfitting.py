@@ -1863,6 +1863,12 @@ with pointcloud_tab_view:
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
                 applied = st.session_state.get(PC_REFILTER_PARAMS)
+                if applied and pc_color_mode == COLOR_MODE_GLOBAL:
+                    st.caption(
+                        "Global Track の色分けは推論時のカメラ間結合の結果です"
+                        "（再フィルタでは結合をやり直さないため、Apply した条件で"
+                        "結合がどう変わるかは反映されません）"
+                    )
                 if applied and run_info and lshape_params_differ(applied, run_info):
                     st.caption(
                         "L 字フィルタの設定が推論時と異なるため、"

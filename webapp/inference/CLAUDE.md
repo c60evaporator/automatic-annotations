@@ -375,7 +375,7 @@ Depth Boxfittingは、以下のフローで行われます
             - RORのradius: Depth ROR nb_pointsパラメータをそのまま用いる
             - DBSCANのmin_samples: Depth DBSCAN min_samplesパラメータを用い、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
             - DBSCANのeps: Depth DBSCAN epsパラメータをそのまま用いる
-        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、Depth点群に以下手順でL字平面をフィッティングし、平面から自車側に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
+        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、Depth点群に以下の「L-shape Filter」を実施し、フィッティングしたL字平面から自車側に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
             - 手順1: ビンごとに輪郭点検出と重み付け（Support BandパラメータはInference ParametersのGeneralタブで、Azimuth Bin、Near QuantileはDepth Estimationタブで指定）
                 - 自車から見た方位角を、Azimuth Bin幅のビンに分ける
                 - 各ビンで、自車からの距離のNear Quantileパーセンタイルの位置にある点（横方向座標はビンの中心）を輪郭点とする
@@ -403,6 +403,11 @@ Depth Boxfittingは、以下のフローで行われます
                     - 次の2条件を両方満たす点を消す（基準より奥の点は消さない）
                         - 視線方向の不足量（基準距離 − 点の距離）＞ max(Margin Min, Margin Ratio × 基準距離)
                         - 基準距離を決めた線から、垂直方向にも Support Band を超えて手前に出ている（浅い角度で見えている面の点は、視線方向の不足量だけが大きく出るので、この条件で守る）
+        - インスタンスのラベルが`settings.DISTANCE_FILTER_LABELS`に含まれる場合、Depth点群に以下の「Distance Filter」を実施し、ラベルの規定ボックスサイズから大きく前後方に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
+            - 対象インスタンス点群の視線に垂直な方向の幅 > ラベルの基準全長と基準全幅（`settings.DEFAULT_BOX_SIZES`から取得）の平均なら「側面が見えている」、そうでなければ「正面か背面が見えている」と判定
+            - 以下手順で距離に応じて対象インスタンス点群の一部を削除
+                - 対象インスタンス点群のセンサからの距離の分位点（Distance Quantileパラメータで指定）を基準距離とする
+                - 距離が「基準距離-Distance Marginパラメータ」〜「基準距離+車種の最大の奥行き（「側面が見えている」なら全幅、「正面か背面が見えている」なら全長を`settings.DEFAULT_BOX_SIZES`から取得）+Distance Marginパラメータ」の点のみを残し、残りは削除
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
         - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
         - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
@@ -412,13 +417,14 @@ Depth Boxfittingは、以下のフローで行われます
             - RORのradius: LiDAR ROR nb_pointsパラメータをそのまま用いる
             - DBSCANのmin_samples: LiDAR DBSCAN min_samplesパラメータをそのまま用いる
             - DBSCANのeps: LiDAR DBSCAN epxパラメータをそのまま用いる
-        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順でL字平面をフィッティングし、平面から自車側に外れた点を削除する。各種パラメータは以下の値を使用する
+        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順で「L-shape Filter」を実施し、フィッティングしたL字平面から自車側に外れた点を削除する。各種パラメータは以下の値を使用する
             - L-shape Support Band、L-shape Violation Weight、`settings.LSHAPE_ANGLE_STEP_DEG`、`settings.LSHAPE_ADJUST_RANGE_DEG`、`settings.LSHAPE_ADJUST_STEP_DEG`、`settings.LSHAPE_BOUNDARY_QUANTILE`: Depth点群のL字平面フィッティングと同じ値を使用する
             - Azimuth Bin: LiDAR L-shape Azimuth Binパラメータを使用
             - Near Quantile: LiDAR L-shape Near Quantileパラメータを使用
             - Margin Min: LiDAR L-shape Marginパラメータを使用（LiDARは距離測定精度が高いため、Depth点群のときのように距離に応じて動的に閾値は変えない。すなわちMargin Ratioパラメータは使用しない。なお、LiDAR L-shape Margin < L-shape Support Bandなら、LiDAR L-shape Marginは判定に寄与しない）
+        - インスタンスのラベルが`settings.DISTANCE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順で「Distance Filter」を実施（パラメータもDepth点群と同じ値を使用）
         - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
-        - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
+        - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
         - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下かつLabel Matchパラメータで指定した属性が一致する組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
@@ -430,7 +436,7 @@ Depth Boxfittingは、以下のフローで行われます
             - `settings.BOXFIT_METHODS="convex_hull_moa"`のとき（車両系を想定）
                 - [こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさとyaw角を推定
             - `settings.BOXFIT_METHODS="twowheeler_convex_hull_moa"`のとき（二輪車系を想定）
-                - global_track点群の
+                - grobal_track点群の視線に垂直な方向の幅 > 全長と全幅（`settings.DEFAULT_BOX_SIZES`から取得）の平均なら「側面が見えている」、そうでなければ「正面か背面が見えている」と判定
                 - `settings.BOXFIT_METHODS="convex_hull_moa"`のときと同じ方法で
         - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、3Dバウンディングボックスの底面を推定する
             - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイルに基づき底面高さを決める

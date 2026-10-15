@@ -626,6 +626,15 @@ def refilter_sample(
             lshape = fit.get("lshape_filter") or {}
             distance = fit.get("distance_filter") or {}
             stored_counts[fit["id"]] = {
+                # **表示用の属性は推論時（DB）の値で上書きする。**
+                # 再フィルタはカメラ間結合をやり直さないので、結果には
+                # global_track_id が無く、label も結合前（Instance Tracking）の
+                # ものになっている。Instance Color の Global Track / Label が
+                # 保存済みの点群の表示と一致するよう、結合後の値を付ける
+                # （計算には結合前のラベルを使っており、ここは表示だけ）
+                "global_track_id": fit.get("global_track_id"),
+                "label": fit.get("label"),
+                "tracking_label": fit.get("tracking_label"),
                 "stored_raw": fit.get("num_points_depth"),
                 "stored_kept": fit.get("num_points_depth_kept"),
                 "stored_lidar_raw": fit.get("num_points_lidar"),

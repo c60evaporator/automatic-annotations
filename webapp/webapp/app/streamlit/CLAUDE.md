@@ -61,10 +61,10 @@
     - チェックボックス付きlabel凡例: チェックしているlabelのバウンディングボックスのみを表示。この凡例は選択中のsampleのバウンディングボックスに存在するlabelのみ表示。一括チェックする「全て」ボタンと、一括チェック解除する「解除」ボタンも設置
     - Box textラジオボタン: 画像上でバウンディングボックスの上に表示する文字の種類（文字色はバウンディングボックスの色と一致）を指定する。以下の選択肢を持つ
         - None: 何も表示しない
-        - Detection Label: GroundingDINOの推論結果を表示（SubLabelから`LABEL_TO_SUBLABEL`で逆引きして得られる）
+        - Detection Label: GroundingDINOの推論結果を表示（SubLabelから`settings.LABEL_TO_SUBLABEL`で逆引きして得られる）
         - SubLabel: 実際にGroundingDINOのプロンプトに渡したサブラベルを表示
         - Re-Classification: SigLIP2で再判定して得られたラベルを表示
-        - Label: 最終的なラベルを表示（SigLIP2で再判定して得られたラベルを`RE_CLASSIFICATION_CANDIDATES`で参照して得られる）
+        - Label: 最終的なラベルを表示（SigLIP2で再判定して得られたラベルを`settings.RE_CLASSIFICATION_CANDIDATES`で参照して得られる）
         - Score: スコアを表示（小数点以下2桁まで表示）
 - view_colに表示する推論バウンディングボックスは、以下のように決める
     - （現在のセッションでの）推論実施前: `detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のもの。`status='succeeded'`のレコードがなければバウンディングボックスを表示しなし
