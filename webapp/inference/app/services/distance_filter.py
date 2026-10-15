@@ -12,7 +12,9 @@ ROR / DBSCAN は尾が密につながっていると落とせず、L 字フィ�
      尾ほど横に広がって W が水増しされるため、角度で測る）
   3. W > (length + width) / 2 なら「側面が見えている」とみなし、
      奥行き D = width、そうでなければ「前後面が見えている」として D = length
-  4. ref 〜 ref + D + margin の点だけを残す
+  4. ref − margin 〜 ref + D + margin の点だけを残す
+     （下限にも margin を取る。ref ちょうどで切ると、分位点より手前の
+     真の点が常に quantile % ぶん消えるため。手前に飛んだ外れ値だけ落ちる）
 
 サイズは webapp の config（DEFAULT_BOX_SIZES: {label: (length, width, height)}）
 から run の box_fitting_params["box_sizes"] として渡ってくる。
@@ -84,7 +86,7 @@ def distance_filter(
         origin_xy: センサー位置（点群と同じ座標系の XY）
         size_lw: 想定サイズ (length, width) [m]
         quantile: 基準距離に使う距離の分位点 [%]
-        margin: 奥側の余裕 [m]
+        margin: 余裕 [m]。手前（ref − margin）と奥（ref + 奥行き + margin）の両側に取る
 
     Returns:
         (残す点のマスク, 診断情報)。点が少なければ全点を残す
@@ -100,9 +102,10 @@ def distance_filter(
     width = perceived_width(points[:, :2], origin_xy, ref)
     side = side_visible(width, size_lw)
     depth_extent = float(size_lw[1] if side else size_lw[0])
+    lower = ref - float(margin)
     upper = ref + depth_extent + float(margin)
 
-    keep = (ranges >= ref) & (ranges <= upper)
+    keep = (ranges >= lower) & (ranges <= upper)
     return keep, {
         "applied": True,
         "num_removed": int((~keep).sum()),
@@ -111,6 +114,7 @@ def distance_filter(
         "perceived_width": round(width, 3),
         "side_visible": side,
         "depth_extent": round(depth_extent, 3),
+        "lower_distance": round(lower, 3),
         "upper_distance": round(upper, 3),
     }
 

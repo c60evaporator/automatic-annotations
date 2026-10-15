@@ -288,12 +288,14 @@ def refilter_frame(
             )
             lidar_used = lidar_used[keep]
 
-        # --- 深度点群の補正 -------------------------------------------
+        # --- 深度点群の補正（1 段目） ----------------------------------
         # 外れ値除去の条件を変えると LiDAR 点群が変わるので、
-        # 補正係数も作り直す（推論時の値を流用しない）
-        correction = None
-        corrected_raw_reduced = corrected_filtered_reduced = None
-        corrected_filtered_ego: np.ndarray | None = None
+        # 補正係数も作り直す（推論時の値を流用しない）。
+        # 推論と同じく 2 段で行う。1 段目（クロージング後マスク全体の画素）は
+        # フィルタの判定にだけ使い、最終の補正は 2 段目（残った点の画素）
+        initial_correction = None
+        lidar_camera: np.ndarray | None = None
+        initial_corrected_ego: np.ndarray | None = None
         # 推論と同じ条件（深度点が 1 つも残らなければ深度は使わない）
         depth_used = filtered.shape[0] > 0 and not (
             max_lidar_points_for_depth > 0
@@ -314,7 +316,54 @@ def refilter_frame(
             z_lidar, z_pred = sample_depth_at(
                 lidar_camera, depth, intrinsic, mask=mask
             )
-            correction = fit_correction(z_lidar, z_pred, depth_correction_method)
+            initial_correction = fit_correction(
+                z_lidar, z_pred, depth_correction_method
+            )
+            if initial_correction is not None:
+                initial_corrected_ego = to_reference(
+                    apply_correction(filtered, initial_correction)
+                )
+
+        # 判定に使う点群（1 段目の補正ができれば補正後）
+        judged = (
+            initial_corrected_ego if initial_corrected_ego is not None
+            else filtered_ego
+        )
+        # ROR/DBSCAN 後の点に対する、各フィルタで残すかのマスク
+        keep_lshape: np.ndarray | None = None
+        keep_final = np.ones(filtered_ego.shape[0], dtype=bool)
+
+        # --- L 字フィルタ（深度） ---------------------------------------
+        if applies and depth_lshape and filtered_ego.shape[0]:
+            keep, lshape_info["depth"] = lshape_filter(
+                judged, camera_origin, **depth_lshape,
+            )
+            keep_lshape = keep
+            keep_final &= keep
+
+        # --- 距離フィルタ（深度） ---------------------------------------
+        # L 字フィルタ後（適用しなければ ROR/DBSCAN 後）に、同じ規則で当てる
+        keep_distance_applied = False
+        if distance and filtered_ego.shape[0]:
+            index = np.flatnonzero(keep_final)
+            keep, distance_info["depth"] = distance_filter(
+                judged[index], camera_origin, **distance,
+            )
+            keep_final[index[~keep]] = False
+            keep_distance_applied = True
+
+        # --- 深度点群の補正（2 段目） ----------------------------------
+        correction = None
+        corrected_raw_reduced = corrected_filtered_reduced = None
+        corrected_lshape = corrected_distance = None
+        if lidar_camera is not None:
+            from app.services.depth_correction import (
+                apply_correction, refine_correction,
+            )
+            correction = refine_correction(
+                lidar_camera, depth, intrinsic, filtered[keep_final],
+                depth_correction_method, initial_correction,
+            )
             if correction is not None:
                 corrected_filtered_ego = to_reference(
                     apply_correction(filtered, correction)
@@ -324,36 +373,17 @@ def refilter_frame(
                     corrected_filtered_ego,
                     stored_points_max,
                 )
+                if keep_lshape is not None:
+                    corrected_lshape = corrected_filtered_ego[keep_lshape]
+                if keep_distance_applied:
+                    corrected_distance = corrected_filtered_ego[keep_final]
 
-        # --- L 字フィルタ（深度） ---------------------------------------
-        # 補正できた場合は補正後で判定し、同じマスクを補正前にも当てる
-        filtered_lshape = corrected_lshape = None
-        if applies and depth_lshape and filtered_ego.shape[0]:
-            keep, lshape_info["depth"] = lshape_filter(
-                corrected_filtered_ego if corrected_filtered_ego is not None
-                else filtered_ego,
-                camera_origin, **depth_lshape,
-            )
-            filtered_lshape = filtered_ego[keep]
-            if corrected_filtered_ego is not None:
-                corrected_lshape = corrected_filtered_ego[keep]
-
-        # --- 距離フィルタ（深度） ---------------------------------------
-        # L 字フィルタ後（適用しなければ ROR/DBSCAN 後）に、同じ規則で当てる
-        filtered_distance = corrected_distance = None
-        if distance and filtered_ego.shape[0]:
-            base = filtered_lshape if filtered_lshape is not None else filtered_ego
-            base_corrected = (
-                corrected_lshape if corrected_lshape is not None
-                else corrected_filtered_ego
-            )
-            keep, distance_info["depth"] = distance_filter(
-                base_corrected if base_corrected is not None else base,
-                camera_origin, **distance,
-            )
-            filtered_distance = base[keep]
-            if base_corrected is not None:
-                corrected_distance = base_corrected[keep]
+        filtered_lshape = (
+            filtered_ego[keep_lshape] if keep_lshape is not None else None
+        )
+        filtered_distance = (
+            filtered_ego[keep_final] if keep_distance_applied else None
+        )
 
         def _stored(points: np.ndarray | None) -> dict[str, Any] | None:
             # 推論時の保存と同じ間引き方にする（表示が一致するように）

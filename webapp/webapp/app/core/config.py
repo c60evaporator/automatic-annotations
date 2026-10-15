@@ -513,12 +513,12 @@ class Settings(BaseSettings):
     DISTANCE_FILTER_LABELS: list[str] = [
         "bicycle", "motorcycle", "pedestrian", "traffic_cone",
     ]
-    # 基準距離に使う、センサーからの距離の分位点 [%]。
-    # **これより手前の点も落ちる**（ref 〜 ref + 奥行き + Margin を残す）
+    # 基準距離 ref に使う、センサーからの距離の分位点 [%]。
+    # ref − Margin 〜 ref + 奥行き + Margin の点を残す
     DISTANCE_FILTER_QUANTILE_DEFAULT: float = 5.0
     DISTANCE_FILTER_QUANTILE_MAX: float = 50.0
-    # 奥側の余裕 [m]
-    DISTANCE_FILTER_MARGIN_DEFAULT: float = 0.3
+    # 余裕 [m]。手前（ref − Margin）と奥の両側に取る
+    DISTANCE_FILTER_MARGIN_DEFAULT: float = 0.2
     DISTANCE_FILTER_MARGIN_MAX: float = 3.0
 
     # 点群ビューの Global View の視点。

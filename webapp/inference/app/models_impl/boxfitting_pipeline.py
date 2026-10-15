@@ -230,6 +230,19 @@ class BoxFittingPipeline:
         return points[:, :3]
 
 
+    @staticmethod
+    def _camera_to_reference(
+        points_camera: np.ndarray,
+        calib: dict[str, Any],
+        frame: dict[str, Any],
+        reference_pose: dict[str, Any] | None,
+    ) -> np.ndarray:
+        """カメラ座標 → sample の基準 ego 座標."""
+        points = camera_to_ego(points_camera, calib["translation"], calib["rotation"])
+        if reference_pose:
+            points = ego_to_ego(points, frame.get("ego_pose") or {}, reference_pose)
+        return points
+
     def process_frame_instances(
         self,
         instances: list[dict[str, Any]],
@@ -536,8 +549,14 @@ class BoxFittingPipeline:
             )
             entry["depth_used"] = not lidar_only
 
-            # 補正後の深度点群（補正できた場合だけ入る）
+            # 補正後の深度点群（補正できた場合だけ入る）。
+            # **補正は 2 段で行う。** 1 段目はクロージング後マスク全体の画素で
+            # 係数を求め、フィルタ（L 字・距離）の判定にだけ使う。2 段目は
+            # フィルタ後に残った深度点の画素だけで求め直し、これを最終の
+            # 補正にする（尾状ノイズなどの画素が係数を引きずらないように）
             corrected_ego: np.ndarray | None = None
+            initial_correction: dict[str, Any] | None = None
+            lidar_camera: np.ndarray | None = None
             if lidar_only:
                 # 深度は使わないので補正もしない（補正後の点群も残さない）
                 pass
@@ -563,24 +582,19 @@ class BoxFittingPipeline:
                 z_lidar, z_pred = sample_depth_at(
                     lidar_camera, depth, intrinsic, mask=closed,
                 )
-                correction = fit_correction(
+                initial_correction = fit_correction(
                     z_lidar, z_pred, depth_correction_method
                 )
-                if correction is not None:
-                    corrected_camera = apply_correction(points_camera, correction)
-                    corrected_ego = camera_to_ego(
-                        corrected_camera, calib["translation"], calib["rotation"]
+                if initial_correction is not None:
+                    corrected_ego = self._camera_to_reference(
+                        apply_correction(points_camera, initial_correction),
+                        calib, frame, reference_pose,
                     )
-                    if reference_pose:
-                        corrected_ego = ego_to_ego(
-                            corrected_ego, frame.get("ego_pose") or {}, reference_pose
-                        )
-                    entry["depth_correction"] = correction
 
             # --- L 字フィルタ（深度） ---------------------------------------
-            # 補正できた場合は補正後の点群で判定する（距離が正しいほうが
-            # 閾値 [m] の意味が通る）。補正は点ごとに視線方向へ動かすだけで
-            # 点の対応は変わらないので、同じマスクを補正前にも当てる
+            # 1 段目の補正ができた場合は補正後の点群で判定する（距離が正しい
+            # ほうが閾値 [m] の意味が通る）。補正は点ごとに視線方向へ動かす
+            # だけで点の対応は変わらないので、同じマスクを補正前にも当てる
             corrected = corrected_ego
             if applies and depth_lshape and points_ego.shape[0]:
                 keep, lshape_info["depth"] = lshape_filter(
@@ -588,22 +602,42 @@ class BoxFittingPipeline:
                     camera_origin, **depth_lshape,
                 )
                 points_ego = points_ego[keep]
+                points_camera = points_camera[keep]
                 if corrected is not None:
                     corrected = corrected[keep]
             entry["lshape_filter"] = lshape_info or None
 
             # --- 距離フィルタ（深度） ---------------------------------------
-            # L 字フィルタと同じく、補正できた場合は補正後で判定して
-            # 同じマスクを補正前にも当てる。LiDAR と混ぜる前に落とす
+            # L 字フィルタと同じく、1 段目の補正後で判定して同じマスクを
+            # 補正前にも当てる。LiDAR と混ぜる前・補正の 2 段目の前に落とす
             if distance and points_ego.shape[0]:
                 keep, distance_info["depth"] = distance_filter(
                     corrected if corrected is not None else points_ego,
                     camera_origin, **distance,
                 )
                 points_ego = points_ego[keep]
+                points_camera = points_camera[keep]
                 if corrected is not None:
                     corrected = corrected[keep]
             entry["distance_filter"] = distance_info or None
+
+            # --- 補正の 2 段目（残った深度点の画素だけで求め直す） -----------
+            if lidar_camera is not None:
+                from app.services.depth_correction import (
+                    apply_correction, refine_correction,
+                )
+                correction = refine_correction(
+                    lidar_camera, depth, intrinsic, points_camera,
+                    depth_correction_method, initial_correction,
+                )
+                if correction is not None:
+                    corrected = self._camera_to_reference(
+                        apply_correction(points_camera, correction),
+                        calib, frame, reference_pose,
+                    )
+                    entry["depth_correction"] = correction
+                else:
+                    corrected = None
             # 保存する深度点群は、当てはめに使ったもの（L 字・距離フィルタ後）
             entry["points_depth_ego"] = points_to_json(
                 downsample_to_max(points_ego, stored_points_max)

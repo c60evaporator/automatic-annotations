@@ -532,8 +532,8 @@ with param_col:
                     key="_w_distance_quantile",
                     help=("L 字フィルタの後、深度と LiDAR に別々に適用する。"
                           "センサーからの距離のこの分位点を基準距離 ref とし、"
-                          "ref 〜 ref + 奥行き + Margin の点だけを残す（**ref より"
-                          "手前の点も落ちる**）。奥行きは、視線と垂直な見かけの幅が"
+                          "ref − Margin 〜 ref + 奥行き + Margin の点だけを残す。"
+                          "奥行きは、視線と垂直な見かけの幅が"
                           "想定サイズの (length + width) / 2 を超えれば width"
                           "（側面が見えている）、そうでなければ length"),
                 )
@@ -543,7 +543,8 @@ with param_col:
                     settings.DISTANCE_FILTER_MARGIN_MAX,
                     value=settings.DISTANCE_FILTER_MARGIN_DEFAULT, step=0.05,
                     key="_w_distance_margin",
-                    help="奥側の余裕。深度推定の誤差や想定サイズとの差を吸収する",
+                    help=("余裕。手前（ref − Margin）と奥（ref + 奥行き + Margin）の"
+                          "両側に取る。深度推定の誤差や想定サイズとの差を吸収する"),
                 )
 
         with depth_tab:
