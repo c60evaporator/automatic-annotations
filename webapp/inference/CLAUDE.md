@@ -404,10 +404,14 @@ Depth Boxfittingは、以下のフローで行われます
                         - 視線方向の不足量（基準距離 − 点の距離）＞ max(Margin Min, Margin Ratio × 基準距離)
                         - 基準距離を決めた線から、垂直方向にも Support Band を超えて手前に出ている（浅い角度で見えている面の点は、視線方向の不足量だけが大きく出るので、この条件で守る）
         - インスタンスのラベルが`settings.DISTANCE_FILTER_LABELS`に含まれる場合、Depth点群に以下の「Distance Filter」を実施し、ラベルの規定ボックスサイズから大きく前後方に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
-            - 対象インスタンス点群の視線に垂直な方向の幅 > ラベルの基準全長と基準全幅（`settings.DEFAULT_BOX_SIZES`から取得）の平均なら「側面が見えている」、そうでなければ「正面か背面が見えている」と判定
-            - 以下手順で距離に応じて対象インスタンス点群の一部を削除
-                - 対象インスタンス点群のセンサからの距離の分位点（Distance Quantileパラメータで指定）を基準距離とする
-                - 距離が「基準距離-Distance Marginパラメータ」〜「基準距離+車種の最大の奥行き（「側面が見えている」なら全幅、「正面か背面が見えている」なら全長を`settings.DEFAULT_BOX_SIZES`から取得）+Distance Marginパラメータ」の点のみを残し、残りは削除
+            - 以下の手順で、視線に垂直な方向に対するオブジェクトの概算角度θを求める
+                - 対象インスタンス点群の視線に垂直な方向の幅 < 短辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち小さい方）のとき: θ=0（正面か背面が見えている）
+                - 対象インスタンス点群の視線に垂直な方向の幅 > 長辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち大きい方）のとき: θ=π/2（側面が真っ直ぐ見えている）
+                - それ以外のとき: θ=arccos(対象インスタンス点群の視線に垂直な方向の幅÷長辺)
+            - 対象インスタンス点群のセンサからの距離の分位点（Distance Quantileパラメータで指定）を基準距離とする
+            - 以下で求めた前側距離から後側距離の間にある対象インスタンスの点群のみを残し、それ以外を削除
+                - 前側距離: 基準距離 - Distance Marginパラメータ
+                - 後側距離: 基準距離 + 長辺×sinθ + Distance Marginパラメータ
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
         - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
         - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
@@ -436,8 +440,8 @@ Depth Boxfittingは、以下のフローで行われます
             - `settings.BOXFIT_METHODS="convex_hull_moa"`のとき（車両系を想定）
                 - [こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさとyaw角を推定
             - `settings.BOXFIT_METHODS="twowheeler_convex_hull_moa"`のとき（二輪車系を想定）
-                - grobal_track点群の視線に垂直な方向の幅 > 全長と全幅（`settings.DEFAULT_BOX_SIZES`から取得）の平均なら「側面が見えている」、そうでなければ「正面か背面が見えている」と判定
-                - `settings.BOXFIT_METHODS="convex_hull_moa"`のときと同じ方法で
+                - grobal_track点群の視線に垂直な方向の幅 < 短辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち小さい方）の場合: 「短辺がまっすぐ見えている」とみなし、`settings.DEFAULT_BOX_SIZES`の大きさのボックスを、角度は視線方向、奥行き方向の位置はボックスの前面がセンサに最も近い点群と接するよう、視線垂直方向の位置はボックス前面の中心が点群の視線垂直方向座標の平均と一致するように設置する
+                - それ以外の場合: `settings.BOXFIT_METHODS="convex_hull_moa"`のときと同じ方法で3Dバウンディングボックスの平面方向の大きさとyaw角を推定
         - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、3Dバウンディングボックスの底面を推定する
             - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイルに基づき底面高さを決める
             - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で除去した地面位置に基づき底面高さを決める（LiDAR使用時のみ適用可能、車両系、motorcycleを想定）
