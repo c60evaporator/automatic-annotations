@@ -432,13 +432,11 @@ Depth Boxfittingは、以下のフローで行われます
     - 以下手順で、インスタンスごとLiDAR点群とDepth点群を混合（あるいはどちらかを選択）し、インスタンスごと点群を確定する
         - インスタンスごとLiDAR点群の点数がMin LiDAR Points to use LiDARパラメータ未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
         - インスタンスごとLiDAR点群の点数がMin LiDAR Points to use LiDARパラメータ以上かつMax LiDAR Points to use Depth未満なら、以下の手順でDepth点群を補正したのちLiDAR点群と混合する
-            - インスタンスごとLiDAR点群がカメラに写っている画素を求め、周囲 (2k+1)×(2k+1) 画素の窓（kは`settings.`で指定）にあるDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）の予測深度の中央値をz_predとする。対応点なしと判定
-            - 対応点の数に応じて以下のようにDepth点群の深さ方向座標を補正する
-                - 対応点の数
-                - 選択した補正式に基づきインスタンスごとDepth点群を仮補正
-            - z_lidar / z_pred の中央値
-            インスタンスごとDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）の深さ方向座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
-            - 
+            - インスタンスごとLiDAR点群（各点の深さ方向座標をz_lidarとする）がカメラに写っている画素を求め、周囲 (2k+1)×(2k+1) 画素の窓（kは`settings.DEPTH_CORRECTION_NEIGHBOR_RADIUS_PX`で指定）にあるDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）の予測深度の中央値をz_predとする。この範囲内にDepth点群が存在しない場合は対応点なしと判定
+            - 対応点の数に応じて以下のようにDepth点群の深さ方向座標を補正する（補正前がz、補正後をz'とする。zは先ほどの仮補正前の座標を用いることに注意）
+                - 対応点の数がMin Correspondences for Pointwise Correction未満のとき: z’ = z * 残った LiDAR 点の距離の中央値 ÷ 残った深度点の予測深度の中央値
+                - 対応点の数がMin Correspondences for Pointwise Correction以上のとき: 直前で求めたz_predとz_lidarを用いて、先ほど選択した補正式に基づきz’を求める
+            - 深さ方向座標補正後のDepth点群とLiDAR点群を合体させたものをインスタンスごと点群とする
         - インスタンスごとLiDAR点群の点数がMax LiDAR Points to use Depth以上なら、Depth点群は使用せずにLiDAR点群のみをインスタンスごと点群として使用する
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
     - 以下手順で複数カメラ間での同一インスタンス結合を実施

@@ -687,6 +687,10 @@ def refilter_sample(
         for key, value in source.items():
             if key.startswith("lshape_") and key not in target:
                 target[key] = value
+    # 深度補正の対応の取り方も Filter Params に無いので run から補う
+    for key in ("min_correspondences", "correspondence_radius"):
+        if key not in lidar_params and key in run_lidar_params:
+            lidar_params[key] = run_lidar_params[key]
     # L 字フィルタの共通設定。Filter Params で指定されていればそれを、
     # 無ければ run の設定を使う
     run_boxfit = run.get("box_fitting_params") or {}

@@ -332,6 +332,15 @@ class Settings(BaseSettings):
     # 0 なら無効（常に深度点群も使う）
     LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 100
     LIDAR_MAX_POINTS_FOR_DEPTH_MAX: int = 500
+    # 深度補正（最終の補正）で、点ごとの対応（LiDAR 点と、その周囲の残った
+    # 深度点の予測深度の中央値）から係数を求めるのに必要な対応点の数。
+    # 届かなければ「残った LiDAR 点の深度の中央値 ÷ 残った深度点の予測深度の
+    # 中央値」で求める（遠方の小さな物体では画素の対応がほとんど取れないため）
+    LIDAR_MIN_CORRESPONDENCES_DEFAULT: int = 3
+    LIDAR_MIN_CORRESPONDENCES_MAX: int = 50
+    # 上の対応を取る近傍の半径 [深度マップの画素]（UI には出さない）。
+    # 深度マップは元画像の DEPTH_MAP_DOWNSCALE 倍なので、2 で元画像の約 ±4 画素
+    DEPTH_CORRECTION_NEIGHBOR_RADIUS_PX: int = 2
     LIDAR_MIN_POINTS_MAX: int = 200
     LIDAR_ROR_NB_POINTS_DEFAULT: int = 3
     LIDAR_ROR_NB_POINTS_MAX: int = 50

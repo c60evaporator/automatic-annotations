@@ -674,6 +674,16 @@ with param_col:
                       "LiDAR で形が取れている場合、深度推定の外れ値が混ざるほうが"
                       "害になるため。0 で無効（常に深度点群も使う）"),
             )
+            min_correspondences = st.slider(
+                "Min Correspondences for Pointwise Correction", 1,
+                settings.LIDAR_MIN_CORRESPONDENCES_MAX,
+                value=settings.LIDAR_MIN_CORRESPONDENCES_DEFAULT, step=1,
+                help=("深度補正で、点ごとの対応（LiDAR 点 ↔ その周囲の"
+                      "フィルタ後に残った深度点）から z_lidar / z_pred の中央値で"
+                      "係数を求めるのに必要な対応点の数。届かなければ、"
+                      "残った LiDAR 点と残った深度点それぞれの深度の中央値の比で求める"
+                      "（遠方の小さな物体では画素の対応がほとんど取れないため）"),
+            )
             st.markdown("**ROR**")
             lidar_ror_nb = st.slider(
                 "nb_points", 1, settings.LIDAR_ROR_NB_POINTS_MAX,
@@ -887,6 +897,9 @@ lidar_params = {
     "min_points": int(min_lidar_points),
     # これ以上の LiDAR 点があるインスタンスは深度点群を使わない
     "max_points_for_depth": int(max_lidar_for_depth),
+    # 深度補正（最終の補正）の対応の取り方
+    "min_correspondences": int(min_correspondences),
+    "correspondence_radius": int(settings.DEPTH_CORRECTION_NEIGHBOR_RADIUS_PX),
     # LiDAR を基準に深度点群を補正する方式。run に記録するため lidar_params に入れる
     "depth_correction": depth_correction_method,
     "ror_nb_points": int(lidar_ror_nb), "ror_radius": float(lidar_ror_radius),

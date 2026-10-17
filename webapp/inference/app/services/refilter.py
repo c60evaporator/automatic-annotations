@@ -288,11 +288,11 @@ def refilter_frame(
             )
             lidar_used = lidar_used[keep]
 
-        # --- 深度点群の補正（1 段目） ----------------------------------
+        # --- 深度点群の仮の補正 ----------------------------------------
         # 外れ値除去の条件を変えると LiDAR 点群が変わるので、
         # 補正係数も作り直す（推論時の値を流用しない）。
-        # 推論と同じく 2 段で行う。1 段目（クロージング後マスク全体の画素）は
-        # フィルタの判定にだけ使い、最終の補正は 2 段目（残った点の画素）
+        # 推論と同じく 2 回行う。仮の補正（クロージング後マスク全体の画素）は
+        # フィルタの判定にだけ使い、最終の補正はフィルタ後に残った点で求める
         initial_correction = None
         lidar_camera: np.ndarray | None = None
         initial_corrected_ego: np.ndarray | None = None
@@ -324,7 +324,7 @@ def refilter_frame(
                     apply_correction(filtered, initial_correction)
                 )
 
-        # 判定に使う点群（1 段目の補正ができれば補正後）
+        # 判定に使う点群（仮の補正ができれば補正後）
         judged = (
             initial_corrected_ego if initial_corrected_ego is not None
             else filtered_ego
@@ -352,17 +352,22 @@ def refilter_frame(
             keep_final[index[~keep]] = False
             keep_distance_applied = True
 
-        # --- 深度点群の補正（2 段目） ----------------------------------
+        # --- 深度点群の最終の補正 --------------------------------------
         correction = None
         corrected_raw_reduced = corrected_filtered_reduced = None
         corrected_lshape = corrected_distance = None
         if lidar_camera is not None:
             from app.services.depth_correction import (
+                DEFAULT_CORRESPONDENCE_RADIUS, DEFAULT_MIN_CORRESPONDENCES,
                 apply_correction, refine_correction,
             )
             correction = refine_correction(
                 lidar_camera, depth, intrinsic, filtered[keep_final],
                 depth_correction_method, initial_correction,
+                radius=int((lidar_params or {}).get(
+                    "correspondence_radius", DEFAULT_CORRESPONDENCE_RADIUS)),
+                min_correspondences=int((lidar_params or {}).get(
+                    "min_correspondences", DEFAULT_MIN_CORRESPONDENCES)),
             )
             if correction is not None:
                 corrected_filtered_ego = to_reference(
