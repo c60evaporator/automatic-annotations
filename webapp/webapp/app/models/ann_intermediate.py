@@ -736,8 +736,10 @@ class BoxFitting3D(Base):
     # 再フィルタ（Apply）の結果と突き合わせ、推論時と一致するかを確かめる
     lshape_filter: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 距離フィルタの結果。{"depth": {...}, "lidar": {...}}（適用しなければ None）。
-    # 各値は applied / num_removed / ref_distance / perceived_width /
-    # side_visible / depth_extent / upper_distance
+    # 各値は applied / method / num_removed / num_points と方式ごとの値
+    # （long_side: ref_distance / long_side / lower_distance / upper_distance、
+    #   dbscan: num_clusters / num_noise / kept_cluster_size / kept_cluster_distance /
+    #   other_cluster_size / other_cluster_distance）
     distance_filter: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # LiDAR を基準に補正した深度点群。補正できなかった場合は None
     # （points_depth_ego が補正前。UI で見比べられるよう両方残す）

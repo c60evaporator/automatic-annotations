@@ -39,6 +39,7 @@ from app.services.inference_client import (
     submit_boxfitting,
 )
 from app.streamlit import state as S
+from app.streamlit.components.sample_token import render_sample_token
 from app.streamlit.components.depth_viewer import colorize_depth, render_depth_grid
 from app.streamlit.components.det2d_viewer import render_label_legend
 from app.streamlit.components.det2d_viewer import color_for as color_for_label
@@ -199,11 +200,27 @@ def lshape_params_differ(params: dict, run_info: dict) -> bool:
     )
 
 
+DISTANCE_PARAM_KEYS = (
+    "methods", "labels", "quantile", "margin", "dbscan_eps", "dbscan_min_samples",
+)
+
+
 def distance_params_differ(params: dict, run_info: dict) -> bool:
     """再フィルタの距離フィルタの設定が、run（推論時）と違うか."""
     base = run_refilter_params(run_info)["distance"]
     applied = params.get("distance") or {}
-    return any(applied.get(k) != base.get(k) for k in ("labels", "quantile", "margin"))
+    return any(applied.get(k) != base.get(k) for k in DISTANCE_PARAM_KEYS)
+
+
+def distance_methods_text(methods: dict | None) -> str:
+    """距離フィルタの方式の表示（{label: method} を方式ごとにまとめる）."""
+    by_method: dict[str, list[str]] = {}
+    for label, method in (methods or {}).items():
+        if method:
+            by_method.setdefault(str(method), []).append(label)
+    if not by_method:
+        return "なし"
+    return " / ".join(f"{m}: {', '.join(ls)}" for m, ls in by_method.items())
 # 深度点群を補正前・補正後のどちらで表示するか
 OPT_PC_DEPTH_INST, W_PC_DEPTH_INST = "boxfit_pc_depth_inst", "_w_boxfit_pc_depth_inst"
 DEPTH_INSTANCE_RAW = "raw"
@@ -519,23 +536,22 @@ with param_col:
 
             st.markdown("**Distance Filter**")
             st.caption(
-                "対象ラベル: " + (", ".join(settings.DISTANCE_FILTER_LABELS) or "なし")
-                + "（config の DISTANCE_FILTER_LABELS で指定。想定サイズは "
+                "方式: " + distance_methods_text(settings.DISTANCE_FILTER_METHODS)
+                + "（config の DISTANCE_FILTER_METHODS で指定。long_side の長辺は "
                 "DEFAULT_BOX_SIZES）"
             )
-            distance_cols = st.columns(2)
+            distance_cols = st.columns(4)
             with distance_cols[0]:
                 distance_quantile = st.slider(
                     "Distance Quantile [%]", 0.0,
                     settings.DISTANCE_FILTER_QUANTILE_MAX,
                     value=settings.DISTANCE_FILTER_QUANTILE_DEFAULT, step=1.0,
                     key="_w_distance_quantile",
-                    help=("L 字フィルタの後、深度と LiDAR に別々に適用する。"
-                          "センサーからの距離のこの分位点を基準距離 ref とし、"
-                          "ref − Margin 〜 ref + 奥行き + Margin の点だけを残す。"
-                          "奥行きは、視線と垂直な見かけの幅が"
-                          "想定サイズの (length + width) / 2 を超えれば width"
-                          "（側面が見えている）、そうでなければ length"),
+                    help=("L 字フィルタの後、深度と LiDAR に別々に適用する（BEV のみ）。"
+                          "センサーからの距離の分位点。long_side ではこれを基準距離 ref "
+                          "とし、ref − Margin 〜 ref + 長辺 + Margin の点だけを残す。"
+                          "dbscan では、点数上位 2 クラスタのどちらが手前かを"
+                          "この分位点で比べる"),
                 )
             with distance_cols[1]:
                 distance_margin = st.slider(
@@ -543,8 +559,27 @@ with param_col:
                     settings.DISTANCE_FILTER_MARGIN_MAX,
                     value=settings.DISTANCE_FILTER_MARGIN_DEFAULT, step=0.05,
                     key="_w_distance_margin",
-                    help=("余裕。手前（ref − Margin）と奥（ref + 奥行き + Margin）の"
-                          "両側に取る。深度推定の誤差や想定サイズとの差を吸収する"),
+                    help=("long_side の余裕。手前（ref − Margin）と奥（ref + 長辺 + "
+                          "Margin）の両側に取る。深度推定の誤差や想定サイズとの差を吸収する"),
+                )
+            with distance_cols[2]:
+                distance_dbscan_eps = st.slider(
+                    "Distance DBSCAN eps [m]", 0.05,
+                    settings.DISTANCE_FILTER_DBSCAN_EPS_MAX,
+                    value=settings.DISTANCE_FILTER_DBSCAN_EPS_DEFAULT, step=0.05,
+                    key="_w_distance_dbscan_eps",
+                    help=("dbscan 方式の DBSCAN（BEV、深度・LiDAR 共通）。"
+                          "点数上位 2 クラスタのうち手前の方だけを残す。"
+                          "物体と背景の隙間より小さく、物体内の点の間隔より大きくする"),
+                )
+            with distance_cols[3]:
+                distance_dbscan_min = st.slider(
+                    "Distance DBSCAN min_samples", 1,
+                    settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_MAX,
+                    value=settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_DEFAULT, step=1,
+                    key="_w_distance_dbscan_min",
+                    help=("dbscan 方式の DBSCAN の min_samples（深度・LiDAR 共通）。"
+                          "LiDAR は点が疎なので小さめにする"),
                 )
 
         with depth_tab:
@@ -791,25 +826,6 @@ with param_col:
                       "最小になる向きを探す。その向きの探索刻み（細かいほど遅い）"),
             )
 
-            st.markdown("**twowheeler_convex_hull_moa**")
-            st.caption("対象ラベル: " + _method_labels("twowheeler_convex_hull_moa"))
-            twowheeler_angle_step_deg = st.slider(
-                "Angle Step [deg]",
-                settings.BOXFIT_ANGLE_STEP_DEG_MIN,
-                settings.BOXFIT_ANGLE_STEP_DEG_MAX,
-                value=settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT, step=0.1,
-                key="_w_boxfit_twowheeler_angle_step",
-                help=("内部で使う MOA の向きの探索刻み。MOA で当てはめた後、"
-                      "見かけの幅（凸包の方位角の広がり × 箱の中心までの距離）が"
-                      "想定サイズの (length + width) / 2 以下なら前後面しか見えて"
-                      "いないとみなし、MOA の 2 軸のうち視線に近い方を進行方向にして"
-                      "向きを視線方向へ直す（大きさは MOA のまま）"),
-            )
-            st.caption(
-                "側面／前後面の判定は距離フィルタと同じ規則"
-                "（想定サイズは config の DEFAULT_BOX_SIZES）"
-            )
-
 mask_params = {
     "dilation": int(mask_dilation), "erosion": int(mask_erosion),
     # 小物体（短辺が閾値以下）は収縮を弱める
@@ -829,11 +845,8 @@ box_fitting_params = {
     # ラベルごとの手法と、手法ごとの設定
     "methods": dict(settings.BOXFIT_METHODS),
     "convex_hull_moa": {"angle_step_deg": float(angle_step_deg)},
-    "twowheeler_convex_hull_moa": {
-        "angle_step_deg": float(twowheeler_angle_step_deg),
-    },
     # ラベルごとの想定サイズ (length, width, height)。
-    # 距離フィルタと twowheeler の判定に使う
+    # 距離フィルタ（long_side）の長辺に使う
     "box_sizes": {k: [float(x) for x in v]
                   for k, v in settings.DEFAULT_BOX_SIZES.items()},
     "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
@@ -852,9 +865,11 @@ box_fitting_params = {
     },
     # 距離フィルタ（L 字フィルタの直後、深度と LiDAR に別々に適用）
     "distance_filter": {
-        "labels": list(settings.DISTANCE_FILTER_LABELS),
+        "methods": dict(settings.DISTANCE_FILTER_METHODS),
         "quantile": float(distance_quantile),
         "margin": float(distance_margin),
+        "dbscan_eps": float(distance_dbscan_eps),
+        "dbscan_min_samples": int(distance_dbscan_min),
     },
 }
 depth_params = {
@@ -1121,6 +1136,7 @@ with depth_tab_view:
     view_col, opt_col = st.columns([8, 1])
 
     with opt_col:
+        render_sample_token(selected_sample["token"])
         S.init_sticky(W_SHOW_MASKS, OPT_SHOW_MASKS, MASK_MODES[0])
         show_masks = st.radio(
             "Show masks", MASK_MODES, key=W_SHOW_MASKS,
@@ -1257,6 +1273,7 @@ with pointcloud_tab_view:
     view_col, opt_col = st.columns([8, 1])
 
     with opt_col:
+        render_sample_token(selected_sample["token"])
         show_raw_lidar = st.checkbox(
             "Raw LiDAR", value=settings.SHOW_RAW_LIDAR,
             key="_w_pc_raw_lidar",
@@ -1724,11 +1741,11 @@ with pointcloud_tab_view:
                 ((run_info or {}).get("box_fitting_params") or {})
                 .get("distance_filter") or {}
             )
-            # 対象ラベルは run の値（導入前の run は config の値で試せるようにする）
-            distance_labels = list(
-                run_distance.get("labels", settings.DISTANCE_FILTER_LABELS)
+            # 方式は run の値（導入前・旧方式の run は config の値で試せるようにする）
+            distance_methods = dict(
+                run_distance.get("methods") or settings.DISTANCE_FILTER_METHODS
             )
-            st.caption("対象ラベル: " + (", ".join(distance_labels) or "なし"))
+            st.caption("方式: " + distance_methods_text(distance_methods))
             dist_cols = st.columns(4)
             with dist_cols[0]:
                 dist_q_new = _slider(
@@ -1742,6 +1759,20 @@ with pointcloud_tab_view:
                     settings.DISTANCE_FILTER_MARGIN_MAX,
                     float(run_distance.get(
                         "margin", settings.DISTANCE_FILTER_MARGIN_DEFAULT)), 0.05)
+            with dist_cols[2]:
+                dist_eps_new = _slider(
+                    "Distance DBSCAN eps [m]", "dist_eps", 0.05,
+                    settings.DISTANCE_FILTER_DBSCAN_EPS_MAX,
+                    float(run_distance.get(
+                        "dbscan_eps", settings.DISTANCE_FILTER_DBSCAN_EPS_DEFAULT)),
+                    0.05)
+            with dist_cols[3]:
+                dist_min_new = _slider(
+                    "Distance DBSCAN min_samples", "dist_min", 1,
+                    settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_MAX,
+                    int(run_distance.get(
+                        "dbscan_min_samples",
+                        settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_DEFAULT)), 1)
 
             apply_col, reset_col, _spacer = st.columns([1, 1, 6])
             with apply_col:
@@ -1800,9 +1831,11 @@ with pointcloud_tab_view:
                         # 想定サイズ（box_sizes）は送らない。サービスが run の
                         # 値で補う（導入前の run は config の値）
                         "distance": {
-                            "labels": distance_labels,
+                            "methods": distance_methods,
                             "quantile": float(dist_q_new),
                             "margin": float(dist_margin_new),
+                            "dbscan_eps": float(dist_eps_new),
+                            "dbscan_min_samples": int(dist_min_new),
                         },
                     }
                     st.rerun()
@@ -1929,6 +1962,7 @@ with fitting_tab_view:
     bf_view_col, bf_opt_col = st.columns([8, 1])
 
     with bf_opt_col:
+        render_sample_token(selected_sample["token"])
         compare_gt = st.checkbox(
             "Compare with GT", value=False, key="_w_bf_compare_gt",
             help="GT ボックスの BEV を左に並べて表示する",
@@ -2097,6 +2131,7 @@ with cam_tab_view:
     cam_view_col, cam_opt_col = st.columns([8, 1])
 
     with cam_opt_col:
+        render_sample_token(selected_sample["token"])
         cam_compare_gt = st.checkbox(
             "Compare with GT", value=False, key="_w_cam_compare_gt",
             help="GT の 3D ボックスを左に並べて表示する",

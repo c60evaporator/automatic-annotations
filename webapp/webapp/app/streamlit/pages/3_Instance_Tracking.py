@@ -38,6 +38,7 @@ from app.services.instance_tracking_service import (
 from app.services.sample_service import get_skipped_sample_indices
 from app.services.sweep_service import MAX_SWEEPS_PER_SAMPLE
 from app.streamlit import state as S
+from app.streamlit.components.sample_token import render_sample_token
 from app.streamlit.components.det2d_viewer import render_label_legend
 from app.streamlit.components.instance_tracking_viewer import (
     BOX_MODE_INSTANCE,
@@ -519,6 +520,8 @@ for sensor in cam_sensors:
 can_compare = is_fb_run or selected_sample_idx in interval_sample_indices
 
 with opt_col:
+    # 選択中の sample_token（調査時に DB と突き合わせるため）
+    render_sample_token(selected_sample["token"])
     # 前の区間からの伝播マスクと、今回の区間の推論マスクを左右に並べる。
     # 両方が存在するのはプロンプトを与えた sample だけなので、
     # それ以外を選んでいる間は操作できないようにする

@@ -414,8 +414,8 @@ class Settings(BaseSettings):
     DEFAULT_MERGE_LABEL_MATCH: str = "category_group"
 
     # --- 物体の想定サイズ ---------------------------------------------------
-    # ラベルごとの (length, width, height) [m]。距離フィルタと
-    # twowheeler_convex_hull_moa の「側面が見えているか」の判定に使う。
+    # ラベルごとの (length, width, height) [m]。距離フィルタ（long_side）で
+    # 長辺（length と width の大きい方）を奥行きの上限に使う。
     # run には box_fitting_params["box_sizes"] として残る。
     # TODO: 仮の値（nuScenes の各カテゴリの平均的な寸法の目安）。
     #       統計を取って差し替える
@@ -436,23 +436,21 @@ class Settings(BaseSettings):
     # ラベルごとの当てはめ手法。ここに無いラベルは convex_hull_moa。
     #   convex_hull_moa: BEV の凸包に対し、角度を刻んで
     #     センサーから見たオクルージョン面積が最小になる向きを探す
-    #   twowheeler_convex_hull_moa: 二輪車用。MOA で当てはめた後、
-    #     前後面しか見えていなければ（見かけの幅が DEFAULT_BOX_SIZES の
-    #     (length + width) / 2 以下）向きを視線方向へ直す
+    # 今は全ラベル convex_hull_moa。向き推定（PartHOE / Orient Anything など）を
+    # 足すときに、ラベルごとに手法を切り替える差し込み口として辞書にしている
     BOXFIT_METHODS: dict[str, str] = {
         "car": "convex_hull_moa",
         "truck": "convex_hull_moa",
         "bus": "convex_hull_moa",
         "trailer": "convex_hull_moa",
         "construction_vehicle": "convex_hull_moa",
-        "bicycle": "twowheeler_convex_hull_moa",
-        "motorcycle": "twowheeler_convex_hull_moa",
+        "bicycle": "convex_hull_moa",
+        "motorcycle": "convex_hull_moa",
         "pedestrian": "convex_hull_moa",
         "traffic_cone": "convex_hull_moa",
         "barrier": "convex_hull_moa",
     }
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
-    # （手法ごとに設定する。twowheeler も内部で MOA を使う）
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
     BOXFIT_ANGLE_STEP_DEG_MAX: float = 10.0
@@ -506,20 +504,33 @@ class Settings(BaseSettings):
     LSHAPE_VIOLATION_WEIGHT_MAX: float = 20.0
 
     # --- 距離フィルタ（General タブ） --------------------------------------
-    # 想定サイズ（DEFAULT_BOX_SIZES）から、視線方向に奥へ伸びた尾状ノイズを
-    # 落とす。L 字フィルタの直後に、深度と LiDAR に別々に適用する
-    # （深度は LiDAR と混ぜる前に落とす）。有効／無効の切り替えは無く、
-    # 対象ラベルを空にすれば無効になる
-    DISTANCE_FILTER_LABELS: list[str] = [
-        "bicycle", "motorcycle", "pedestrian", "traffic_cone",
-    ]
-    # 基準距離 ref に使う、センサーからの距離の分位点 [%]。
-    # ref − Margin 〜 ref + 奥行き + Margin の点を残す
+    # 物体の前後方向に大きく外れた点を落とす。L 字フィルタの直後に、深度と
+    # LiDAR に別々に適用する（深度は LiDAR と混ぜる前に落とす）。XY（BEV）のみで判定。
+    # ラベルごとの方式（ここに無いラベル・None は何もしない）:
+    #   long_side: 距離の分位点を基準距離 ref とし、
+    #     ref − Margin 〜 ref + 長辺（DEFAULT_BOX_SIZES）+ Margin の点を残す
+    #   dbscan: BEV で DBSCAN を行い、点数上位 2 クラスタのうち手前
+    #     （距離の分位点で比較）の方だけを残す。壁のすぐ手前を走る自転車などで、
+    #     背景の塊を落とす
+    DISTANCE_FILTER_METHODS: dict[str, str | None] = {
+        "bicycle": "dbscan",
+        "motorcycle": "long_side",
+        "pedestrian": "long_side",
+        "traffic_cone": "long_side",
+    }
+    # 距離の分位点 [%]。long_side の基準距離と、dbscan の「手前」の比較に使う
     DISTANCE_FILTER_QUANTILE_DEFAULT: float = 5.0
     DISTANCE_FILTER_QUANTILE_MAX: float = 50.0
-    # 余裕 [m]。手前（ref − Margin）と奥の両側に取る
-    DISTANCE_FILTER_MARGIN_DEFAULT: float = 0.2
+    # long_side の余裕 [m]。手前（ref − Margin）と奥の両側に取る
+    DISTANCE_FILTER_MARGIN_DEFAULT: float = 0.3
     DISTANCE_FILTER_MARGIN_MAX: float = 3.0
+    # dbscan の DBSCAN パラメータ（BEV。深度・LiDAR 共通）。
+    # eps は物体と背景の隙間（例: 壁の 1 m 手前の自転車なら 1 m）より小さく、
+    # 物体内の点の間隔より大きく。LiDAR は点が疎なので min_samples は小さめ
+    DISTANCE_FILTER_DBSCAN_EPS_DEFAULT: float = 0.5
+    DISTANCE_FILTER_DBSCAN_EPS_MAX: float = 3.0
+    DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_DEFAULT: int = 3
+    DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_MAX: int = 50
 
     # 点群ビューの Global View の視点。
     # global 座標に対する既定の視線位置と上方向で、

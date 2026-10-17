@@ -47,6 +47,7 @@ from app.services.detection2d_service import (
 from app.services.sample_service import get_skipped_sample_indices
 from app.services.frame_image import get_keyframe_image
 from app.streamlit import state as S
+from app.streamlit.components.sample_token import render_sample_token
 from app.streamlit.components.det2d_viewer import (
     TEXT_MODES,
     count_by_label,
@@ -549,6 +550,8 @@ for sensor in cam_sensors:
     items.append(item)
 
 with opt_col:
+    # 選択中の sample_token（調査時に DB と突き合わせるため）
+    render_sample_token(selected_sample["token"])
     S.init_sticky(W_SHOW_GT, OPT_SHOW_GT, False)
     st.checkbox(
         "Compare with GT", key=W_SHOW_GT,

@@ -370,13 +370,29 @@ Depth Boxfittingは、以下のフローで行われます
             - 収縮: Dilationパラメータを使用
             - 膨張: 基本はErosionパラメータを使用するが、マスクの短辺がSmall Mask Short Side以下なら`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`を使用する
         - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
-        - インスタンスごとDepth点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
-            - RORのnb_points: Depth ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛け、マスクの 短辺がSmall Mask Short Side以下ならさらに掛ける
-            - RORのradius: Depth ROR nb_pointsパラメータをそのまま用いる
-            - DBSCANのmin_samples: Depth DBSCAN min_samplesパラメータを用い、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
-            - DBSCANのeps: Depth DBSCAN epsパラメータをそのまま用いる
-        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、Depth点群に以下の「L-shape Filter」を実施し、フィッティングしたL字平面から自車側に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
-            - 手順1: ビンごとに輪郭点検出と重み付け（Support BandパラメータはInference ParametersのGeneralタブで、Azimuth Bin、Near QuantileはDepth Estimationタブで指定）
+    - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
+        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
+        - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
+        - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
+    - 以下のフィルタ処理をインスタンスごとDepth点群、LiDAR点群それぞれに加え、ノイズを除去する
+        - フィルタ1: ROR/DBSCAN。RORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
+            - Depth点群
+                - RORのnb_points: Depth ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛け、マスクの 短辺がSmall Mask Short Side以下ならさらに掛ける
+                - RORのradius: Depth ROR nb_pointsパラメータをそのまま用いる
+                - DBSCANのmin_samples: Depth DBSCAN min_samplesパラメータを用い、マスクの短辺がSmall Mask Short Side以下ならさらに掛ける
+                - DBSCANのeps: Depth DBSCAN epsパラメータをそのまま用いる
+            - LiDAR点群
+                - RORのnb_points: LiDAR ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛ける
+                - RORのradius: LiDAR ROR nb_pointsパラメータをそのまま用いる
+                - DBSCANのmin_samples: LiDAR DBSCAN min_samplesパラメータをそのまま用いる
+                - DBSCANのeps: LiDAR DBSCAN epxパラメータをそのまま用いる
+        - インスタンスごとDepth点群の補正式選択: インスタンスごとLiDAR点群が存在する場合、LiDAR PointcloudタブのDepth Correctionパラメータに基づき、Depth点群の深さ方向座標zの補正式を選択します（zが補正前、z'が補正後）。この補正式は直後の仮補正と、Depth点群とLiDAR点群結合時の補正の両方に使用します
+            - Depth Correction=scaleのとき:	z’ = s·z（s = median(z_lidar,i / z_pred,i)）
+            - Depth Correction=shiftのとき: z’ = z + o（o = median(z_lidar,i − z_pred,i)）
+            - Depth Correction=affineのとき: z’ = a·z + b（最小二乗。対応点が5点未満なら scale に切り替える）
+        - インスタンスごとDepth点群の仮補正: インスタンスごとLiDAR点群が存在する場合、マスク内でLiDAR点が当たった画素の予測深度（Depth点群のz座標）z_predと、そのLiDAR点の深度z_lidarから、直前で選択した補正式に基づきインスタンスごとDepth点群を仮補正（フィルタ2と3を精度良く適用できるようにすることが目的。L 字フィルタのMarginや距離フィルタの長辺などは、補正前の深度だとずれるためですマスクの縁で背景を拾った画素も対応に入るので、係数としては信頼できません）
+        - フィルタ2: L-shape Filter。インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、以下の「L-shape Filter」を実施し、フィッティングしたL字平面から自車側に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
+            - 手順1: ビンごとに輪郭点検出と重み付け（Support BandパラメータはInference ParametersのGeneralタブで、Azimuth Bin、Near QuantileはDepth点群に適用するものはDepth Estimationタブで、LiDAR点群で適用するものはLiDAR Pointcloudタブで指定）
                 - 自車から見た方位角を、Azimuth Bin幅のビンに分ける
                 - 各ビンで、自車からの距離のNear Quantileパーセンタイルの位置にある点（横方向座標はビンの中心）を輪郭点とする
                 - 各ビンで、自車から輪郭点までの距離から ±Support Band以内にある点の数で、輪郭点に重み付けする
@@ -400,35 +416,30 @@ Depth Boxfittingは、以下のフローで行われます
                 - 点群の各点に関して、以下手順でL字平面でより一定以上手前にあるかを判定し、条件を満たす場合インスタンスごと点群から削除する
                     - センサ位置から各点へ向かう視線が、各L字平面を越える距離を求める。視線と交わらない平面は判定対象外とし、どの平面とも交わらない点は以降の判定をしない（残す）
                     - 各L字平面を越える距離の最大値を基準距離とする（視線がL字平面で囲われた領域に入る距離を意味する）
+                    - 以下のようにMarginを求める
+                        - Depth点群の場合: Depth EstimationタブにあるMargin Min, Margin Ratioパラメータを用い、Margin = max(Margin Min, Margin Ratio × 基準距離)
+                        - LiDAR点群の場合: LiDAR PointcloudタブにあるMarginをそのまま用いる（LiDARは距離測定精度が高いため、Depth点群のときのように距離に応じて動的に閾値は変えない。なお、LiDAR L-shape Margin < L-shape Support Bandなら、LiDAR L-shape Marginは判定に寄与しない）
                     - 次の2条件を両方満たす点を消す（基準より奥の点は消さない）
-                        - 視線方向の不足量（基準距離 − 点の距離）＞ max(Margin Min, Margin Ratio × 基準距離)
+                        - 視線方向の不足量（基準距離 − 点の距離）＞ Margin
                         - 基準距離を決めた線から、垂直方向にも Support Band を超えて手前に出ている（浅い角度で見えている面の点は、視線方向の不足量だけが大きく出るので、この条件で守る）
-        - インスタンスのラベルが`settings.DISTANCE_FILTER_LABELS`に含まれる場合、Depth点群に以下の「Distance Filter」を実施し、ラベルの規定ボックスサイズから大きく前後方に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
-            - 以下の手順で、視線に垂直な方向に対するオブジェクトの概算角度θを求める
-                - 対象インスタンス点群の視線に垂直な方向の幅 < 短辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち小さい方）のとき: θ=0（正面か背面が見えている）
-                - 対象インスタンス点群の視線に垂直な方向の幅 > 長辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち大きい方）のとき: θ=π/2（側面が真っ直ぐ見えている）
-                - それ以外のとき: θ=arccos(対象インスタンス点群の視線に垂直な方向の幅÷長辺)
-            - 対象インスタンス点群のセンサからの距離の分位点（Distance Quantileパラメータで指定）を基準距離とする
-            - 以下で求めた前側距離から後側距離の間にある対象インスタンスの点群のみを残し、それ以外を削除
+        - フィルタ3: Distance Filter。ラベルごとに指定した`settings.DISTANCE_FILTER_METHODS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の「Distance Filter」を実施し、ラベルの規定サイズから大きく前後方に外れた点を削除する。この処理はXY座標（BEV座標）のみを用いて実施し、Z座標は用いない
+            - `settings.DISTANCE_FILTER_METHODS=None`のとき: 何も実施しない（点群をそのまま残す）
+            - `settings.DISTANCE_FILTER_METHODS="long_side"`のとき: 以下で求めた前側距離から後側距離の間にある対象インスタンスの点群のみを残し、それ以外を削除（motorcycle, pedestrian, traffic_coneを想定）
+                - 対象インスタンス点群のセンサからの距離の分位点（Distance Quantileパラメータで指定）を基準距離とする
                 - 前側距離: 基準距離 - Distance Marginパラメータ
-                - 後側距離: 基準距離 + 長辺×sinθ + Distance Marginパラメータ
-    - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
-        - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
-        - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
-        - キーフレーム内の全インスタンスマスクを走査し、LiDAR点群をインスタンスマスクに投影し、インスタンスごとLiDAR点群を得る
-        - インスタンスごとLiDAR点群にRORとDBSCANによるノイズ除去を順番に適用する。各種パラメータは以下の値を使用する
-            - RORのnb_points: LiDAR ROR nb_pointsパラメータにラベルごとに異なる`settings.NB_POINTS_RATIO`を掛ける
-            - RORのradius: LiDAR ROR nb_pointsパラメータをそのまま用いる
-            - DBSCANのmin_samples: LiDAR DBSCAN min_samplesパラメータをそのまま用いる
-            - DBSCANのeps: LiDAR DBSCAN epxパラメータをそのまま用いる
-        - インスタンスのラベルが`settings.LSHAPE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順で「L-shape Filter」を実施し、フィッティングしたL字平面から自車側に外れた点を削除する。各種パラメータは以下の値を使用する
-            - L-shape Support Band、L-shape Violation Weight、`settings.LSHAPE_ANGLE_STEP_DEG`、`settings.LSHAPE_ADJUST_RANGE_DEG`、`settings.LSHAPE_ADJUST_STEP_DEG`、`settings.LSHAPE_BOUNDARY_QUANTILE`: Depth点群のL字平面フィッティングと同じ値を使用する
-            - Azimuth Bin: LiDAR L-shape Azimuth Binパラメータを使用
-            - Near Quantile: LiDAR L-shape Near Quantileパラメータを使用
-            - Margin Min: LiDAR L-shape Marginパラメータを使用（LiDARは距離測定精度が高いため、Depth点群のときのように距離に応じて動的に閾値は変えない。すなわちMargin Ratioパラメータは使用しない。なお、LiDAR L-shape Margin < L-shape Support Bandなら、LiDAR L-shape Marginは判定に寄与しない）
-        - インスタンスのラベルが`settings.DISTANCE_FILTER_LABELS`に含まれる場合、LiDAR点群にDepth点群と同じ手順で「Distance Filter」を実施（パラメータもDepth点群と同じ値を使用）
-        - インスタンスごとLiDAR点群の点数が閾値未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
-        - インスタンスごとLiDAR点群の点数が閾値以上なら、インスタンスごとDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）のz座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
+                - 後側距離: 基準距離 + 長辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち大きい方 + Distance Marginパラメータ
+            - `settings.DISTANCE_FILTER_METHODS="dbscan"`のとき: インスタンス点群にDBSCANを適用し、点数上位2クラスタのうち手前にある方のみを残す（eps, min_sampleパラメータはDistance Filter用のepsパラメータとmin_sampleパラメータを準備する。bicycleで物体点群と背景点群に大きく別れるケースで、背景点群を削除することを意図）
+    - 以下手順で、インスタンスごとLiDAR点群とDepth点群を混合（あるいはどちらかを選択）し、インスタンスごと点群を確定する
+        - インスタンスごとLiDAR点群の点数がMin LiDAR Points to use LiDARパラメータ未満なら、LiDAR点群は使用せずにDepth点群のみをインスタンスごと点群として使用する
+        - インスタンスごとLiDAR点群の点数がMin LiDAR Points to use LiDARパラメータ以上かつMax LiDAR Points to use Depth未満なら、以下の手順でDepth点群を補正したのちLiDAR点群と混合する
+            - インスタンスごとLiDAR点群がカメラに写っている画素を求め、周囲 (2k+1)×(2k+1) 画素の窓（kは`settings.`で指定）にあるDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）の予測深度の中央値をz_predとする。対応点なしと判定
+            - 対応点の数に応じて以下のようにDepth点群の深さ方向座標を補正する
+                - 対応点の数
+                - 選択した補正式に基づきインスタンスごとDepth点群を仮補正
+            - z_lidar / z_pred の中央値
+            インスタンスごとDepth点群（ROR/DBSCAN, L-shape Filter, Distance Filter適用後）の深さ方向座標に`median(z_lidar / z_depth)`を掛けて（z_lidar、z_depthは対応するLiDAR点が存在するインスタンスマスクの点から得た組み合わせ）深さ方向位置を補正したのち、LiDAR点群と混合してインスタンスごと点群とする
+            - 
+        - インスタンスごとLiDAR点群の点数がMax LiDAR Points to use Depth以上なら、Depth点群は使用せずにLiDAR点群のみをインスタンスごと点群として使用する
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
     - 以下手順で複数カメラ間での同一インスタンス結合を実施
         - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下かつLabel Matchパラメータで指定した属性が一致する組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
@@ -439,9 +450,8 @@ Depth Boxfittingは、以下のフローで行われます
         - ラベルごとに指定した`settings.BOXFIT_METHODS`辞書（keyがラベル名、valueが推定方法）に基づき、 以下のようにバウンディングボックスの平面方向の大きさと角度（yaw角）を推定する
             - `settings.BOXFIT_METHODS="convex_hull_moa"`のとき（車両系を想定）
                 - [こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさとyaw角を推定
-            - `settings.BOXFIT_METHODS="twowheeler_convex_hull_moa"`のとき（二輪車系を想定）
-                - grobal_track点群の視線に垂直な方向の幅 < 短辺（`settings.DEFAULT_BOX_SIZES`から取得。幅と長さのうち小さい方）の場合: 「短辺がまっすぐ見えている」とみなし、`settings.DEFAULT_BOX_SIZES`の大きさのボックスを、角度は視線方向、奥行き方向の位置はボックスの前面がセンサに最も近い点群と接するよう、視線垂直方向の位置はボックス前面の中心が点群の視線垂直方向座標の平均と一致するように設置する
-                - それ以外の場合: `settings.BOXFIT_METHODS="convex_hull_moa"`のときと同じ方法で3Dバウンディングボックスの平面方向の大きさとyaw角を推定
+            - `settings.BOXFIT_METHODS="part_hoe"`のとき
+                - da
         - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、3Dバウンディングボックスの底面を推定する
             - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイルに基づき底面高さを決める
             - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で除去した地面位置に基づき底面高さを決める（LiDAR使用時のみ適用可能、車両系、motorcycleを想定）
