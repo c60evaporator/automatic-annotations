@@ -497,10 +497,13 @@ class Settings(BaseSettings):
     BOX_BOTTOM_MIN_GROUND_POINTS_DEFAULT: int = 10
     BOX_BOTTOM_MIN_GROUND_POINTS_MAX: int = 200
     # 地面点から底面の高さを求める方法
-    #   median        : 地面点の z の中央値
+    #   percentile    : 地面点の z の分位点（BOX_BOTTOM_GROUND_PERCENTILE）
     #   least_squares : 地面点に平面を最小二乗で当てはめ、箱の XY 中心での高さ
-    BOX_BOTTOM_GROUND_HEIGHT_METHODS: list[str] = ["median", "least_squares"]
-    BOX_BOTTOM_GROUND_HEIGHT_METHOD_DEFAULT: str = "median"
+    BOX_BOTTOM_GROUND_HEIGHT_METHODS: list[str] = ["percentile", "least_squares"]
+    BOX_BOTTOM_GROUND_HEIGHT_METHOD_DEFAULT: str = "percentile"
+    # percentile 方式の分位点 [%]。中央値（50）より低くするのは、歩道や縁石の
+    # 点が混ざると路面より高く出るため
+    BOX_BOTTOM_GROUND_PERCENTILE_DEFAULT: float = 30.0
     # 当てはめに必要な点数の下限。これに届かないインスタンスはボックスを
     # 作らない（点群は残す）。点が少なすぎると BEV の凸包が線や点に潰れ、
     # 向きも大きさも意味を持たない。

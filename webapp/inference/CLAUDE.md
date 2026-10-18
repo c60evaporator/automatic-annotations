@@ -439,7 +439,7 @@ Depth Boxfittingは、以下のフローで行われます
             - 深さ方向座標補正後のDepth点群とLiDAR点群を合体させたものをインスタンスごと点群とする
         - インスタンスごとLiDAR点群の点数がMax LiDAR Points to use Depth以上なら、Depth点群は使用せずにLiDAR点群のみをインスタンスごと点群として使用する
         - インスタンスごと点群の点数が0なら、そのインスタンスは削除する
-    - 以下手順で複数カメラ間での同一インスタンス結合を実施
+    - 以下手順で複数カメラ間での同一インスタンス結合を実施してglobal_track_idを割り当てる。なお結合を実施しない場合は（カメラ, track_id）ごとに global_track_idを割り当て
         - 別カメラのインスタンスごと点群の組み合わせのうち、上から見たXY座標での凸包のIoS（小さい方に対する重なり率）が閾値（Overlap Threshold）以上かつ中心距離がMax Centroid Distance以下かつLabel Matchパラメータで指定した属性が一致する組み合わせをHungarian algorithmで結合し、同一のインスタンスID（global_track_id）を割り振る（ただし、同一カメラかつ同一フレームを含む、またはフレームがMax Same-Camera Gap以上離れているトラック同士は結合されないようにする）
             - 例外処理として、Label Match=category_groupの場合に結合候補が2つ以上存在する場合、IoSが閾値を超えている限りは、IoSの大小よりもlabelの一致を優先する（labelが異なる結合されにくくするため）
         - 結合されなかったインスタンスには個別のインスタンスIDを割り振る
@@ -451,20 +451,31 @@ Depth Boxfittingは、以下のフローで行われます
             - `settings.BOXFIT_METHODS="part_hoe"`のとき
                 - da
         - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、3Dバウンディングボックスの底面を推定する
-            - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイルに基づき底面高さを決める
+            - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイル（Bottom Estimation z_percentileパラメータで指定）に基づき底面高さを決める
             - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で除去した地面位置に基づき底面高さを決める（LiDAR使用時のみ適用可能）。地面推定時には全ての地面点群を使うのではなく、Box外形からのXY平面上距離が一定以内の地面点群を用い、Ground Height Methodパラメータに応じて以下のようにボックス底面高さを推定する。なお地面点群の数がMin Ground Points以下なら、`settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のときの方法で底面高さを決める
-                - Ground Height Method=medianのとき: 地面点群のz座標のmedianをボックス底面高さとする
+                - Ground Height Method=percentileのとき: 地面点群のz座標のパーセンタイル（Bottom Estimation Ground Percintileパラメータで指定）をボックス底面高さとする
                 - Ground Height Method=least squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
             - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
         - grobal_track点群のz座標の分位点に基づき上面高さを決める（後で複数フレームを考慮して補正）
-    - global_track_idごとに所属する全てのフレームを考慮し、以下のバウンディングボックスの高さ、幅、奥行き補正を実施する
+    - global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する
         - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施
             - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Box Height Correction Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。補正時は底面を固定し、上面の位置を動かす
+            - `settings.BOX_SIZE_CORRECTIONS="default"`のとき: そのラベルの`setting.DEFAULTE_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
             - `settings.BOX_HEIGHT_CORRECTIONS=None`のとき: 補正しない
-        - ラベルごとに指定した`settings.BOX_SIZE_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅・奥行き補正を実施する。補正時は自車から近い2面（見えている面）を固定し、反対側の2面を動かす
-            - `settings.BOX_SIZE_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さ、幅の分位点（Box Size Correction Percentileパラメータで指定）をそのglobal_track共通のボックス長さ、幅とする
-            - `settings.BOX_SIZE_CORRECTIONS="default"`のとき: そのラベルの`setting.DEFAULTE_BOX_SIZES`を、そのglobal_track共通のボックス長さ、幅とする
-            - `settings.BOX_SIZE_CORRECTIONS=None`のとき: 補正しない
+        - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定
+            - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
+            - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
+            - 以下のように面が見えているかを判定する
+                - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
+                - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
+        - ラベルごとに指定した`settings.BOX_WIDTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅補正を実施する。補正対象の面（車両の場合前面または後面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は前面と後面の中心を固定して対称に両面を動かす
+            - `settings.BOX_WIDTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の分位点（Box Size Correction Percentileパラメータで指定）をそのglobal_track共通のボックス幅とする
+            - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: そのラベルの`setting.DEFAULTE_BOX_SIZES`の幅を、そのglobal_track共通のボックス幅とする
+            - `settings.BOX_WIDTH_CORRECTIONS=None`のとき: 補正しない
+        - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する。補正対象の面（車両の場合両側面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は両側面の中心を固定して対称に両面を動かす
+            - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Box Size Correction Percentileパラメータで指定）をそのglobal_track共通のボックス長さとする
+            - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`setting.DEFAULTE_BOX_SIZES`の長さを、そのglobal_track共通のボックス長さとする
+            - `settings.BOX_LENGTH_CORRECTIONS=None`のとき: 補正しない
 
 ### 推論に使用するパラメータ
 

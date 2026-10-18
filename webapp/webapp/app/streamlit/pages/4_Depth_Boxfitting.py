@@ -869,9 +869,18 @@ with param_col:
                     index=settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS.index(
                         settings.BOX_BOTTOM_GROUND_HEIGHT_METHOD_DEFAULT),
                     horizontal=True, key="_w_boxfit_ground_height_method",
-                    help=("median: 地面点の z の中央値 / least_squares: 地面点に"
-                          "平面を最小二乗で当てはめ、箱の XY 中心での高さ"
-                          "（坂道で手前の地面に偏らない）"),
+                    help=("percentile: 地面点の z の分位点（下の Ground Percentile）/ "
+                          "least_squares: 地面点に平面を最小二乗で当てはめ、"
+                          "箱の XY 中心での高さ（坂道で手前の地面に偏らない）"),
+                )
+                ground_percentile = st.slider(
+                    "Ground Percentile [%]", 0.0, 100.0,
+                    value=settings.BOX_BOTTOM_GROUND_PERCENTILE_DEFAULT, step=5.0,
+                    key="_w_boxfit_ground_percentile",
+                    disabled=ground_height_method != "percentile",
+                    help=("Ground Height Method=percentile のときの、地面点の z の"
+                          "分位点。50 で中央値。歩道や縁石の点が混ざると路面より"
+                          "高く出るので、中央値より低めにする"),
                 )
 
             st.markdown("**Top Estimation**")
@@ -914,6 +923,7 @@ box_fitting_params = {
         "ground_radius": float(ground_radius),
         "min_ground_points": int(min_ground_points),
         "ground_height_method": str(ground_height_method),
+        "ground_percentile": float(ground_percentile),
     },
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),

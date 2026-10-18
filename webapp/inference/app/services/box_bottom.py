@@ -11,7 +11,9 @@
                Ground Estimation Radius 以内**の点から求める
                （Use LiDAR のときだけ。地面点が Min Ground Points 以下なら
                percentile に切り替える）
-                 median        : 地面点の z の中央値
+                 percentile    : 地面点の z の分位点（Ground Percentile。既定 30%）。
+                                 中央値より低くするのは、歩道や縁石の点が
+                                 混ざると路面より高く出るため
                  least_squares : 地面点に平面 z = a·x + b·y + c を最小二乗で
                                  当てはめ、箱の XY 中心での高さ
   ego        … 基準 ego 座標の z = 0（自車の接地面にそろえる）
@@ -36,10 +38,13 @@ BOTTOM_GROUND = "ground"
 BOTTOM_EGO = "ego"
 BOTTOM_METHODS = (BOTTOM_PERCENTILE, BOTTOM_GROUND, BOTTOM_EGO)
 
-GROUND_HEIGHT_MEDIAN = "median"
+GROUND_HEIGHT_PERCENTILE = "percentile"
 GROUND_HEIGHT_LEAST_SQUARES = "least_squares"
+# 旧名（中央値）。古い run は percentile 50 として扱う
+GROUND_HEIGHT_MEDIAN = "median"
 
 DEFAULT_GROUND_RADIUS = 2.0
+DEFAULT_GROUND_PERCENTILE = 30.0
 DEFAULT_MIN_GROUND_POINTS = 10
 # 底面を下げた結果、箱がこれより低くなる（上下が逆転するなど）場合は
 # 底面を変えない
@@ -63,8 +68,20 @@ def bottom_settings(
         "min_ground_points": int(
             bottom.get("min_ground_points", DEFAULT_MIN_GROUND_POINTS)
         ),
-        "ground_height_method": str(
-            bottom.get("ground_height_method", GROUND_HEIGHT_MEDIAN)
+        **_ground_height_settings(bottom),
+    }
+
+
+def _ground_height_settings(bottom: dict[str, Any]) -> dict[str, Any]:
+    method = str(bottom.get("ground_height_method", GROUND_HEIGHT_PERCENTILE))
+    if method == GROUND_HEIGHT_MEDIAN:
+        # 旧名。中央値＝50% 点
+        return {"ground_height_method": GROUND_HEIGHT_PERCENTILE,
+                "ground_percentile": 50.0}
+    return {
+        "ground_height_method": method,
+        "ground_percentile": float(
+            bottom.get("ground_percentile", DEFAULT_GROUND_PERCENTILE)
         ),
     }
 
@@ -87,7 +104,10 @@ def distance_to_box_xy(
 
 
 def _ground_height(
-    ground: np.ndarray, center_xy: tuple[float, float], method: str
+    ground: np.ndarray,
+    center_xy: tuple[float, float],
+    method: str,
+    percentile: float,
 ) -> tuple[float, str]:
     """地面点から箱の XY 中心での地面の高さを求める. (高さ, 使った方法)."""
     if method == GROUND_HEIGHT_LEAST_SQUARES:
@@ -96,8 +116,8 @@ def _ground_height(
         if rank == 3:
             a, b, c = (float(v) for v in coef)
             return a * center_xy[0] + b * center_xy[1] + c, GROUND_HEIGHT_LEAST_SQUARES
-        # 点が一直線上に並ぶなど、平面が決まらない場合は中央値
-    return float(np.median(ground[:, 2])), GROUND_HEIGHT_MEDIAN
+        # 点が一直線上に並ぶなど、平面が決まらない場合は分位点
+    return float(np.percentile(ground[:, 2], percentile)), GROUND_HEIGHT_PERCENTILE
 
 
 def estimate_bottom(
@@ -144,9 +164,12 @@ def estimate_bottom(
         return None, info
 
     z, used = _ground_height(
-        selected, (float(center[0]), float(center[1])), settings["ground_height_method"],
+        selected, (float(center[0]), float(center[1])),
+        settings["ground_height_method"], settings["ground_percentile"],
     )
     info.update({"ground_height_method": used, "ground_z": round(z, 3)})
+    if used == GROUND_HEIGHT_PERCENTILE:
+        info["ground_percentile"] = settings["ground_percentile"]
     return z, info
 
 
