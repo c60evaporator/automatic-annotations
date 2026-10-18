@@ -367,7 +367,9 @@ with param_col:
                           else "fwd")
                 return (f"{mark}{started}  [{run['status']}]  "
                         f"{run['nbr_instances']} inst / {run['num_tracks']} tracks  "
-                        f"sweeps={run['num_sweeps']} {method}{refs}")
+                        f"sweeps={run['num_sweeps']} {method}{refs}"
+                        # tools/ の調査スクリプトに渡す ID
+                        f"  run={run['id']}")
 
             options = [r["id"] for r in runs]
             labels = {r["id"]: _run_label(r) for r in runs}

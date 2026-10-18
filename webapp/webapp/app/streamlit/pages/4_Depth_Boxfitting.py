@@ -1059,7 +1059,9 @@ with param_col:
                 mark = "★ " if run["id"] == current else ""
                 return (f"{mark}{run['started_at'].strftime('%m-%d %H:%M:%S')}  "
                         f"[{run['status']}]  {run['nbr_fitted']}/{run['nbr_box_fittings']} fitted  "
-                        f"ann {run['nbr_annotations']}  lidar={run['use_lidar']}")
+                        f"ann {run['nbr_annotations']}  lidar={run['use_lidar']}"
+                        # tools/check_depth_boxfitting.py の --run に渡す ID
+                        f"  run={run['id']}")
 
             options = [r["id"] for r in runs]
             labels = {r["id"]: _run_label(r) for r in runs}

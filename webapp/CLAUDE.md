@@ -21,6 +21,8 @@ project-root/
 └── webapp/                                  # ★ここがコンテナの /workspace になる
     ├── CLAUDE.md
     ├── docker-compose.yml
+    ├── tools/                                # 調査用スクリプト（webapp コンテナで標準入力から実行）
+    │   └── check_depth_boxfitting.py       # Box Fitting の結果（深度補正・距離フィルタ等）を DB から確認
     ├── .env
     ├── webapp/
     │   ├── Dockerfile

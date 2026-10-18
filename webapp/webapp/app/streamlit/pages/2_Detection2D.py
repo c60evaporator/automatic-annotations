@@ -445,7 +445,9 @@ with param_col:
                 started = run["started_at"].strftime("%m-%d %H:%M:%S")
                 refs = f" / tracking参照 {run['nbr_tracking_runs']}" if run["nbr_tracking_runs"] else ""
                 return (f"{mark}{started}  [{run['status']}]  "
-                        f"{run['nbr_boxes']} boxes  interval={run['sample_interval']}{refs}")
+                        f"{run['nbr_boxes']} boxes  interval={run['sample_interval']}{refs}"
+                        # tools/ の調査スクリプトに渡す ID
+                        f"  run={run['id']}")
 
             options = [r["id"] for r in runs]
             labels = {r["id"]: _run_label(r) for r in runs}
