@@ -54,7 +54,9 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
     total = len(req.camera_frames) + len(req.lidar_frames) + len(req.instances)
     job.set_progress(0, total, "モデルを準備中...")
 
-    # カメラ跨ぎの結合を行うか。結合するときは当てはめをパス 2 へ回す
+    # カメラ跨ぎの結合を行うか。**当てはめは結合の有無に関わらずパス 2 で行う。**
+    # 結合しない場合も (カメラ, track_id) をグローバルトラックにして、
+    # トラック単位の寸法補正を同じ流れで行うため
     merge_enabled = bool(req.merge_params)
     entries_by_sample: dict[str, list[dict[str, Any]]] = {}
 
@@ -219,8 +221,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         depth_correction_method=(
                             req.depth_correction_method if req.use_lidar else None
                         ),
-                        # 結合する場合は当てはめを後回しにする
-                        fit_boxes=not merge_enabled,
+                        # 当てはめはパス 2（グローバルトラックを決めてから）
+                        fit_boxes=False,
                         lidar_origin_xy=lidar_origins.get(frame.sample_token),
                         stub_delay_sec=req.stub_delay_sec,
                     )
@@ -236,25 +238,24 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
             for result in results:
                 box_results.append(result)
-                if merge_enabled:
-                    # 結合の判定にカメラ名が必要。パイプラインの戻り値には
-                    # 含まれないので、ここで付ける（API へは出さない）
-                    result["_channel"] = frame.channel
-                    # 結合後に当てはめるので、確定してから UI へ流す
-                    entries_by_sample.setdefault(
-                        frame.sample_token, []
-                    ).append(result)
-                else:
-                    job.append_partial({"kind": "box", "data": result})
+                # グローバルトラックの判定にカメラ名が必要。パイプラインの
+                # 戻り値には含まれないので、ここで付ける（API へは出さない）
+                result["_channel"] = frame.channel
+                # 当てはめ後に確定してから UI へ流す
+                entries_by_sample.setdefault(
+                    frame.sample_token, []
+                ).append(result)
             done += len(payloads)
             job.set_progress(done, message="インスタンス点群")
 
-    # --- パス 2: カメラ跨ぎで結合してから当てはめる ----------------------
+    # --- パス 2: グローバルトラックを決めて（結合して）から当てはめる ------
     merge_stats: dict[str, Any] = {}
-    if merge_enabled and not job.cancel_requested():
+    if not job.cancel_requested():
         from app.services.inter_cam_merge import merge_and_fit
 
-        job.set_progress(done, message="カメラ間の結合")
+        job.set_progress(
+            done, message="カメラ間の結合" if merge_enabled else "ボックスの当てはめ"
+        )
         try:
             from app.services.lidar_ops import load_ground_points
 
@@ -268,28 +269,33 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                     lidar_paths.get(sample)
                 ),
                 use_lidar=req.use_lidar,
+                merge_enabled=merge_enabled,
             )
         except Exception as exc:  # noqa: BLE001
             # 結合に失敗しても点群は残す（当てはめだけ諦める）
             logger.exception("inter-camera merge failed")
             merge_stats = {"error": f"{type(exc).__name__}: {exc}"}
-        for result in box_results:
-            # 内部用のキーは API へ出さない（numpy を含むうえ、表示に使わない）
-            result.pop("_summary", None)
-            result.pop("_channel", None)
-            job.append_partial({"kind": "box", "data": result})
+    # 中断した場合も含め、内部用のキーは API へ出さない
+    # （numpy を含むうえ、表示に使わない）
+    for result in box_results:
+        result.pop("_summary", None)
+        result.pop("_channel", None)
+        job.append_partial({"kind": "box", "data": result})
 
     return {
         "num_depth_frames": len(depth_results),
         "num_lidar_frames": len(lidar_results),
         "num_box_fittings": len(box_results),
         "num_fitted": sum(1 for b in box_results if b.get("status") == "fitted"),
-        "num_merged_groups": merge_stats.get("num_groups", 0),
+        "num_merged_groups": merge_stats.get("num_groups", 0) if merge_enabled else 0,
         "num_merged_instances": merge_stats.get("num_merged", 0),
         # 結合後の点数が下限に届かず当てはめを飛ばしたフレーム数
         "num_too_few_points": merge_stats.get("num_too_few_points", 0),
         # 「なぜ結合されなかったか」を後から確認するための記録
-        "merge_diagnostics": merge_stats.get("diagnostics"),
+        # 結合しない場合は照合していないので出さない
+        "merge_diagnostics": (
+            merge_stats.get("diagnostics") if merge_enabled else None
+        ),
         "inference_time": round(time.perf_counter() - started_all, 3),
         "depth_estimations": depth_results,
         "lidar_pointclouds": lidar_results,

@@ -746,6 +746,7 @@ def merge_and_fit(
     label_to_category_group: dict[str, str] | None = None,
     ground_loader: Callable[[str], np.ndarray | None] | None = None,
     use_lidar: bool = False,
+    merge_enabled: bool = True,
 ) -> dict[str, Any]:
     """カメラ跨ぎで結合し、グループごとに 3D ボックスを当てはめる.
 
@@ -759,6 +760,9 @@ def merge_and_fit(
             底面推定（box_bottom の ground 方式）に使う。必要になった
             sample の分だけ呼ぶ
         use_lidar: Use LiDAR。ground 方式は LiDAR を使うときだけ
+        merge_enabled: False ならカメラ間の照合をせず、(カメラ, track_id) を
+            そのままグローバルトラックにする。結合の有無に関わらず
+            global_track_id を付け、トラック単位の寸法補正を同じ流れで行うため
 
     Returns:
         ``{"num_groups", "num_merged"}``。entry は **その場で書き換える**
@@ -812,7 +816,8 @@ def merge_and_fit(
     frame_matches: list[dict[tuple[str, str], float]] = []
     # {トラック対: {"overlap": 最大, "status": 最良時の扱い}}
     candidate_stats: dict[tuple[str, str], dict[str, Any]] = {}
-    for entries in entries_by_sample.values():
+    # 結合しない場合は照合を飛ばす（辺が無いので各トラックが単独のグループ）
+    for entries in (entries_by_sample.values() if merge_enabled else ()):
         usable = [e for e in entries if e.get("_summary") is not None]
         if len(usable) < 2:
             continue
@@ -888,6 +893,9 @@ def merge_and_fit(
     too_few_points: dict[str, list[int]] = {}
     # グループが成立したフレーム数（上の割合を読むための母数）
     frames_with_group: Counter = Counter()
+    # 当てはめた代表行（トラック単位の寸法補正に使う）
+    # [(global_track_id, ラベル, 行, センサー位置)]
+    fitted_rows: list[tuple[str, str | None, dict[str, Any], tuple[float, float]]] = []
     for sample_token, entries in entries_by_sample.items():
         groups: dict[str, list[dict[str, Any]]] = {}
         # その sample の地面点（底面推定用）。当てはめるときに 1 回だけ読む
@@ -960,6 +968,7 @@ def merge_and_fit(
                     member.update(fit)
                     member["status"] = "fitted"
                     member["is_primary"] = True
+                    fitted_rows.append((global_id, label, member, tuple(origin)))
                 elif member is primary:
                     member["status"] = "not_fitted"
                     member["is_primary"] = True
@@ -968,7 +977,13 @@ def merge_and_fit(
                     member["status"] = "merged"
                     member["is_primary"] = False
 
-    # --- 5) 診断情報 -----------------------------------------------------
+    # --- 5) グローバルトラック単位の寸法補正 ------------------------------
+    # 全フレームの箱がそろってから、トラック共通の高さ・幅・長さを当て直す
+    from app.services.box_size import correct_box_sizes
+
+    size_stats = correct_box_sizes(fitted_rows, box_fitting_params)
+
+    # --- 6) 診断情報 -----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。
     # 閾値を緩めても結合されない場合、原因は閾値ではなく
     # 1 対 1 の割り当てやカメラ重複の保護であることが多い
@@ -1067,5 +1082,6 @@ def merge_and_fit(
         "num_groups": len(set(global_ids.values())),
         "num_merged": num_merged,
         "num_too_few_points": sum(len(c) for c in too_few_points.values()),
+        "num_size_corrected_tracks": size_stats["num_tracks"],
         "diagnostics": diagnostics,
     }

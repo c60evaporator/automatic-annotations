@@ -892,6 +892,53 @@ with param_col:
                       "はみ出した 1 点で箱が縦に伸びる"),
             )
 
+            # --- グローバルトラック単位の寸法補正 ---
+            def _correction_text(methods: dict) -> str:
+                grouped: dict[str, list[str]] = {}
+                for _lb, _m in methods.items():
+                    grouped.setdefault(str(_m) if _m else "none", []).append(_lb)
+                return " / ".join(f"{m}: {', '.join(ls)}" for m, ls in grouped.items())
+
+            st.caption(
+                "以下はグローバルトラックの全フレームから共通の寸法を決めて当て直す"
+                "（percentile: 全フレームの分位点 / default: DEFAULT_BOX_SIZES）"
+            )
+            size_min_frames = st.slider(
+                "Min Frames for Size Correction", 1,
+                settings.BOX_SIZE_CORRECTION_MIN_FRAMES_MAX,
+                value=settings.BOX_SIZE_CORRECTION_MIN_FRAMES_DEFAULT, step=1,
+                key="_w_boxfit_size_min_frames",
+                help=("percentile 方式に必要なフレーム数。これ未満のグローバル"
+                      "トラックは補正しない（分位点が意味を持たないため）"),
+            )
+            st.markdown("**Height Estimation**")
+            st.caption("方式: " + _correction_text(settings.BOX_HEIGHT_CORRECTIONS)
+                       + "（config の BOX_HEIGHT_CORRECTIONS）。底面を固定して上面を動かす")
+            height_percentile = st.slider(
+                "Height Percentile [%]", 0.0, 100.0,
+                value=settings.BOX_HEIGHT_CORRECTION_PERCENTILE_DEFAULT, step=5.0,
+                key="_w_boxfit_height_percentile",
+                help="全フレームの箱の高さの分位点。各フレームは低めに出るので高めにする",
+            )
+            st.markdown("**Width Estimation**")
+            st.caption("方式: " + _correction_text(settings.BOX_WIDTH_CORRECTIONS)
+                       + "（config の BOX_WIDTH_CORRECTIONS）。見えている面を固定する")
+            width_percentile = st.slider(
+                "Width Percentile [%]", 0.0, 100.0,
+                value=settings.BOX_WIDTH_CORRECTION_PERCENTILE_DEFAULT, step=5.0,
+                key="_w_boxfit_width_percentile",
+                help="全フレームの箱の幅の分位点。幅はノイズで大きくなりやすいので低めにする",
+            )
+            st.markdown("**Length Estimation**")
+            st.caption("方式: " + _correction_text(settings.BOX_LENGTH_CORRECTIONS)
+                       + "（config の BOX_LENGTH_CORRECTIONS）。見えている面を固定する")
+            length_percentile = st.slider(
+                "Length Percentile [%]", 0.0, 100.0,
+                value=settings.BOX_LENGTH_CORRECTION_PERCENTILE_DEFAULT, step=5.0,
+                key="_w_boxfit_length_percentile",
+                help="全フレームの箱の長さの分位点。奥の面が見えないフレームは短く出るので高めにする",
+            )
+
 mask_params = {
     "dilation": int(mask_dilation), "erosion": int(mask_erosion),
     # 小物体（短辺が閾値以下）は収縮を弱める
@@ -924,6 +971,16 @@ box_fitting_params = {
         "min_ground_points": int(min_ground_points),
         "ground_height_method": str(ground_height_method),
         "ground_percentile": float(ground_percentile),
+    },
+    # グローバルトラック単位の寸法補正
+    "size_correction": {
+        "height": {"methods": dict(settings.BOX_HEIGHT_CORRECTIONS),
+                   "percentile": float(height_percentile)},
+        "width": {"methods": dict(settings.BOX_WIDTH_CORRECTIONS),
+                  "percentile": float(width_percentile)},
+        "length": {"methods": dict(settings.BOX_LENGTH_CORRECTIONS),
+                   "percentile": float(length_percentile)},
+        "min_frames": int(size_min_frames),
     },
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),

@@ -504,6 +504,48 @@ class Settings(BaseSettings):
     # percentile 方式の分位点 [%]。中央値（50）より低くするのは、歩道や縁石の
     # 点が混ざると路面より高く出るため
     BOX_BOTTOM_GROUND_PERCENTILE_DEFAULT: float = 30.0
+
+    # --- グローバルトラック単位の寸法補正 -------------------------------
+    # （Box Fitting タブの Height / Width / Length Estimation）
+    # 各フレームの箱は隠れや疎なビームで小さめに出るので、グローバルトラックの
+    # 全フレームから共通の寸法を決めて当て直す。方式はラベルごと:
+    #   percentile: 全フレームのその寸法の分位点（フレームが
+    #               BOX_SIZE_CORRECTION_MIN_FRAMES に届かなければ補正しない）
+    #   default   : DEFAULT_BOX_SIZES の値
+    #   None / 辞書に無い: 補正しない
+    # 高さは底面を固定して上面を、幅・長さはセンサーから見えている面を固定して
+    # 反対側の面を動かす（見えていない軸は中心を固定して対称に伸ばす）
+    BOX_HEIGHT_CORRECTIONS: dict[str, str | None] = {
+        "car": "percentile", "truck": "percentile", "bus": "percentile",
+        "trailer": "percentile", "construction_vehicle": "percentile",
+        "bicycle": "percentile", "motorcycle": "percentile",
+        "pedestrian": "percentile", "traffic_cone": "percentile",
+        "barrier": "percentile",
+    }
+    # 幅は車種でそれほど変わらないので、車両系は default に寄せる
+    BOX_WIDTH_CORRECTIONS: dict[str, str | None] = {
+        "car": "default", "truck": "default", "bus": "default",
+        "trailer": "default", "construction_vehicle": "default",
+        "bicycle": "percentile", "motorcycle": "percentile",
+        "pedestrian": "percentile", "traffic_cone": "percentile",
+        "barrier": "percentile",
+    }
+    # 長さは車種によってまちまちなので percentile に寄せる
+    BOX_LENGTH_CORRECTIONS: dict[str, str | None] = {
+        "car": "percentile", "truck": "percentile", "bus": "percentile",
+        "trailer": "percentile", "construction_vehicle": "percentile",
+        "bicycle": "percentile", "motorcycle": "percentile",
+        "pedestrian": "percentile", "traffic_cone": "percentile",
+        "barrier": "percentile",
+    }
+    # percentile 方式の分位点 [%]。各フレームの寸法は小さめに出るので高めにする。
+    # 幅はノイズで大きくなりやすいので、やや低めにする
+    BOX_HEIGHT_CORRECTION_PERCENTILE_DEFAULT: float = 80.0
+    BOX_WIDTH_CORRECTION_PERCENTILE_DEFAULT: float = 70.0
+    BOX_LENGTH_CORRECTION_PERCENTILE_DEFAULT: float = 80.0
+    # percentile 方式に必要なフレーム数（これ未満のトラックは補正しない）
+    BOX_SIZE_CORRECTION_MIN_FRAMES_DEFAULT: int = 3
+    BOX_SIZE_CORRECTION_MIN_FRAMES_MAX: int = 20
     # 当てはめに必要な点数の下限。これに届かないインスタンスはボックスを
     # 作らない（点群は残す）。点が少なすぎると BEV の凸包が線や点に潰れ、
     # 向きも大きさも意味を持たない。

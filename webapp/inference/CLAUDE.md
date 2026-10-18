@@ -457,6 +457,9 @@ Depth Boxfittingは、以下のフローで行われます
                 - Ground Height Method=least squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
             - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
         - grobal_track点群のz座標の分位点に基づき上面高さを決める（後で複数フレームを考慮して補正）
+    - global_track_idごとに以下手順でAIモデルによる
+        - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
+        - 
     - global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する
         - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施
             - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Box Height Correction Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。補正時は底面を固定し、上面の位置を動かす
