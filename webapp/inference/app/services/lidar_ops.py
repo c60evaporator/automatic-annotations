@@ -301,3 +301,17 @@ def remove_ego_points(
     if int(inside.sum()):
         logger.debug("removed %d ego-reflection points", int(inside.sum()))
     return points_ego[keep], keep
+
+
+def load_ground_points(path: Path | str | None) -> np.ndarray:
+    """load_lidar が保存した .npz から地面点だけを読む（基準 ego 座標）.
+
+    箱の底面推定（box_bottom の ground 方式）に使う。無ければ空。
+    """
+    if path is None or not Path(path).exists():
+        return np.empty((0, 3))
+    with np.load(path) as data:
+        if "ground_mask" not in data.files:
+            return np.empty((0, 3))
+        points = np.asarray(data["points"], dtype=np.float64)
+        return points[np.asarray(data["ground_mask"], dtype=bool)][:, :3]

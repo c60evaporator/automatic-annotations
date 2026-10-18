@@ -452,7 +452,9 @@ Depth Boxfittingは、以下のフローで行われます
                 - da
         - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、3Dバウンディングボックスの底面を推定する
             - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: grobal_track点群のz座標のパーセンタイルに基づき底面高さを決める
-            - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で除去した地面位置に基づき底面高さを決める（LiDAR使用時のみ適用可能、車両系、motorcycleを想定）
+            - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で除去した地面位置に基づき底面高さを決める（LiDAR使用時のみ適用可能）。地面推定時には全ての地面点群を使うのではなく、Box外形からのXY平面上距離が一定以内の地面点群を用い、Ground Height Methodパラメータに応じて以下のようにボックス底面高さを推定する。なお地面点群の数がMin Ground Points以下なら、`settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のときの方法で底面高さを決める
+                - Ground Height Method=medianのとき: 地面点群のz座標のmedianをボックス底面高さとする
+                - Ground Height Method=least squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
             - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
         - grobal_track点群のz座標の分位点に基づき上面高さを決める（後で複数フレームを考慮して補正）
     - global_track_idごとに所属する全てのフレームを考慮し、以下のバウンディングボックスの高さ、幅、奥行き補正を実施する

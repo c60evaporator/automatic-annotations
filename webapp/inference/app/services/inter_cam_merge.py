@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections import Counter
 from statistics import median
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
@@ -744,6 +744,8 @@ def merge_and_fit(
     merge_params: dict[str, Any],
     box_fitting_params: dict[str, Any],
     label_to_category_group: dict[str, str] | None = None,
+    ground_loader: Callable[[str], np.ndarray | None] | None = None,
+    use_lidar: bool = False,
 ) -> dict[str, Any]:
     """カメラ跨ぎで結合し、グループごとに 3D ボックスを当てはめる.
 
@@ -753,6 +755,10 @@ def merge_and_fit(
             ``_summary`` を持つ（パイプラインが fit_boxes=False で返したもの）
         merge_params: ``overlap_threshold`` / ``max_hull_gap`` /
             ``min_match_frames`` / ``label_match``
+        ground_loader: sample_token → その sample の地面点（基準 ego 座標）。
+            底面推定（box_bottom の ground 方式）に使う。必要になった
+            sample の分だけ呼ぶ
+        use_lidar: Use LiDAR。ground 方式は LiDAR を使うときだけ
 
     Returns:
         ``{"num_groups", "num_merged"}``。entry は **その場で書き換える**
@@ -882,8 +888,10 @@ def merge_and_fit(
     too_few_points: dict[str, list[int]] = {}
     # グループが成立したフレーム数（上の割合を読むための母数）
     frames_with_group: Counter = Counter()
-    for entries in entries_by_sample.values():
+    for sample_token, entries in entries_by_sample.items():
         groups: dict[str, list[dict[str, Any]]] = {}
+        # その sample の地面点（底面推定用）。当てはめるときに 1 回だけ読む
+        ground_points: np.ndarray | None = None
         for entry in entries:
             summary = entry.get("_summary")
             key = track_key(_channel_of(entry), entry["track_id"])
@@ -934,6 +942,16 @@ def merge_and_fit(
                 z_range=combined["z_range"],
                 label=label,
             )
+            if fit is not None:
+                # 底面はラベルごとの方式で決め直す（上面は分位点のまま）
+                from app.services.box_bottom import apply_bottom
+
+                if ground_points is None and ground_loader is not None:
+                    ground_points = ground_loader(sample_token)
+                fit = apply_bottom(
+                    fit, box_fitting_params, label,
+                    ground_points=ground_points, use_lidar=use_lidar,
+                )
             # ボックスは代表 1 行だけに入れる。全行へ入れると BEV 表示で
             # 同じ箱が重なって見える
             for member in members:

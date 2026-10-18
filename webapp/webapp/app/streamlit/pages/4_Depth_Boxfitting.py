@@ -806,14 +806,6 @@ with param_col:
                 "（指定の無いラベルは convex_hull_moa）"
             )
             st.markdown("**Common**")
-            z_percentiles = st.slider(
-                "z_percentiles", 0.0, 100.0,
-                value=(settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT,
-                       settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT),
-                step=0.5,
-                help=("高さを決めるパーセンタイル。0/100 にすると"
-                      "はみ出した 1 点で箱が縦に伸びる"),
-            )
             boxfit_min_points = st.slider(
                 "Min Points to fit Box", 1, settings.BOXFIT_MIN_POINTS_MAX,
                 value=settings.BOXFIT_MIN_POINTS_DEFAULT, step=1,
@@ -834,6 +826,61 @@ with param_col:
                 key="_w_boxfit_moa_angle_step",
                 help=("BEV の凸包に対し、センサーから見たオクルージョン面積が"
                       "最小になる向きを探す。その向きの探索刻み（細かいほど遅い）"),
+            )
+
+            st.markdown("**Bottom Estimation**")
+            by_bottom: dict[str, list[str]] = {}
+            for _label, _method in settings.BOX_BOTTOM_ESTIMATIONS.items():
+                by_bottom.setdefault(_method, []).append(_label)
+            st.caption(
+                "方式: " + " / ".join(f"{m}: {', '.join(ls)}" for m, ls in by_bottom.items())
+                + "（config の BOX_BOTTOM_ESTIMATIONS で指定。指定の無いラベルは "
+                "percentile）"
+            )
+            bottom_cols = st.columns(2)
+            with bottom_cols[0]:
+                z_percentile_low = st.slider(
+                    "z_percentile", 0.0, 50.0,
+                    value=settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT, step=0.5,
+                    key="_w_boxfit_bottom_percentile",
+                    help=("percentile 方式の底面を決める、点群の z の分位点。"
+                          "ground 方式で地面点が足りないときもこれを使う"),
+                )
+                ground_radius = st.slider(
+                    "Ground Estimation Radius [m]", 0.5,
+                    settings.BOX_BOTTOM_GROUND_RADIUS_MAX,
+                    value=settings.BOX_BOTTOM_GROUND_RADIUS_DEFAULT, step=0.5,
+                    key="_w_boxfit_ground_radius",
+                    help=("ground 方式で使う地面点の、箱の外形（BEV の矩形）からの"
+                          "距離の上限。車体の下は LiDAR の影になるので、実際には"
+                          "周囲の帯の地面点を使う"),
+                )
+            with bottom_cols[1]:
+                min_ground_points = st.slider(
+                    "Min Ground Points", 1,
+                    settings.BOX_BOTTOM_MIN_GROUND_POINTS_MAX,
+                    value=settings.BOX_BOTTOM_MIN_GROUND_POINTS_DEFAULT, step=1,
+                    key="_w_boxfit_min_ground_points",
+                    help=("ground 方式で、範囲内の地面点がこの数以下なら"
+                          "percentile 方式に切り替える（遠方では地面点が疎）"),
+                )
+                ground_height_method = st.radio(
+                    "Ground Height Method", settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS,
+                    index=settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS.index(
+                        settings.BOX_BOTTOM_GROUND_HEIGHT_METHOD_DEFAULT),
+                    horizontal=True, key="_w_boxfit_ground_height_method",
+                    help=("median: 地面点の z の中央値 / least_squares: 地面点に"
+                          "平面を最小二乗で当てはめ、箱の XY 中心での高さ"
+                          "（坂道で手前の地面に偏らない）"),
+                )
+
+            st.markdown("**Top Estimation**")
+            z_percentile_high = st.slider(
+                "z_percentile", 50.0, 100.0,
+                value=settings.BOXFIT_Z_PERCENTILE_HIGH_DEFAULT, step=0.5,
+                key="_w_boxfit_top_percentile",
+                help=("上面を決める、点群の z の分位点。100 にすると"
+                      "はみ出した 1 点で箱が縦に伸びる"),
             )
 
 mask_params = {
@@ -859,7 +906,15 @@ box_fitting_params = {
     # 距離フィルタ（long_side）の長辺に使う
     "box_sizes": {k: [float(x) for x in v]
                   for k, v in settings.DEFAULT_BOX_SIZES.items()},
-    "z_percentiles": [float(z_percentiles[0]), float(z_percentiles[1])],
+    # 上面と（percentile 方式の）底面の分位点
+    "z_percentiles": [float(z_percentile_low), float(z_percentile_high)],
+    # 底面の推定（ラベルごとの方式と ground 方式の設定）
+    "bottom": {
+        "methods": dict(settings.BOX_BOTTOM_ESTIMATIONS),
+        "ground_radius": float(ground_radius),
+        "min_ground_points": int(min_ground_points),
+        "ground_height_method": str(ground_height_method),
+    },
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),
     # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）

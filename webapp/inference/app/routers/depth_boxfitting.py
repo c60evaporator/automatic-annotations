@@ -256,11 +256,18 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
         job.set_progress(done, message="カメラ間の結合")
         try:
+            from app.services.lidar_ops import load_ground_points
+
             merge_stats = merge_and_fit(
                 entries_by_sample,
                 merge_params=req.merge_params,
                 box_fitting_params=req.box_fitting_params or {},
                 label_to_category_group=req.label_to_category_group,
+                # 底面推定用の地面点（load_lidar が保存した .npz から読む）
+                ground_loader=lambda sample: load_ground_points(
+                    lidar_paths.get(sample)
+                ),
+                use_lidar=req.use_lidar,
             )
         except Exception as exc:  # noqa: BLE001
             # 結合に失敗しても点群は残す（当てはめだけ諦める）

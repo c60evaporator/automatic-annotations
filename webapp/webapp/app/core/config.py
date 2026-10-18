@@ -463,10 +463,44 @@ class Settings(BaseSettings):
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
     BOXFIT_ANGLE_STEP_DEG_MAX: float = 10.0
-    # 高さを決めるパーセンタイル（下限, 上限）。最小・最大をそのまま使うと
-    # 路面やマスクのはみ出し 1 点で箱が縦に伸びる
+    # 高さを決めるパーセンタイル。最小・最大をそのまま使うと
+    # 路面やマスクのはみ出し 1 点で箱が縦に伸びる。
+    #   LOW : 底面（Bottom Estimation の percentile 方式・ground 方式の切り替え先）
+    #   HIGH: 上面（Top Estimation）
     BOXFIT_Z_PERCENTILE_LOW_DEFAULT: float = 1.0
     BOXFIT_Z_PERCENTILE_HIGH_DEFAULT: float = 99.0
+
+    # --- 底面の推定（Box Fitting タブの Bottom Estimation） ----------------
+    # ラベルごとの方式。ここに無いラベルは percentile。
+    #   percentile: 点群の z の分位点（BOXFIT_Z_PERCENTILE_LOW）
+    #   ground    : Patchwork++ の地面点のうち、箱の外形から XY で
+    #               Ground Estimation Radius 以内の点から求める（Use LiDAR のときだけ）。
+    #               地面点が Min Ground Points 以下なら percentile に切り替える
+    #   ego       : 基準 ego 座標の z = 0（自車の接地面にそろえる）
+    # LiDAR の上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすい
+    BOX_BOTTOM_ESTIMATIONS: dict[str, str] = {
+        "car": "ground",
+        "truck": "ground",
+        "bus": "ground",
+        "trailer": "ground",
+        "construction_vehicle": "ground",
+        "bicycle": "ground",
+        "motorcycle": "ground",
+        "pedestrian": "ground",
+        "traffic_cone": "ground",
+        "barrier": "ground",
+    }
+    # ground 方式で使う地面点の、箱の外形からの距離の上限 [m]
+    BOX_BOTTOM_GROUND_RADIUS_DEFAULT: float = 2.0
+    BOX_BOTTOM_GROUND_RADIUS_MAX: float = 10.0
+    # ground 方式に必要な地面点の数。これ以下なら percentile に切り替える
+    BOX_BOTTOM_MIN_GROUND_POINTS_DEFAULT: int = 10
+    BOX_BOTTOM_MIN_GROUND_POINTS_MAX: int = 200
+    # 地面点から底面の高さを求める方法
+    #   median        : 地面点の z の中央値
+    #   least_squares : 地面点に平面を最小二乗で当てはめ、箱の XY 中心での高さ
+    BOX_BOTTOM_GROUND_HEIGHT_METHODS: list[str] = ["median", "least_squares"]
+    BOX_BOTTOM_GROUND_HEIGHT_METHOD_DEFAULT: str = "median"
     # 当てはめに必要な点数の下限。これに届かないインスタンスはボックスを
     # 作らない（点群は残す）。点が少なすぎると BEV の凸包が線や点に潰れ、
     # 向きも大きさも意味を持たない。

@@ -369,6 +369,9 @@ class BoxFittingPipeline:
             )
         )
 
+        # 地面点（底面推定用）。当てはめるときに 1 回だけ読む
+        ground_points: np.ndarray | None = None
+
         for instance in instances:
             # 小物体の判定は元画像の解像度で行うため、先に全画面で展開する
             full_mask = decode_rle(instance["mask_rle"])
@@ -703,6 +706,17 @@ class BoxFittingPipeline:
             if fit is None:
                 entry["status"] = "not_fitted"
             else:
+                # 底面はラベルごとの方式で決め直す（上面は分位点のまま）
+                from app.services.box_bottom import apply_bottom
+
+                if ground_points is None:
+                    from app.services.lidar_ops import load_ground_points
+
+                    ground_points = load_ground_points(lidar_path)
+                fit = apply_bottom(
+                    fit, box_fitting_params, instance.get("label"),
+                    ground_points=ground_points, use_lidar=use_lidar,
+                )
                 entry.update(fit)
                 entry["status"] = "fitted"
             results.append(entry)
