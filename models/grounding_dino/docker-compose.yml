@@ -1,6 +1,6 @@
 services:
   grounding-dino:
-    image: "${IMAGE_NAME:-grounding-dino}:${IMAGE_TAG:-cu124-${IMAGE_RUNTIME:-devel}}"
+    image: "${IMAGE_NAME:-grounding-dino-hf}:${IMAGE_TAG:-cu128-${IMAGE_RUNTIME:-devel}}"
     # docker build options
     build:
       context: .
@@ -20,7 +20,7 @@ services:
         http_proxy: "${HTTP_PROXY:-}"
 
     # Container name (--name option)
-    container_name: grounding_dino_${IMAGE_RUNTIME:-devel}
+    container_name: grounding_dino_hf_${IMAGE_RUNTIME:-devel}
     # Set resource sharing to host
     deploy:
       resources:
@@ -37,11 +37,17 @@ services:
     tty: true  # -t option
     # Set startup directory
     working_dir: /workspace
+    # Proxy settings for downloading models from Hugging Face Hub at runtime (if needed)
+    environment:
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      http_proxy: "${HTTP_PROXY:-}"
+      https_proxy: "${HTTPS_PROXY:-}"
     
     # Volume mounts
     volumes:
-      # Weights for GroundingDINO
-      - ./weights:/workspace/GroundingDINO/weights
+      # Weights (Hugging Face cache)
+      - ~/.cache/huggingface:/home/${USERNAME:-developer}/.cache/huggingface
       # Source code
       - ./src:/workspace/src/grounding_dino
       - ../../common:/workspace/src/common
