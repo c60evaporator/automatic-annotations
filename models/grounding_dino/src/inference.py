@@ -1,12 +1,15 @@
 from dataclasses import dataclass
+from functools import lru_cache
 
 import torch
 from torchvision.ops import box_convert, batched_nms
 from PIL import Image
-
-import groundingdino.datasets.transforms as T
-from groundingdino.util.vl_utils import create_positive_map_from_span
-from groundingdino.models.GroundingDINO.groundingdino import GroundingDINO
+from transformers import (
+    AutoProcessor,
+    BatchEncoding,
+    GroundingDinoForObjectDetection,
+    GroundingDinoProcessor,
+)
 
 from ..common.schemas import Box2D
 
@@ -18,12 +21,12 @@ class PromptDefinition:
     character_spans: tuple[tuple[tuple[int, int], ...], ...]
 
 
-def build_multi_label_prompt(labels: list[str]) -> str:
+def build_multi_label_prompt(labels: list[str]) -> PromptDefinition:
     """Create a prompt for Grounding DINO from a list of labels
 
     Args:
         labels: List of labels to detect in the image.
-    
+
     Returns:
         A PromptDefinition object containing the caption, raw labels, and token spans.
 
@@ -46,14 +49,14 @@ def build_multi_label_prompt(labels: list[str]) -> str:
     for raw_label in labels:
         # lowercase, strip whitespace, and remove trailing periods
         canonical_label = raw_label.lower().strip().rstrip(".")
-        
+
         # remove duplicate labels and empty labels
         if not canonical_label:
             continue
         if canonical_label in seen_labels:
             continue
         seen_labels.add(canonical_label)
-        
+
         # replace underscores with spaces and normalize whitespace
         prompt_label = canonical_label.replace("_", " ")
         prompt_label = " ".join(prompt_label.split())
@@ -94,48 +97,62 @@ def build_multi_label_prompt(labels: list[str]) -> str:
     )
 
 
-def preprocess_image(image: Image.Image) -> torch.Tensor:
-    transform = T.Compose([
-        T.RandomResize([800], max_size=1333),
-        T.ToTensor(),
-        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
-    image_transformed, _ = transform(image, None)
-    return image_transformed
+@lru_cache(maxsize=4)
+def _load_processor(model_name_or_path: str) -> GroundingDinoProcessor:
+    return AutoProcessor.from_pretrained(model_name_or_path)
 
 
-def _make_nms_group_indices(
-    label_indices: torch.Tensor,
-    raw_labels: tuple[str, ...],
-    label_to_group: dict[str, str],
+def preprocess_image(
+    image: Image.Image,
+    processor: GroundingDinoProcessor,
 ) -> torch.Tensor:
-    """相互排他的なラベルを同じNMSグループへ割り当てる。"""
-    group_to_index: dict[str, int] = {}
-    result: list[int] = []
+    """Preprocess the image in the same way as the official implementation
 
-    for label_index in label_indices.tolist():
-        label = raw_labels[label_index]
+    The image processor of Transformers resizes the image so that the shortest edge is 800 px
+    and the longest edge is at most 1333 px, and applies ImageNet normalization by default.
 
-        # グループ未指定ラベルは、他ラベルと干渉しない独自グループにする
-        group_name = label_to_group.get(
-            label,
-            f"__label__:{label}",
-        )
+    Returns:
+        Image tensor with shape (3, H, W).
+    """
+    pixel_values = processor.image_processor(
+        images=image.convert("RGB"),
+        return_tensors="pt",
+    )["pixel_values"]
+    return pixel_values[0]
 
-        if group_name not in group_to_index:
-            group_to_index[group_name] = len(group_to_index)
 
-        result.append(group_to_index[group_name])
+def create_positive_map_from_span(
+    tokenized: BatchEncoding,
+    token_span: list[list[list[int]]],
+    max_text_len: int = 256,
+) -> torch.Tensor:
+    """Create a matrix that maps each label to the corresponding tokens
 
-    return torch.tensor(
-        result,
-        dtype=torch.int64,
-        device=label_indices.device,
-    )
+    Transformers port of `groundingdino.util.vl_utils.create_positive_map_from_span`.
+
+    Args:
+        tokenized: Output of the fast tokenizer for the caption.
+        token_span: Character spans [start, end) of each label in the caption.
+        max_text_len: Maximum text length of the model.
+
+    Returns:
+        A tensor with shape (num_labels, max_text_len). Each row is normalized so that its sum is 1.
+    """
+    positive_map = torch.zeros((len(token_span), max_text_len), dtype=torch.float)
+    for j, label_spans in enumerate(token_span):
+        for beg, end in label_spans:
+            beg_pos = tokenized.char_to_token(beg)
+            end_pos = tokenized.char_to_token(end - 1)
+            if beg_pos is None or end_pos is None:
+                raise ValueError(
+                    f"Character span ({beg}, {end}) cannot be mapped to tokens."
+                )
+            positive_map[j, beg_pos:end_pos + 1].fill_(1)
+    return positive_map / (positive_map.sum(-1)[:, None] + 1e-6)
 
 
 def predict_multi_labels(
-    model: GroundingDINO,
+    model: GroundingDinoForObjectDetection,
     image: Image.Image,
     labels: list[str],
     box_threshold: float = 0.3,
@@ -143,11 +160,12 @@ def predict_multi_labels(
     cross_class_nms_iou: float = 0.85,
     device: str = "cuda",
     sublabel_to_label: dict[str, str] | None = None,
-    ) -> list[Box2D]:
+    processor: GroundingDinoProcessor | None = None,
+    ) -> tuple[list[Box2D], list[str], str]:
     """Run Grounding DINO prediction for a list of labels
 
     Args:
-        model: Grounding DINO model.
+        model: Grounding DINO model of Transformers.
         image: Input image as a PIL Image.
         labels: List of labels to detect in the image.
         box_threshold: Box threshold for filtering predictions.
@@ -155,28 +173,40 @@ def predict_multi_labels(
         cross_class_nms_iou: IoU threshold for NMS across different classes. Recommended to be higher than same_class_nms_iou to avoid removing boxes of different classes that overlap.
         device: Device to run the model on (e.g., "cuda" or "cpu").
         sublabel_to_label: Mapping from sublabels used in the prompt to the original labels. If None, no mapping is applied.
+        processor: Grounding DINO processor of Transformers. If None, it is loaded from the same model ID as the model.
 
     Returns:
-        A list of predicted Box2D objects. The box coordinates are in the format (x_min, y_min, x_max, y_max) in normalized coordinates (0 to 1).
+        A tuple of (predicted_boxes, predicted_sublabels, caption).
+        predicted_boxes: A list of predicted Box2D objects. The box coordinates are in the format (x_min, y_min, x_max, y_max) in normalized coordinates (0 to 1).
+        predicted_sublabels: The sublabels used in the prompt for each predicted box.
+        caption: The caption used as the text prompt.
     """
+    if processor is None:
+        processor = _load_processor(model.config._name_or_path)
+
     # Build the prompt for multi-label detection
     prompt_definition = build_multi_label_prompt(labels)
 
-    # Preprocess the image and move it to the specified device
-    image = preprocess_image(image).to(device)
+    # Preprocess the image and the caption, and move them to the specified device
+    pixel_values = preprocess_image(image, processor).to(device)
+    tokenized = processor.tokenizer(prompt_definition.caption, return_tensors="pt")
 
     # Predict
     model = model.to(device)
     model.eval()
 
     with torch.no_grad():
-        outputs = model(image[None], captions=[prompt_definition.caption])
+        outputs = model(
+            pixel_values=pixel_values[None],
+            input_ids=tokenized["input_ids"].to(device),
+            token_type_ids=tokenized["token_type_ids"].to(device),
+            attention_mask=tokenized["attention_mask"].to(device),
+        )
 
-    token_scores = outputs["pred_logits"].cpu().sigmoid()[0]  # shape: (num_queries, max_text_len)
-    boxes_cxcywh = outputs["pred_boxes"].cpu()[0]  # shape: (num_queries, 4), normalized cxcywh
+    token_scores = outputs.logits.float().cpu().sigmoid()[0]  # shape: (num_queries, max_text_len)
+    boxes_cxcywh = outputs.pred_boxes.float().cpu()[0]  # shape: (num_queries, 4), normalized cxcywh
 
     # Create a matrix that maps each token to the corresponding label(s) based on the token spans
-    tokenized = model.tokenizer(prompt_definition.caption)
     positive_map = create_positive_map_from_span(
         tokenized=tokenized,
         token_span=[
@@ -250,11 +280,11 @@ def predict_multi_labels(
     # Store predicted boxes as Box2D objects
     predicted_boxes = [
         Box2D(
-            xyxy=box.detach().numpy(),
-            label=sublabel_to_label[prompt_definition.raw_labels[label_index]],
+            xyxy=box.detach().numpy().astype("float64"),
+            label=label_names[label_index],
             score=float(score.item()),
         )
-        for box, score, label_index in zip(boxes_xyxy, kept_scores, kept_label_indices, strict=True)
+        for box, score, label_index in zip(boxes_xyxy, kept_scores, kept_label_indices.tolist(), strict=True)
     ]
 
     # Keep sublabels

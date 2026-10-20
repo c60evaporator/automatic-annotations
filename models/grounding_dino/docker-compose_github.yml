@@ -47,4 +47,4 @@ services:
       - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset
-      - /data/nuscenes:/workspace/data/nuscenes
+      - /data/nuscenes_datasets/nuscenes:/workspace/data/nuscenes
