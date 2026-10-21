@@ -7,11 +7,39 @@ import torch
 from torchvision.transforms import v2
 from PIL import Image
 
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 
 from ..common.schemas import Box2D, Instance2D
 from ..common.geometry.crop_resize import resize_mask_nearest
+
+DEFAULT_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+DEFAULT_CHECKPOINT = "/workspace/sam2/checkpoints/sam2.1_hiera_large.pt"
+
+
+def load_image_predictor(
+    model_config: str = DEFAULT_MODEL_CONFIG,
+    checkpoint: str = DEFAULT_CHECKPOINT,
+    device: str = "cuda",
+) -> SAM2ImagePredictor:
+    """
+    Builds the SAM2 model and predictor for single image inference from the config and checkpoint.
+    """
+    model = build_sam2(model_config, str(checkpoint), device=device)
+    return SAM2ImagePredictor(model)
+
+
+def load_video_predictor(
+    model_config: str = DEFAULT_MODEL_CONFIG,
+    checkpoint: str = DEFAULT_CHECKPOINT,
+    device: str = "cuda",
+) -> SAM2VideoPredictor:
+    """
+    Builds the SAM2 predictor for video inference from the config and checkpoint.
+    """
+    return build_sam2_video_predictor(model_config, str(checkpoint), device=device)
+
 
 def masks_to_instances(
     masks: np.ndarray,
@@ -337,8 +365,47 @@ def init_frame_state(
     inference_state["frames_tracked_per_obj"] = {}
     # Warm up the visual backbone and cache the image feature on frame 0
     predictor._get_image_feature(inference_state, frame_idx=0, batch_size=1)
+    # Keep the frames that receive correction clicks after tracking as conditioning frames.
+    # Otherwise, the corrections are overwritten when the video is propagated again.
+    predictor.add_all_frames_to_correct_as_cond = True
     
     return inference_state
+
+
+def reset_frame_state(
+    predictor: SAM2VideoPredictor,
+    inference_state: dict,
+) -> None:
+    """
+    Removes all the prompts and tracking results from the inference state, while keeping the video frames.
+
+    Args:
+        predictor: An instance of SAM2VideoPredictor.
+        inference_state: The inference state created by init_frame_state().
+    """
+    predictor.reset_state(inference_state)
+
+
+def _select_instances_by_obj_ids(
+    inference_state: dict,
+    out_obj_ids: list[int],
+    out_mask_logits: torch.Tensor,
+    obj_ids: list[int],
+    labels: list[str | None] | None = None,
+    boxes: list[np.ndarray] | None = None,
+) -> list[Instance2D]:
+    """Converts the output masks of the frame to Instance2D objects in the order of ``obj_ids``."""
+    out_masks = (out_mask_logits[:, 0] > 0.0).cpu().numpy()  # (N, H, W)
+    indices = [list(out_obj_ids).index(obj_id) for obj_id in obj_ids]
+    return masks_to_instances(
+        masks=out_masks[indices],
+        image_height=inference_state["video_height"],
+        image_width=inference_state["video_width"],
+        labels=labels,
+        track_ids=obj_ids,
+        scores=None,
+        boxes=boxes,
+    )
 
 def add_box_prompts(
     predictor: SAM2VideoPredictor,
@@ -365,11 +432,12 @@ def add_box_prompts(
         }
 
     Returns:
-        A list of Instance2D objects representing the predicted instances for the added box prompts.
+        A list of Instance2D objects representing the predicted instances for the added box prompts, in the same order as ``box_prompts``.
     """
     if point_prompts is None:
         point_prompts = []
 
+    out_obj_ids, out_mask_logits = None, None
     for box in box_prompts:
         obj_id = box.track_id
         obj_point_prompts = [point_prompt for point_prompt in point_prompts if point_prompt.get('obj_id') == obj_id]
@@ -390,44 +458,83 @@ def add_box_prompts(
             box=box_array,
         )
 
-    # Only the last out_obj_ids and out_mask_logits are used
-    out_masks = (np.squeeze(out_mask_logits, axis=1) > 0.0).cpu().numpy()  # (N, H, W)
+    if out_obj_ids is None:
+        return []
 
-    # Convert masks to Instance2D objects
-    predicted_instances = masks_to_instances(
-        masks=out_masks,
-        image_height=inference_state["video_height"],
-        image_width=inference_state["video_width"],
-        labels=[box.label for box in box_prompts] if box_prompts is not None else None, # Use the labels from the box prompts if available
-        track_ids=out_obj_ids,
-        scores=None,
-        boxes=[np.array(box.xyxy, dtype=np.float32) for box in box_prompts] if box_prompts is not None else None,
+    # Only the last out_obj_ids and out_mask_logits (containing the masks of all the objects in the frame) are used
+    return _select_instances_by_obj_ids(
+        inference_state,
+        out_obj_ids,
+        out_mask_logits,
+        obj_ids=[box.track_id for box in box_prompts],
+        labels=[box.label for box in box_prompts], # Use the labels from the box prompts if available
+        boxes=[np.array(box.xyxy, dtype=np.float32) for box in box_prompts],
     )
 
-    return predicted_instances
+
+def add_point_prompts(
+    predictor: SAM2VideoPredictor,
+    inference_state: dict,
+    frame_idx: int,
+    point_prompts: list[dict],
+) -> list[Instance2D]:
+    """
+    Adds point prompts for a specific frame in the video, e.g. correction clicks on a frame that has already been tracked.
+
+    The corrected frame is kept as a conditioning frame, so the correction is not overwritten when propagate_inference() is called again.
+    Note that the existing prompts of the object on the frame (including a box prompt) are replaced with the new point prompts.
+
+    Args:
+        predictor: An instance of SAM2VideoPredictor.
+        inference_state: The current state of the video inference.
+        frame_idx: The index of the frame to which the point prompts should be added.
+        point_prompts: The list of point prompts. The format of each point prompt dictionary should be:
+        {
+            'point': [x, y],  # The coordinates of the point in pixel values.
+            'label': int,  # The label of the point. 1 for positive points, 0 for negative points.
+            'obj_id': int  # representing the object ID associated with these points.
+        }
+
+    Returns:
+        A list of Instance2D objects representing the predicted instances for the objects in ``point_prompts``.
+    """
+    obj_ids = list(dict.fromkeys(point_prompt['obj_id'] for point_prompt in point_prompts))
+    out_obj_ids, out_mask_logits = None, None
+    for obj_id in obj_ids:
+        obj_point_prompts = [point_prompt for point_prompt in point_prompts if point_prompt['obj_id'] == obj_id]
+        _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=frame_idx,
+            obj_id=obj_id,
+            points=np.array([point_prompt['point'] for point_prompt in obj_point_prompts], dtype=np.float32),
+            labels=np.array([point_prompt['label'] for point_prompt in obj_point_prompts], dtype=np.int32),
+        )
+
+    if out_obj_ids is None:
+        return []
+
+    return _select_instances_by_obj_ids(inference_state, out_obj_ids, out_mask_logits, obj_ids=obj_ids)
 
 
 def propagate_inference(
     predictor: SAM2VideoPredictor,
     inference_state: dict,
-    start_frame_idx: int = 0,
+    start_frame_idx: int | None = None,
     max_frame_num_to_track=None,
     reverse=False,
-) -> dict[int, list[dict]]:
+) -> dict[int, dict[int, Instance2D]]:
     """
     Inference propagation for all objects across all frames in the video.
 
     Args:
         predictor: An instance of SAM2VideoPredictor.
         inference_state: The inference state created by init_frame_state() and updated by add_box_prompts() to add prompts.
+        start_frame_idx: The frame index to start the propagation. If None, the earliest frame with prompts is used.
+        max_frame_num_to_track: The maximum number of frames to track. If None, all the frames are tracked.
+        reverse: Whether to propagate in reverse order.
 
     Returns:
-        A list of dictionaries, each containing the predicted instances for a specific frame in the video.
-    
-        Each dictionary in the list contains:
-            - "obj_id": The tracking ID of the object.
-            - "frame_idx": The index of the frame.
-            - "instance": The Instance2D object representing the predicted instance for that frame.
+        A dictionary mapping the frame index to a dictionary of {obj_id: Instance2D}.
     """
     result_instances = {}
     # run propagation throughout the video

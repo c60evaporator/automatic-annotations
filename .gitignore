@@ -8,3 +8,6 @@ __pycache__
 .venv
 
 .DS_Store
+
+# Sample videos downloaded by notebooks
+models/sam2/notebook/videos/
