@@ -1,11 +1,5 @@
 ## Installation
 
-export `TORCH_CUDA_ARCH_LIST` environment variable based on [this page](https://en.wikipedia.org/wiki/CUDA#GPUs_supported) 
-
-```bash
-export TORCH_CUDA_ARCH_LIST=8.9
-```
-
 Build the dev container
 
 ```bash
