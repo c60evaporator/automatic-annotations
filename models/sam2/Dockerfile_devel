@@ -1,19 +1,11 @@
 # syntax=docker/dockerfile:1
 # Base image
-FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+FROM jidohub/base-cu128-devel-ubuntu22.04:latest
 
-# Set environment variables for SAM2 (TORCH_CUDA_ARCH_LIST)
-ARG TORCH_CUDA_ARCH_LIST
-ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
-# Clone SAM2 repository and install the required dependencies
-WORKDIR /workspace
-RUN git clone https://github.com/facebookresearch/sam2.git
-WORKDIR /workspace/sam2
-# SAM2 uses CUDAExtension build that needs the same torch environment.
-# Reuse the environment where torch was installed instead of an isolated build.
-RUN pip install \
-    --no-build-isolation \
-    -e .
+# Install Transformers
+# 5.20.x supports torch 2.9.1 in the base image (requires torch>=2.6)
+# and includes GroundingDINO, SigLIP2, SAM2 (image and video) and SAM3
+RUN pip install "transformers~=5.20.0"
 WORKDIR /workspace
 
 ############################
@@ -22,7 +14,9 @@ WORKDIR /workspace
 ARG USERNAME=developer
 ARG UID=1000
 ARG GID=1000
+# Create ~/.cache in advance so that it is not owned by root when ~/.cache/huggingface is bind-mounted
 RUN groupadd -g ${GID} ${USERNAME} \
     && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
-    && chown -R ${UID}:${GID} /workspace
+    && mkdir -p /home/${USERNAME}/.cache \
+    && chown -R ${UID}:${GID} /workspace /home/${USERNAME}/.cache
 USER ${USERNAME}
