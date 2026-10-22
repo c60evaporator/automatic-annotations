@@ -1,0 +1,59 @@
+services:
+  map-anything:
+    image: "${IMAGE_NAME:-mapanything}:${IMAGE_TAG:-cu128-${IMAGE_RUNTIME:-devel}}"
+    # docker build options
+    build:
+      context: .
+      dockerfile: Dockerfile_${IMAGE_RUNTIME:-devel}
+      # --build-arg option
+      args:
+        # Match host UID/GID to avoid permission issues on bind mounts
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+
+        # Proxy settings for the build (if needed). They are not stored in the image.
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+        https_proxy: "${HTTPS_PROXY:-}"
+        no_proxy: "${NO_PROXY:-}"
+
+    # Container name (--name option)
+    container_name: mapanything_${IMAGE_RUNTIME:-devel}
+    # Set resource sharing to host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]  # --gpus
+    ipc: host  # --ipc
+    shm_size: "${SHM_SIZE:-16g}"  # --shm-size
+    # Stable operation for development
+    init: true  # --init option
+    stdin_open: true  # -i option
+    tty: true  # -t option
+    # Set startup directory
+    working_dir: /workspace
+    # Proxy settings for downloading the weights from Hugging Face Hub at runtime (if needed)
+    environment:
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-}"
+      http_proxy: "${HTTP_PROXY:-}"
+      https_proxy: "${HTTPS_PROXY:-}"
+      no_proxy: "${NO_PROXY:-}"
+
+    # Volume mounts
+    volumes:
+      # Weights for MapAnything (Hugging Face cache)
+      - ~/.cache/huggingface:/home/${USERNAME:-developer}/.cache/huggingface
+      # Source code
+      - ./src:/workspace/src/map_anything3
+      - ../../common:/workspace/src/common
+      - ./notebook:/workspace/notebook
+      # Nuscenes dataset
+      - /data/nuscenes_datasets/nuscenes:/workspace/data/nuscenes

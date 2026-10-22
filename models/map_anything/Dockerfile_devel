@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Base image
+FROM jidohub/base-cu128-devel-ubuntu22.04:latest
+
+# Please implement MapAnything installation steps here
+
+WORKDIR /workspace
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+# Create ~/.cache in advance so that it is not owned by root when ~/.cache/huggingface is bind-mounted
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME} \
+    && mkdir -p /home/${USERNAME}/.cache \
+    && chown -R ${UID}:${GID} /workspace /home/${USERNAME}/.cache
+USER ${USERNAME}
