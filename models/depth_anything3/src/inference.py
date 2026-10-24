@@ -1,16 +1,19 @@
 import numpy as np
 from matplotlib.colors import to_rgb
+from PIL import Image
 
 from ..common.geometry.crop_resize import scale_intrinsic
 from ..common.geometry.depth import depth_map_to_point_cloud, depth_map_to_masked_point_clouds
 
+from depth_anything_3.api import DepthAnything3
 from depth_anything_3.specs import Prediction
+from depth_anything_3.utils.alignment import compute_sky_mask
 
 def get_metric_depth(prediction: Prediction,
                      model_name: str,
                      camera_intrinsics: np.ndarray | list | None = None,
-                     original_image_width: int | None = None,
-                     original_image_height: int | None = None,
+                     original_image_widths: list[int] | None = None,
+                     original_image_heights: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Convert the depth prediction to metric depth using the camera intrinsics and original image size.
@@ -23,8 +26,8 @@ def get_metric_depth(prediction: Prediction,
         prediction (Prediction): The depth prediction from the model.
         model_name (str): The name of the model used for inference.
         camera_intrinsics (np.ndarray | list | None): The camera intrinsic matrix (3x3) or a list of intrinsic matrices for each image in the batch. Required for 'DA3METRIC-LARGE' model.
-        original_image_width (int | None): The width of the original image before any resizing. Required for 'DA3METRIC-LARGE' model.
-        original_image_height (int | None): The height of the original image before any resizing. Required for 'DA3METRIC-LARGE' model.
+        original_image_widths (list[int] | None): The widths of the original images before any resizing. Required for 'DA3METRIC-LARGE' model.
+        original_image_heights (list[int] | None): The heights of the original images before any resizing. Required for 'DA3METRIC-LARGE' model.
 
     Returns:
         tuple[np.ndarray, np.ndarray]: A tuple containing:
@@ -32,12 +35,11 @@ def get_metric_depth(prediction: Prediction,
             - scaled_intrinsics (np.ndarray): The scaled camera intrinsic matrix (3x3)
     """
     # Calculate the intrinsic if the model doesn't provide pose estimation
-    if model_name == "DA3METRIC-LARGE":
-        if camera_intrinsics is None or original_image_width is None or original_image_height is None:
-            raise ValueError("For model_name 'DA3METRIC-LARGE', both `camera_intrinsics`, `original_image_width` and `original_image_height` must be provided.")
+    if model_name == "da3metric-large":
+        if camera_intrinsics is None or original_image_widths is None or original_image_heights is None:
+            raise ValueError("For model_name 'da3metric-large', both `camera_intrinsics`, `original_image_widths` and `original_image_heights` must be provided.")
 
-        predicted_depths = prediction.depth
-        num_preds = predicted_depths.shape[0]
+        num_preds = prediction.depth.shape[0]
 
         # Convert camera_intrinsics to a numpy array if it's a list and check the number of predictions
         if isinstance(camera_intrinsics, list):
@@ -45,18 +47,18 @@ def get_metric_depth(prediction: Prediction,
         if camera_intrinsics.shape[0] != num_preds:
             raise ValueError(f"The number of camera_intrinsics ({camera_intrinsics.shape[0]}) does not match the number of predicted depths ({num_preds}).")
 
-        # Get the scale factors for the depth map and original image
-        depth_map_height, depth_map_width = prediction.depth[0].shape
-        scale_x = depth_map_width / original_image_width
-        scale_y = depth_map_height / original_image_height
-
         # Calculate the metric depth
         scaled_intrinsics = []
         metric_depths = []
         for i in range(num_preds):
+            # Get the scale factors for the depth map and original image
+            depth_map_height, depth_map_width = prediction.depth[i].shape
+            scale_x = depth_map_width / original_image_widths[i]
+            scale_y = depth_map_height / original_image_heights[i]
+            # Scale the intrinsic matrix according to the depth map and original image dimensions
             scaled_intrinsic = scale_intrinsic(camera_intrinsics[i], scale_x, scale_y)
             focal = (scaled_intrinsic[0, 0] + scaled_intrinsic[1, 1]) / 2.0
-            metric_depth = focal * predicted_depths[i] / 300.0
+            metric_depth = focal * prediction.depth[i] / 300.0
             scaled_intrinsics.append(scaled_intrinsic)
             metric_depths.append(metric_depth)
         
@@ -67,14 +69,38 @@ def get_metric_depth(prediction: Prediction,
         return metric_depths, scaled_intrinsics
 
     # For these models, the depth is already in metric scale
-    elif model_name in ["DA3NESTED-GIANT-LARGE-1.1", "DA3NESTED-GIANT-LARGE"]:
-        if camera_intrinsics is not None or original_image_width is not None or original_image_height is not None:
-            raise ValueError("For model_name 'DA3NESTED-GIANT-LARGE-1.1' and 'DA3NESTED-GIANT-LARGE', `camera_intrinsics`, `original_image_width` and `original_image_height` must not be provided.")
+    elif model_name in ["da3nested-giant-large-1.1", "da3nested-giant-large"]:
+        if camera_intrinsics is not None or original_image_widths is not None or original_image_heights is not None:
+            raise ValueError("For model_name 'da3nested-giant-large-1.1' and 'da3nested-giant-large', `camera_intrinsics`, `original_image_widths` and `original_image_heights` must not be provided.")
         return prediction.depth, prediction.intrinsics
 
     else:
-        raise ValueError(f"Metric output is not supported. model_name: {model_name}. Supported models are 'DA3METRIC-LARGE', 'DA3NESTED-GIANT-LARGE-1.1', and 'DA3NESTED-GIANT-LARGE'.")
+        raise ValueError(f"Metric output is not supported. model_name: {model_name}. Supported models are 'da3metric-large', 'da3nested-giant-large-1.1', and 'da3nested-giant-large'.")
 
+def predict_metric_depth(model: DepthAnything3,
+                         images: list[Image.Image],
+                         camera_intrinsics: np.ndarray | None = None):
+    prediction = model.inference(images)
+    metric_depths, scaled_intrinsics = get_metric_depth(prediction,
+                                       model_name=model.model_name,
+                                       camera_intrinsics=camera_intrinsics,
+                                       original_image_widths=[img.width for img in images],
+                                       original_image_heights=[img.height for img in images])
+    mask = compute_sky_mask(prediction.sky) if prediction.sky is not None else None
+    return metric_depths, scaled_intrinsics, mask
+
+def predict_pose_conditioned_depth(model: DepthAnything3,
+                                   images: list[Image.Image],
+                                   camera_intrinsics: list[np.ndarray],
+                                   camera_poses: list[np.ndarray]):
+    # Stack intrinsics and extrinsics for the sliding window
+    intrinsics = np.stack(camera_intrinsics, axis=0).astype(np.float32)
+    extrinsics = np.stack(camera_poses, axis=0).astype(np.float32)
+    # Inference depth using DepthAnything3 with pose conditioning
+    prediction = model.inference(images, extrinsics=extrinsics, intrinsics=intrinsics)
+    metric_depths, scaled_intrinsics = get_metric_depth(prediction, model_name=model.model_name)
+    mask = compute_sky_mask(prediction.sky) if prediction.sky is not None else None
+    return metric_depths, scaled_intrinsics, mask
 
 def get_pseudo_lidar(metric_depth: np.ndarray,
                      scaled_intrinsics: np.ndarray,
