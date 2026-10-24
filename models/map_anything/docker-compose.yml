@@ -52,7 +52,7 @@ services:
       # Weights for MapAnything (Hugging Face cache)
       - ~/.cache/huggingface:/home/${USERNAME:-developer}/.cache/huggingface
       # Source code
-      - ./src:/workspace/src/map_anything3
+      - ./src:/workspace/src/map_anything
       - ../../common:/workspace/src/common
       - ./notebook:/workspace/notebook
       # Nuscenes dataset
