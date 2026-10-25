@@ -14,6 +14,12 @@ WORKDIR /workspace
 RUN git clone --branch ${MAPANYTHING_VERSION} --depth 1 https://github.com/facebookresearch/map-anything.git
 WORKDIR /workspace/map-anything
 RUN pip install -c /etc/pip-constraints.txt -e .
+# Install open3d for point cloud visualization (common/visualize) and its shared libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libegl1 \
+    libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install -c /etc/pip-constraints.txt open3d
 # Pre-fetch the DINOv2 code loaded via torch hub, so that it is not downloaded from GitHub at runtime
 ENV TORCH_HOME=/opt/torch
 RUN python -c "import torch; torch.hub.list('facebookresearch/dinov2', trust_repo=True)"
