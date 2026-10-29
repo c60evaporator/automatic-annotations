@@ -1,10 +1,9 @@
 """Grounding DINO のラッパー（ルーターから使う入口）.
 
-公式リポジトリ版（IDEA-Research/GroundingDINO）を使う。
-重みは checkpoints ボリューム（既定 /opt/checkpoints）に手動で置く。
-
-  GroundingDINO_SwinB_cfg.py : /opt/third_party/GroundingDINO/groundingdino/config/
-  groundingdino_swinb_cogcoor.pth : /opt/checkpoints/
+Transformers 版（既定 IDEA-Research/grounding-dino-base。公式の
+groundingdino_swinb_cogcoor に相当）を使う。重みは HuggingFace から
+自動ダウンロードされ、HF_HOME（compose でホストの ~/.cache/huggingface を
+マウント）に保存される。手動配置は不要。
 
 呼び出し側（routers/det2d.py）は「1フレーム × 1カテゴリグループ」で
 1回 predict() を呼ぶ。スコア閾値と同一クラス NMS はグループ単位なので
@@ -27,32 +26,20 @@ logger = get_logger(__name__)
 class GroundingDinoDetector:
     def __init__(
         self,
-        config_path: str | Path,
-        weight_path: str | Path,
+        model_name: str,
         device: str = "cuda",
     ) -> None:
         # 重い import はここで行う。モジュールのトップに置くと、
-        # サーバー起動時に torch と CUDA 拡張が読み込まれ、
+        # サーバー起動時に torch / transformers が読み込まれ、
         # 1つでも壊れているとサーバー自体が起動しなくなる
-        from groundingdino.util.inference import load_model
+        from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
-        self.config_path = str(config_path)
-        self.weight_path = str(weight_path)
+        self.model_name = model_name
         self.device = device
 
-        if not Path(self.weight_path).exists():
-            raise FileNotFoundError(
-                f"Grounding DINO の重みが見つかりません: {self.weight_path}\n"
-                "checkpoints フォルダに groundingdino_swinb_cogcoor.pth を "
-                "配置してマウントしてください。"
-            )
-        if not Path(self.config_path).exists():
-            raise FileNotFoundError(
-                f"Grounding DINO の config が見つかりません: {self.config_path}"
-            )
-
-        logger.info("loading Grounding DINO: %s", self.weight_path)
-        self.model = load_model(self.config_path, self.weight_path, device=device)
+        logger.info("loading Grounding DINO: %s", model_name)
+        self.processor = AutoProcessor.from_pretrained(model_name)
+        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(model_name).to(device).eval()
         logger.info("Grounding DINO ready on %s", device)
 
     def to(self, device: str):
@@ -91,6 +78,7 @@ class GroundingDinoDetector:
 
         boxes, caption = predict_multi_labels(
             model=self.model,
+            processor=self.processor,
             image=image,
             labels=labels,
             box_threshold=score_threshold,

@@ -1,8 +1,13 @@
 """Depth-Anything-3 のラッパー（公式リポジトリ版）.
 
 重みは HuggingFace から自動ダウンロードされる。
-compose が ~/.cache/huggingface をマウントしているので、
+compose がホストの ~/.cache/huggingface を HF_HOME にマウントしているので、
 ホスト側とキャッシュを共有し、再ダウンロードは起きない。
+
+推論は models/depth_anything3/src/inference.py と同じ関数構成にしてある:
+  - predict_metric_depth: 姿勢なしの推論（メトリック深度・内部パラメータ・空マスク）
+  - get_metric_depth: 推論結果をメトリック深度と深度解像度の内部パラメータへ変換
+姿勢付き推論（predict_pose_conditioned_depth）は後で同じ形で追加する。
 
 torch / depth_anything_3 への import はこのモジュール内に閉じてあり、
 モデルの初回ロード時にだけ読み込まれる。
@@ -31,12 +36,16 @@ METRIC_FOCAL_DIVISOR = 300.0
 def get_metric_depth(
     prediction: Any,
     model_name: str,
-    *,
     camera_intrinsics: np.ndarray | list | None = None,
-    original_image_width: int | None = None,
-    original_image_height: int | None = None,
+    original_image_widths: list[int] | None = None,
+    original_image_heights: list[int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """推論結果をメトリック深度と、深度解像度に合わせた内部パラメータへ変換する.
+
+    Args:
+        model_name: DA3 のモデル名（大文字・小文字は区別しない）
+        camera_intrinsics: 元画像の内部パラメータ ``(N, 3, 3)``。DA3METRIC-LARGE で必須
+        original_image_widths / original_image_heights: 元画像のサイズ。DA3METRIC-LARGE で必須
 
     Returns:
         (metric_depths ``(N, H, W)``, scaled_intrinsics ``(N, 3, 3)``)
@@ -44,9 +53,10 @@ def get_metric_depth(
     NOTE: 内部パラメータは**深度マップの解像度**に合わせてスケールする。
     元画像の内部パラメータをそのまま使うと、点群が実際より広がる。
     """
+    model_name = model_name.upper()
     if model_name in METRIC_FROM_INTRINSIC_MODELS:
-        if (camera_intrinsics is None or original_image_width is None
-                or original_image_height is None):
+        if (camera_intrinsics is None or original_image_widths is None
+                or original_image_heights is None):
             raise ValueError(
                 f"{model_name} には camera_intrinsics と元画像サイズが必要です"
             )
@@ -60,12 +70,11 @@ def get_metric_depth(
                 f"推論結果の数 ({num_preds}) が一致しません"
             )
 
-        depth_height, depth_width = predicted[0].shape
-        scale_x = depth_width / original_image_width
-        scale_y = depth_height / original_image_height
-
         scaled_list, metric_list = [], []
         for index in range(num_preds):
+            depth_height, depth_width = predicted[index].shape
+            scale_x = depth_width / original_image_widths[index]
+            scale_y = depth_height / original_image_heights[index]
             scaled = scale_intrinsic(intrinsics[index], scale_x, scale_y)
             focal = (scaled[0, 0] + scaled[1, 1]) / 2.0
             metric_list.append(focal * predicted[index] / METRIC_FOCAL_DIVISOR)
@@ -84,6 +93,42 @@ def get_metric_depth(
         f"メトリック深度に対応していないモデルです: {model_name}. "
         f"対応: {sorted(METRIC_FROM_INTRINSIC_MODELS | METRIC_NATIVE_MODELS)}"
     )
+
+
+def predict_metric_depth(
+    model: Any,
+    model_name: str,
+    images: list[Image.Image],
+    camera_intrinsics: np.ndarray | list | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """DA3 で姿勢なしの深度推定を行い、メトリック深度に変換する.
+
+    Args:
+        model: DepthAnything3 のモデル
+        model_name: DA3 のモデル名（get_metric_depth の換算方法を決める）
+        images: 入力画像
+        camera_intrinsics: 元画像の内部パラメータ ``(N, 3, 3)``。
+            DA3METRIC-LARGE で必須、DA3NESTED 系では None
+
+    Returns:
+        (metric_depths ``(N, H, W)``, scaled_intrinsics ``(N, 3, 3)``,
+         non_sky_masks ``(N, H, W)`` の bool。モデルが空を返さない場合は None)
+    """
+    from depth_anything_3.utils.alignment import compute_sky_mask
+
+    prediction = model.inference(images)
+    metric_depths, scaled_intrinsics = get_metric_depth(
+        prediction,
+        model_name=model_name,
+        camera_intrinsics=camera_intrinsics,
+        original_image_widths=[image.width for image in images],
+        original_image_heights=[image.height for image in images],
+    )
+    non_sky_masks = None
+    if getattr(prediction, "sky", None) is not None:
+        # compute_sky_mask は「空でない領域」を True で返す
+        non_sky_masks = np.asarray(compute_sky_mask(prediction.sky), dtype=bool)
+    return metric_depths, scaled_intrinsics, non_sky_masks
 
 
 class DepthAnything3Estimator:
@@ -118,27 +163,16 @@ class DepthAnything3Estimator:
             {"metric_depth", "scaled_intrinsic", "non_sky_mask"}
             non_sky_mask はモデルが空を返さない場合 None。
         """
-        from depth_anything_3.utils.alignment import compute_sky_mask
-
-        prediction = self.model.inference([image])
-
-        if self.model_name in METRIC_NATIVE_MODELS:
-            depths, intrinsics = get_metric_depth(prediction, self.model_name)
-        else:
-            depths, intrinsics = get_metric_depth(
-                prediction, self.model_name,
-                camera_intrinsics=[camera_intrinsic],
-                original_image_width=image.width,
-                original_image_height=image.height,
-            )
-
-        non_sky_mask = None
-        if getattr(prediction, "sky", None) is not None:
-            # compute_sky_mask は「空でない領域」を True で返す
-            non_sky_mask = np.asarray(compute_sky_mask(prediction.sky[0]), dtype=bool)
-
+        # DA3NESTED 系は内部パラメータを自前で返すので渡さない
+        native = self.model_name.upper() in METRIC_NATIVE_MODELS
+        depths, intrinsics, non_sky_masks = predict_metric_depth(
+            self.model,
+            self.model_name,
+            [image],
+            camera_intrinsics=None if native else [camera_intrinsic],
+        )
         return {
             "metric_depth": np.asarray(depths[0], dtype=np.float32),
             "scaled_intrinsic": np.asarray(intrinsics[0], dtype=np.float64),
-            "non_sky_mask": non_sky_mask,
+            "non_sky_mask": None if non_sky_masks is None else non_sky_masks[0],
         }

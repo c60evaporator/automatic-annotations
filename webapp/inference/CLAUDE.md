@@ -85,7 +85,7 @@ UI（Detection2Dページの画面上部のエクスパンダー）からは以�
 |`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|float|IoS Delete Thresholdパラメータの最大値|1.0|原理上の最大値|
 |`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除|[config.py参照](webapp/webapp/app/core/config.py)|同じ物体で複数box検出されやすいラベル（車両系）は"small"で小さい方を削除し、複数物体がまとめて検出されやすいラベル（barrier,traffic_cone等の小物体系）は"big"で大きい方を削除|
 |`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
-|`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名|"groundingdino_swinb_cogcoor"|重み名を指定。推論サーバー側の実体と合わせる必要がある|
+|`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名|"IDEA-Research/grounding-dino-base"|HuggingFaceのモデルIDを指定。推論サーバー側の`settings.GROUNDINGDINO_MODEL`と合わせる必要がある|
 
 ### 推論の実行単位
 
@@ -100,16 +100,18 @@ Detection2Dは、パラメータで指定したSample Intervalごとに実施す
 
 ### 推論モデルの実装
 
-GroundingDINOのモデルは、HuggingFace版ではなくGitHubの公式リポジトリ版を使用し、重みgroundingdino_swinb_cogcoor.pthを手動ダウンロードし、マウントでコンテナ内の/opt/checkpointsフォルダ内に配置して使用する（READMEに事前に重みをダウンロードする必要がある旨を記載）。
+GroundingDINOのモデルは、Transformers版（`IDEA-Research/grounding-dino-base`。公式の重みgroundingdino_swinb_cogcoor.pthに相当）を使用する。重みはHuggingFaceから自動ダウンロードされ、HF_HOME（composeでホストの~/.cache/huggingfaceをマウント）に保存されるため、手動ダウンロードは不要。モデルIDは推論サーバーの`settings.GROUNDINGDINO_MODEL`で指定する。
 
 GroundingDINOのモデルインスタンスは以下のように作成する
 
 ```python
-GROUNDINGDINO_CONFIG_PATH = "/opt/third_party/GroundingDINO/groundingdino/config/GroundingDINO_SwinB_cfg.py"
-GROUNDINGDINO_WEIGHT_PATH = "/opt/checkpoints/groundingdino_swinb_cogcoor.pth"
+from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+GROUNDINGDINO_MODEL = "IDEA-Research/grounding-dino-base"
 device = "cuda" if torch.cuda.is_available() else "cpu"
-# Build the GroundingDINO model
-groundingdino_model = load_model(str(GROUNDINGDINO_CONFIG_PATH), str(GROUNDINGDINO_WEIGHT_PATH), device=device)
+# Build the GroundingDINO model and processor
+groundingdino_processor = AutoProcessor.from_pretrained(GROUNDINGDINO_MODEL)
+groundingdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(GROUNDINGDINO_MODEL).to(device).eval()
 ```
 
 推論の実装例（フレーム、カメラ、カテゴリグループ数分だけ推論を実施し、結果をまとめて返す）
@@ -156,6 +158,7 @@ for sample_index in proc_sample_indices:
             # Infer the image with GroundingDINO model
             predicted_boxes, caption = predict_multi_labels(
                 model=groundingdino_model,
+                processor=groundingdino_processor,
                 image=image,
                 labels=sublabels, # 実際にプロンプトとして使用するラベル=サブラベルを渡す
                 box_threshold=box_threshold,
@@ -227,7 +230,7 @@ UI（Instance Trackingページの画面上部のエクスパンダー）から�
 |`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`|"label", "category_group" or None|IoU Label Matchパラメータのデフォルト値|"category_group"|"label"だとDetection2Dのラベルミスの影響を強く受け、Noneだと制約が弱く誤結合されやすいため、バランスを取って"category_group"|
 |`settings.DEFAULT_TRACK_ID_INHERITANCE`|"continuous_id" or "forward_backward_matching"|Track ID Inheritanceパラメータのデフォルト値|"forward_backward_matching"|"continuous_id"だとIntervalの途中から現れた物体が見逃されるため|
 |`settings.TRACKING_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
-|`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|"sam2.1_hiera_large"|重み名を指定。推論サーバー側の実体と合わせる必要がある|
+|`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（HuggingFaceのモデルIDを指定。推論サーバー側の`settings.SAM2_MODEL`と合わせる必要がある）|"facebook/sam2.1-hiera-large"|HuggingFaceのモデルIDを指定。推論サーバー側の実体と合わせる必要がある|
 |`settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD`|float|現状使用していない（将来的にマスクにスコアを付けるトラッキングアルゴリズムを使用する場合のために準備）|-|-|
 |`settings.TRACKING_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|-|-|
 
@@ -250,20 +253,23 @@ sweep_frames = [frames[i] for i in sweep_indices]
 
 ### 推論モデルの実装
 
-SAM2のモデルは、HuggingFace版ではなくGitHubの公式リポジトリ版を使用し、重みsam2.1_hiera_large.ptを手動ダウンロードし、マウントでコンテナ内の/opt/checkpointsフォルダ内に配置して使用する（READMEに事前に重みをダウンロードする必要がある旨を記載）。
+SAM2のモデルは、Transformers版の`Sam2VideoModel`（`facebook/sam2.1-hiera-large`）を使用する。重みはHuggingFaceから自動ダウンロードされ、HF_HOME（composeでホストの~/.cache/huggingfaceをマウント）に保存されるため、手動ダウンロードは不要。モデルIDは推論サーバーの`settings.SAM2_MODEL`で指定する。
 
-SAM2のモデルインスタンスは以下のように作成する
+SAM2のモデルインスタンスは以下のように作成する（CUDAではbfloat16で推論する）
 
 ```python
-from sam2.build_sam import build_sam2_video_predictor
+from transformers import Sam2VideoModel, Sam2VideoProcessor
 
-SAM2_CONFIG_PATH = "configs/sam2.1/sam2.1_hiera_l.yaml"
-SAM2_CHECKPOINT_PATH = "/opt/checkpoints/sam2.1_hiera_large.pt"
+SAM2_MODEL = "facebook/sam2.1-hiera-large"
 device = "cuda" if torch.cuda.is_available() else "cpu"
-sam2_predictor = build_sam2_video_predictor(str(SAM2_CONFIG_PATH), str(SAM2_CHECKPOINT_PATH), device=device)
+dtype = torch.bfloat16 if device == "cuda" else torch.float32
+sam2_model = Sam2VideoModel.from_pretrained(SAM2_MODEL).to(device, dtype=dtype).eval()
+sam2_processor = Sam2VideoProcessor.from_pretrained(SAM2_MODEL)
 ```
 
-インスタンスセグメンテーション・トラッキングの推論はこの`sam2_predictor`インスタンスを用いて実施しますが、`track_id_inheritance`パラメータに"continuous_id"と"reverse_matching"どちらを指定するかで、各推論間のtrack_idの引き継ぎ方法を以下のように変えます（どちらも今回のSample Intervalから次のSample Intervalまでの画像フレームをまとめて推論に使用する）
+推論はブロックごとに`sam2_processor.init_video_session`で新しい推論セッション（inference_state）を作り、ボックスプロンプトを`add_inputs_to_inference_session`で追加したのち`sam2_model.propagate_in_video_iterator`で伝播させる（実装は`webapp/inference/app/models_impl/sam2_video.py`参照）。以下の実装例は公式リポジトリ版の書き方で処理の流れを示したもので、関数の引数は実装と異なる。
+
+インスタンスセグメンテーション・トラッキングの推論はこのモデルを用いて実施しますが、`track_id_inheritance`パラメータに"continuous_id"と"reverse_matching"どちらを指定するかで、各推論間のtrack_idの引き継ぎ方法を以下のように変えます（どちらも今回のSample Intervalから次のSample Intervalまでの画像フレームをまとめて推論に使用する）
 
 - `track_id_inheritance="continuous_id"`: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチングし、マッチングしたtrack_idを次のブロックに引き継ぐ
 - `track_id_inheritance="forward_backward_matching"`: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施してtrack_idを引き継ぐ
@@ -593,7 +599,7 @@ UI（Depth Boxfittingページの画面上部のエクスパンダー）から�
 |`settings.DEPTH_MAP_DOWNSCALE`|float|表示のみ使用。深度マップの保存解像度倍率。1/2にすると保存容量が1/4に削減できる|
 |`settings.BOXFIT_STORED_POINTS_MAX`|float|表示のみ使用。DBに保存するインスタンス点群の上限（ボクセル間引き後）|
 |`settings.POINTCLOUD_DISPLAY_MAX_POINTS`|float|表示のみ使用。Plotlyへ渡す総点群数の上限。これ以上の数の点群は間引かれる|
-|`settings.DEPTH_MODEL_NAME`|str|runの記録に残す深度推定のモデル名（重み名を指定。推論サーバー側の実体と合わせる必要がある）|
+|`settings.DEPTH_MODEL_NAME`|str|runの記録に残す深度推定のモデル名（HuggingFaceのモデルID。推論サーバー側の`settings.DEPTH_ANYTHING_MODEL`と合わせる必要がある）|
 |`settings.BOXFIT_STUB_DELAY_SEC`|float|モデル使用時には使用しない（スタブでの待ち時間を指定する）|
 
 ### 推論の実行単位
@@ -604,7 +610,7 @@ Depth Boxfittingは、キーフレームごとに実施する。
 
 ### 推論モデルの実装
 
-深度推定のDepth-Anything-3モデルは、HuggingFace版ではなくGitHubの公式リポジトリ版を使用するが、重みはHuggingFaceから自動ダウンロードされる（ホストとコンテナ両方で~/.cache/huggingfaceフォルダに格納される）。
+深度推定のDepth-Anything-3モデルは、GitHubの公式リポジトリ版（コミットを固定してインストール）を使用するが、重みはHuggingFaceから自動ダウンロードされる（HF_HOMEにホストの~/.cache/huggingfaceフォルダがマウントされ、ホストと共有される）。モデル名は推論サーバーの`settings.DEPTH_ANYTHING_MODEL`で指定する。
 
 Depth-Anything-3のモデルインスタンスは以下のように作成する
 
@@ -617,7 +623,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 da3_model = DepthAnything3.from_pretrained(f"depth-anything/{DA3_MODEL_NAME}").to(device=device)
 ```
 
-推論時は以下のようにカメラ・サンプルのループでDA3推論を実施して結果を保持し（get_metric_depth関数は推論された深度マップをメートル単位に修正し、内部パラメータのスケールを深度マップの解像度に合わせる。詳細は`webapp/inference/app/models_impl/da3_depth.py`参照）
+推論時は以下のようにカメラ・サンプルのループでDA3推論を実施して結果を保持する（predict_metric_depth関数はDA3で推論し、内部で呼ぶget_metric_depth関数で深度マップをメートル単位に修正して内部パラメータのスケールを深度マップの解像度に合わせ、空マスクも返す。詳細は`webapp/inference/app/models_impl/da3_depth.py`参照。姿勢付き推論のpredict_pose_conditioned_depth関数は今後同じ形で追加する）
 
 ```python
 depth_est_results = {}
@@ -631,19 +637,17 @@ for camera_channel in CAMERA_CHANNELS:
         ego_pose_cam = # そのサンプル・カメラのego_pose
         image = # そのサンプル・カメラのPIL.Image.Image形式のカメラ画像
         # Inference depth using DepthAnything3 (without pose conditioning)
-        prediction = da3_model.inference([image])
-        metric_depths, scaled_intrinsics = get_metric_depth(
-            prediction,
-            model_name=DA3_MODEL_NAME,
+        metric_depths, scaled_intrinsics, non_sky_masks = predict_metric_depth(
+            da3_model,
+            DA3_MODEL_NAME,
+            [image],
             camera_intrinsics=[calibrated_sensor_cam["camera_intrinsic"]],
-            original_image_width=image.width,
-            original_image_height=image.height
         )
         # Store the depth estimation results
         depth_est_results[camera_channel][sample_index] = {
             "metric_depth": metric_depths[0],
             "scaled_intrinsics": scaled_intrinsics[0],
-            "non_sky_mask": compute_sky_mask(prediction.sky[0]) if prediction.sky is not None else None,
+            "non_sky_mask": non_sky_masks[0] if non_sky_masks is not None else None,
             "original_image_width": image.width,
             "original_image_height": image.height,
             "depth_image_width": metric_depths[0].shape[1],

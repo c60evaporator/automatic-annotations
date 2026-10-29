@@ -1,111 +1,96 @@
 # syntax=docker/dockerfile:1
 # Base image
-FROM jidohub/base-cu124-devel-ubuntu22.04:latest
+FROM jidohub/base-cu128-devel-ubuntu22.04:latest
 
-# Common environment variables (TORCH_CUDA_ARCH_LIST)
-ARG TORCH_CUDA_ARCH_LIST
-ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+# Proxy (HTTP_PROXY, HTTPS_PROXY, NO_PROXY and lowercase) is a predefined build arg, so it is only used during the build
 
-# Enable proxy only during build.
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG http_proxy
-ARG https_proxy
+# Versions of the official repositories to install
+ARG DA3_COMMIT=3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
+ARG MAPANYTHING_VERSION=v1.1.3
 
-# Folder for downloading GroundingDINO/SAM2/Depth-Antying-3
+# Folder for cloning Depth-Anything-3/MapAnything (/workspace is hidden by the bind mount)
 ENV THIRD_PARTY_ROOT=/opt/third_party
 RUN mkdir -p ${THIRD_PARTY_ROOT}
 
-# Directries for storing model weights
+# Directories for storing model weights
 ENV HF_HOME=/opt/cache/huggingface \
     TORCH_HOME=/opt/cache/torch \
     CHECKPOINT_DIR=/opt/checkpoints
 RUN mkdir -p ${HF_HOME} ${TORCH_HOME} ${CHECKPOINT_DIR}
 
-############################
-# SAM2 Installation
-############################
-# Clone SAM2 repository and install the required dependencies
-WORKDIR ${THIRD_PARTY_ROOT}
-RUN git clone https://github.com/facebookresearch/sam2.git
-WORKDIR ${THIRD_PARTY_ROOT}/sam2
-# SAM2 uses CUDAExtension build that needs the same torch environment.
-# Reuse the environment where torch was installed instead of an isolated build.
-RUN pip install \
-    --no-build-isolation \
-    -e .
+# Shared libraries needed to import open3d (>=0.20)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libegl1 \
+    libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 ############################
-# Grounding DINO Installation
+# Common constraints
 ############################
-# Environment variable for GroundingDINO (CUDA_HOME)
-ENV CUDA_HOME=/usr/local/cuda
-# Clone GroundingDINO repository and install the required dependencies
-WORKDIR ${THIRD_PARTY_ROOT}
-RUN git clone https://github.com/IDEA-Research/GroundingDINO.git
-WORKDIR ${THIRD_PARTY_ROOT}/GroundingDINO
-# GroundingDINO's CUDA extension uses deprecated PyTorch APIs.
-# Patch it for recent PyTorch versions.
-RUN sed -i \
-    -e 's/value\.type()\.is_cuda()/value.is_cuda()/g' \
-    -e 's/value\.type()/value.scalar_type()/g' \
-    groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu
-# GroundingDINO imports torch from setup.py while resolving build requirements.
-# Reuse the environment where torch was installed instead of an isolated build.
-RUN pip install \
-    --no-build-isolation \
-    -e .
-# GroundingDINO expects transformers 4.x, so downgrade it
-RUN pip install "transformers<5"
+# Install torchaudio matching torch 2.9.1 (required by uniception of MapAnything)
+RUN pip install torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+# Pin torch/torchvision/torchaudio/numpy of the base image so that the dependencies cannot replace them
+# (pyarrow>=26 doesn't support numpy 1.x, opencv-python is aligned with opencv-python-headless of MapAnything)
+RUN pip freeze | grep -iE "^(torch|torchvision|torchaudio|numpy)==" > /etc/pip-constraints.txt \
+    && echo "pyarrow<26" >> /etc/pip-constraints.txt \
+    && echo "opencv-python==4.10.0.84" >> /etc/pip-constraints.txt
 
 ############################
-# Depth-Anything-3 Installation
+# GroundingDINO / SAM2 / SigLIP2 (Transformers)
 ############################
-# Install xformers
-RUN pip install xformers==0.0.28.post3
-# Clone Depth-Anything-3 repository and install the required dependencies
+RUN pip install -c /etc/pip-constraints.txt "transformers~=5.20.0"
+
+############################
+# Depth-Anything-3
+############################
+# xformers 0.0.33.post2 is the prebuilt wheel for torch 2.9.1
+RUN pip install -c /etc/pip-constraints.txt xformers==0.0.33.post2
 WORKDIR ${THIRD_PARTY_ROOT}
-RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git
+RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git \
+    && git -C Depth-Anything-3 checkout ${DA3_COMMIT}
 WORKDIR ${THIRD_PARTY_ROOT}/Depth-Anything-3
-# Depth-Anything-3 doesn't need torch for building, so `--no-build-isolation` argument is not used
-RUN pip install -e .
-# Install Gaussian head
-RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+# addict is imported by depth_anything_3 but not listed in the dependencies
+RUN pip install -c /etc/pip-constraints.txt -e . addict
+
+############################
+# MapAnything
+############################
+WORKDIR ${THIRD_PARTY_ROOT}
+RUN git clone --branch ${MAPANYTHING_VERSION} --depth 1 https://github.com/facebookresearch/map-anything.git
+WORKDIR ${THIRD_PARTY_ROOT}/map-anything
+# Install the dependencies except rerun-sdk~=0.24.1 and plyfile>=1.1.4 (they require numpy>=2)
+RUN python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print('\n'.join(d for d in deps if not d.startswith('rerun-sdk')))" > /tmp/requirements.txt \
+    && pip install -c /etc/pip-constraints.txt -r /tmp/requirements.txt "plyfile<1.1.4" \
+    && pip install -c /etc/pip-constraints.txt --no-deps -e . \
+    && rm -f /tmp/requirements.txt
+# Pre-fetch the DINOv2 code loaded via torch hub (into TORCH_HOME)
+RUN python -c "import torch; torch.hub.list('facebookresearch/dinov2', trust_repo=True)"
 
 ############################
 # Other dependencies
 ############################
-# Patchwork++ and Open3D dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libeigen3-dev \
-    libegl1 \
-    libusb-1.0-0 \
-    cmake \
-    && rm -rf /var/lib/apt/lists/*
-RUN pip install pypatchworkpp
+# Patchwork++ (ground removal) and open3d (point cloud processing)
+RUN pip install -c /etc/pip-constraints.txt pypatchworkpp open3d
 
 ############################
 # API server dependencies
 ############################
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir -c /etc/pip-constraints.txt -r /tmp/requirements.txt
 
 ############################
 # Import smoke test
 ############################
-# ここで落とすことで、実行時（最初の推論リクエスト）ではなくビルド時に
-# 依存の壊れを検出する。
-# 特に numpy: ベースイメージの C 拡張は numpy 1.x でビルドされているため、
-# 追加インストールで 2.x へ上がると matplotlib などが
-# "compiled using NumPy 1.x cannot be run in NumPy 2.x" で落ちる。
-# GroundingDINO は visualizer 経由で matplotlib を import するので直撃する。
+# ここで落とすことで、実行時（最初の推論リクエスト）ではなくビルド時に依存の壊れを検出する。
+# 特に numpy: ベースイメージの C 拡張は numpy 1.x でビルドされているため、2.x へ上がると壊れる。
 RUN python -c "\
 import numpy, matplotlib, torch, torchvision; \
 assert numpy.__version__.startswith('1.'), f'numpy が 1.x ではありません: {numpy.__version__}'; \
 import matplotlib.pyplot; \
-import groundingdino.util.inference; \
-import sam2; \
-import open3d; \
+from transformers import GroundingDinoForObjectDetection, Sam2Model, Sam2VideoModel, Siglip2Model; \
+import depth_anything_3.api; \
+import mapanything.models; \
+import open3d, pypatchworkpp, cv2, fastapi, shapely; \
 print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
 
 ############################
@@ -132,8 +117,7 @@ EXPOSE 8000
 ############################
 # Run FastAPI
 ############################
-# --workers should be always one to prevent multiple model load
-# VRAM が溢れる
+# --workers should be always one to prevent multiple model load (VRAM overflow)
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
      "--workers", "1", "--reload"]

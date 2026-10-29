@@ -1,10 +1,11 @@
-"""Grounding DINO（公式リポジトリ版）の推論.
+"""Grounding DINO（Transformers 版）の推論.
 
-HuggingFace 版ではなく IDEA-Research/GroundingDINO をそのまま使う。
-テキストプロンプトの扱いに結果が強く左右されるモデルなので、
-実験で動作確認済みの手順をそのまま踏襲している。
+IDEA-Research/grounding-dino-base（公式 groundingdino_swinb_cogcoor の
+Transformers 版）を使う。テキストプロンプトの扱いに結果が強く左右される
+モデルなので、公式リポジトリ版で実験済みの手順（プロンプトの組み立て、
+文字スパン→トークンの対応付け、ラベル単位の NMS）をそのまま踏襲している。
 
-torch / groundingdino への import はこのモジュール内に閉じてある。
+torch / transformers への import はこのモジュール内に閉じてある。
 サーバー起動時ではなく、モデルの初回ロード時に読み込まれる
 （app/core/models.py の遅延ローダー経由）。
 """
@@ -13,26 +14,51 @@ from __future__ import annotations
 import torch
 from PIL import Image
 from torchvision.ops import batched_nms, box_convert
-
-import groundingdino.datasets.transforms as T
-from groundingdino.models.GroundingDINO.groundingdino import GroundingDINO
-from groundingdino.util.vl_utils import create_positive_map_from_span
+from transformers import (
+    BatchEncoding,
+    GroundingDinoForObjectDetection,
+    GroundingDinoProcessor,
+)
 
 from app.models_impl.prompt import PromptDefinition, build_multi_label_prompt
 
 
-def preprocess_image(image: Image.Image) -> torch.Tensor:
-    transform = T.Compose([
-        T.RandomResize([800], max_size=1333),
-        T.ToTensor(),
-        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
-    image_transformed, _ = transform(image, None)
-    return image_transformed
+def preprocess_image(image: Image.Image, processor: GroundingDinoProcessor) -> torch.Tensor:
+    """公式実装と同じ前処理（短辺 800 / 長辺 1333 以下へリサイズ + ImageNet 正規化）.
+
+    Transformers の画像プロセッサの既定値が公式実装と同じ。
+    Returns: (3, H, W) のテンソル
+    """
+    return processor.image_processor(images=image, return_tensors="pt")["pixel_values"][0]
+
+
+def create_positive_map_from_span(
+    tokenized: BatchEncoding,
+    token_span: list[list[list[int]]],
+    max_text_len: int = 256,
+) -> torch.Tensor:
+    """各ラベルの文字スパンを、対応するトークン位置のマップに変換する.
+
+    groundingdino.util.vl_utils.create_positive_map_from_span の移植。
+    fast tokenizer の char_to_token で文字位置→トークン位置を引く。
+
+    Returns:
+        (num_labels, max_text_len)。各行の合計が 1 になるよう正規化済み
+    """
+    positive_map = torch.zeros((len(token_span), max_text_len), dtype=torch.float)
+    for j, label_spans in enumerate(token_span):
+        for beg, end in label_spans:
+            beg_pos = tokenized.char_to_token(beg)
+            end_pos = tokenized.char_to_token(end - 1)
+            if beg_pos is None or end_pos is None:
+                raise ValueError(f"文字スパン ({beg}, {end}) をトークンに対応付けられません")
+            positive_map[j, beg_pos:end_pos + 1].fill_(1)
+    return positive_map / (positive_map.sum(-1)[:, None] + 1e-6)
 
 
 def predict_multi_labels(
-    model: GroundingDINO,
+    model: GroundingDinoForObjectDetection,
+    processor: GroundingDinoProcessor,
     image: Image.Image,
     labels: list[str],
     box_threshold: float = 0.3,
@@ -44,7 +70,8 @@ def predict_multi_labels(
     """Run Grounding DINO prediction for a list of labels
 
     Args:
-        model: Grounding DINO model.
+        model: Grounding DINO model (Transformers).
+        processor: Grounding DINO processor (Transformers).
         image: Input image as a PIL Image.
         labels: List of labels to detect in the image.
         box_threshold: Box threshold for filtering predictions.
@@ -68,24 +95,29 @@ def predict_multi_labels(
     # Build the prompt for multi-label detection
     prompt_definition: PromptDefinition = build_multi_label_prompt(labels)
 
-    # Preprocess the image and move it to the specified device
-    image_tensor = preprocess_image(image).to(device)
+    # Preprocess the image and the caption, and move them to the specified device
+    image_tensor = preprocess_image(image, processor).to(device)
+    tokenized = processor.tokenizer(prompt_definition.caption, return_tensors="pt")
 
     # Predict
     model = model.to(device)
     model.eval()
 
     with torch.no_grad():
-        outputs = model(image_tensor[None], captions=[prompt_definition.caption])
+        outputs = model(
+            pixel_values=image_tensor[None],
+            input_ids=tokenized["input_ids"].to(device),
+            token_type_ids=tokenized["token_type_ids"].to(device),
+            attention_mask=tokenized["attention_mask"].to(device),
+        )
 
-    # shape: (num_queries, max_text_len)
-    token_scores = outputs["pred_logits"].cpu().sigmoid()[0]
+    # shape: (num_queries, max_text_len)。プロンプト長より後ろは -inf（sigmoid で 0）
+    token_scores = outputs.logits.float().cpu().sigmoid()[0]
     # shape: (num_queries, 4), normalized cxcywh
-    boxes_cxcywh = outputs["pred_boxes"].cpu()[0]
+    boxes_cxcywh = outputs.pred_boxes.float().cpu()[0]
 
     # Create a matrix that maps each token to the corresponding label(s)
     # based on the token spans
-    tokenized = model.tokenizer(prompt_definition.caption)
     positive_map = create_positive_map_from_span(
         tokenized=tokenized,
         token_span=[

@@ -45,8 +45,7 @@ def register_model_loaders() -> None:
 
         from app.models_impl.grounding_dino import GroundingDinoDetector
         return GroundingDinoDetector(
-            config_path=settings.GROUNDINGDINO_CONFIG_PATH,
-            weight_path=settings.GROUNDINGDINO_WEIGHT_PATH,
+            model_name=settings.GROUNDINGDINO_MODEL,
             device=settings.device,
         )
 
@@ -57,8 +56,7 @@ def register_model_loaders() -> None:
 
         from app.models_impl.sam2_tracker import Sam2Tracker
         return Sam2Tracker(
-            config_path=settings.SAM2_CONFIG_PATH,
-            checkpoint_path=settings.SAM2_CHECKPOINT_PATH,
+            model_name=settings.SAM2_MODEL,
             device=settings.device,
         )
 

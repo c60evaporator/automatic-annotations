@@ -1,14 +1,12 @@
-"""SAM2 トラッカー（公式リポジトリ版）.
+"""SAM2 トラッカー（Transformers 版）.
 
 呼び出し側（routers/instance_tracking.py）は
 「1 プロンプト区間 × 1 カメラ」で 1 回 `propagate()` を呼ぶ。
 区間内で一貫した仮 ID（local_id）を返せばよく、
 シーン全体を通した track_id の付け替えは呼び出し側の責務。
 
-重みは checkpoints ボリューム（既定 /opt/checkpoints）に手動で置く:
-    sam2.1_hiera_large.pt
-config は SAM2 パッケージ同梱の相対パスを Hydra が解決する:
-    configs/sam2.1/sam2.1_hiera_l.yaml
+モデルは Transformers の Sam2VideoModel（既定 facebook/sam2.1-hiera-large）。
+重みは HuggingFace から自動ダウンロードされ、HF_HOME に保存される（手動配置は不要）。
 """
 from __future__ import annotations
 
@@ -26,37 +24,28 @@ logger = get_logger(__name__)
 class Sam2Tracker:
     def __init__(
         self,
-        config_path: str,
-        checkpoint_path: str | Path,
+        model_name: str,
         device: str = "cuda",
     ) -> None:
         # 重い import はここで行う。モジュールのトップに置くと
-        # サーバー起動時に torch と CUDA 拡張が読み込まれ、
+        # サーバー起動時に torch / transformers が読み込まれ、
         # 1 つでも壊れているとサーバー自体が起動しなくなる
-        from sam2.build_sam import build_sam2_video_predictor
+        import torch
+        from transformers import Sam2VideoModel, Sam2VideoProcessor
 
-        self.config_path = str(config_path)
-        self.checkpoint_path = str(checkpoint_path)
+        self.model_name = model_name
         self.device = device
+        # CUDA では bfloat16 で推論する（公式実装の autocast(bfloat16) に相当）
+        self.dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
 
-        if not Path(self.checkpoint_path).exists():
-            raise FileNotFoundError(
-                f"SAM2 の重みが見つかりません: {self.checkpoint_path}\n"
-                "checkpoints フォルダに sam2.1_hiera_large.pt を配置して"
-                "マウントしてください。"
-            )
-
-        logger.info("loading SAM2: %s", self.checkpoint_path)
-        # config はファイルパスではなく Hydra の設定名。
-        # SAM2 パッケージ内の configs/ から解決される
-        self.predictor = build_sam2_video_predictor(
-            self.config_path, self.checkpoint_path, device=device
-        )
+        logger.info("loading SAM2: %s", model_name)
+        self.model = Sam2VideoModel.from_pretrained(model_name).to(device, dtype=self.dtype).eval()
+        self.processor = Sam2VideoProcessor.from_pretrained(model_name)
         logger.info("SAM2 ready on %s", device)
 
     def to(self, device: str):
         """models.py の解放処理から呼ばれる（VRAM を返すため）."""
-        self.predictor.to(device)
+        self.model.to(device)
         self.device = device
         return self
 
@@ -84,7 +73,6 @@ class Sam2Tracker:
             インスタンス一覧（区間内で一貫した local_id 付き）。
         """
         from app.models_impl.sam2_video import (
-            _autocast,
             add_box_prompts,
             init_frame_state,
             propagate_inference,
@@ -113,22 +101,24 @@ class Sam2Tracker:
         reverse = direction == "backward"
         prompt_frame_idx = len(frames) - 1 if reverse else 0
 
-        with torch.inference_mode(), _autocast(self.device):
-            inference_state = init_frame_state(self.predictor, images)
-            # 状態を作り直した直後でも、プロンプト追加前に reset しておく
-            # （同じ predictor を区間ごとに使い回すため）
-            self.predictor.reset_state(inference_state)
+        # 推論セッションは区間ごとに新しく作るので、前の区間の状態は残らない
+        with torch.inference_mode():
+            inference_state = init_frame_state(
+                self.model, self.processor, images, device=self.device, dtype=self.dtype
+            )
             add_box_prompts(
-                self.predictor, inference_state, frame_idx=prompt_frame_idx,
+                self.model, self.processor, inference_state, frame_idx=prompt_frame_idx,
                 box_prompts=prompt_boxes,
             )
             propagated = propagate_inference(
-                self.predictor, inference_state,
+                self.model, self.processor, inference_state,
                 start_frame_idx=prompt_frame_idx, reverse=reverse,
             )
 
-        height = inference_state["video_height"]
-        width = inference_state["video_width"]
+        height = int(inference_state.video_height)
+        width = int(inference_state.video_width)
+        # セッションはフレームと特徴量を GPU に保持しているので、ここで手放す
+        del inference_state
 
         results: list[list[dict[str, Any]]] = []
         for frame_index in range(len(frames)):

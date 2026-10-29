@@ -4,12 +4,6 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# サードパーティのリポジトリは Dockerfile で /opt/third_party に clone する
-THIRD_PARTY_ROOT = Path("/opt/third_party")
-# 手動で配置した重みの置き場（compose で ./checkpoints をマウント）。
-# 各重みのパスをここ基準で組み立てる（同じ文字列を直書きしないため）
-CHECKPOINT_ROOT = Path("/opt/checkpoints")
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -26,21 +20,14 @@ class Settings(BaseSettings):
     # "cuda" / "cpu"。未指定なら起動時に自動判定する
     DEVICE: str | None = None
 
-    # --- Grounding DINO（公式リポジトリ版）--------------------------------
-    # HuggingFace 版ではなく IDEA-Research/GroundingDINO を使う。
-    # config はリポジトリ同梱のものを、重みは手動配置したものを指す
-    GROUNDINGDINO_CONFIG_PATH: Path = (
-        THIRD_PARTY_ROOT / "GroundingDINO/groundingdino/config/GroundingDINO_SwinB_cfg.py"
-    )
-    GROUNDINGDINO_WEIGHT_PATH: Path = (
-        CHECKPOINT_ROOT / "groundingdino_swinb_cogcoor.pth"
-    )
+    # --- Grounding DINO（Transformers 版）---------------------------------
+    # HuggingFace のモデル ID。grounding-dino-base は公式 groundingdino_swinb_cogcoor に相当。
+    # 重みは初回ロード時に HF_HOME へ自動ダウンロードされる（手動配置は不要）
+    GROUNDINGDINO_MODEL: str = "IDEA-Research/grounding-dino-base"
 
-    # --- SAM2（公式リポジトリ版）------------------------------------------
-    # config は Hydra の設定名（SAM2 パッケージ内の configs/ から解決される）。
-    # ファイルパスではない点に注意
-    SAM2_CONFIG_PATH: str = "configs/sam2.1/sam2.1_hiera_l.yaml"
-    SAM2_CHECKPOINT_PATH: Path = CHECKPOINT_ROOT / "sam2.1_hiera_large.pt"
+    # --- SAM2（Transformers 版）------------------------------------------
+    # HuggingFace のモデル ID。重みは初回ロード時に HF_HOME へ自動ダウンロードされる
+    SAM2_MODEL: str = "facebook/sam2.1-hiera-large"
 
     # --- SigLIP2（ラベル再判定）--------------------------------------------
     # transformers 実装を使うので Dockerfile の変更は不要。
@@ -48,8 +35,8 @@ class Settings(BaseSettings):
     SIGLIP2_MODEL: str = "google/siglip2-so400m-patch16-naflex"
 
     # --- Depth-Anything-3（公式リポジトリ版）-------------------------------
-    # 重みは HuggingFace から自動ダウンロードされる（手動配置は不要）。
-    # compose が ~/.cache/huggingface をマウントしてホストと共有する
+    # 重みは HuggingFace（depth-anything/<モデル名>）から HF_HOME へ自動ダウンロードされる。
+    # DA3METRIC-LARGE / DA3NESTED-GIANT-LARGE(-1.1) に対応（da3_depth.get_metric_depth）
     DEPTH_ANYTHING_MODEL: str = "DA3METRIC-LARGE"
     # これ以遠の点は点群にしない [m]。遠方は誤差が大きく、
     # 入れるとクラスタリングが引きずられる

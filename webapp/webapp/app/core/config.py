@@ -236,7 +236,7 @@ class Settings(BaseSettings):
     # （自車や対象の速度が速い場面）
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 3
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
-        "vehicle": 0.35,
+        "vehicle": 0.3,
         "road_object": 0.25,
         "two_wheeler": 0.3,
         "pedestrian": 0.3,
@@ -258,8 +258,8 @@ class Settings(BaseSettings):
     # （消すとトラッキング結果と 3D ボックスまで CASCADE で消えるため）
     DET2D_MAX_RUNS_PER_SCENE: int = 10
 
-    # run の記録に残すモデル名（推論サーバー側の実体と合わせる）
-    DET2D_MODEL_NAME: str = "groundingdino_swinb_cogcoor"
+    # run の記録に残すモデル名（推論サーバー側の GROUNDINGDINO_MODEL と合わせる）
+    DET2D_MODEL_NAME: str = "IDEA-Research/grounding-dino-base"
 
     # --- Instance Tracking -----------------------------------------------
     SWEEPS_PER_SAMPLE: int = 6
@@ -274,11 +274,12 @@ class Settings(BaseSettings):
     #                               区間途中に現れたインスタンスを拾える
     DEFAULT_TRACK_ID_INHERITANCE: str = "forward_backward_matching"
     TRACKING_MAX_RUNS_PER_SCENE: int = 10
-    TRACKING_MODEL_NAME: str = "sam2.1_hiera_large"
+    TRACKING_MODEL_NAME: str = "facebook/sam2.1-hiera-large"  # 推論サーバー側の SAM2_MODEL と合わせる
     TRACKING_STUB_DELAY_SEC: float | None = 0.05
 
     # --- Depth Estimation & Box Fitting ------------------------------------
-    DEPTH_MODEL_NAME: str = "depth-anything-3-large"
+    # run の記録に残すモデル名（HuggingFace のモデル ID。推論サーバー側の DEPTH_ANYTHING_MODEL と合わせる）
+    DEPTH_MODEL_NAME: str = "depth-anything/DA3METRIC-LARGE"
     # 深度マップの保存倍率。1/2 にすると容量は 1/4（1 run 約 565MB → 141MB）
     DEPTH_MAP_DOWNSCALE: float = 0.5
     # 保持する run 数。派生ファイルが 1 run 約 280MB あるため少なめにする
