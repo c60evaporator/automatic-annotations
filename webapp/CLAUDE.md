@@ -25,6 +25,7 @@ project-root/
     ├── CLAUDE.md
     ├── README.md                            # セットアップ・使い方
     ├── docker-compose.yml
+    ├── docker-compose.mac.yml               # Apple Silicon Mac 用（単独で使う。inference は --profile cpu のときだけ起動）
     ├── .env                                 # HOST_DATA_ROOT, HOST_UID/HOST_GID, GPU_DEVICE_ID 等（git管理外）
     ├── tools/                               # 調査用スクリプト（webapp コンテナで標準入力から実行）
     │   └── check_depth_boxfitting.py        # Box Fitting の結果（深度補正・距離フィルタ等）を DB から確認
@@ -118,8 +119,13 @@ project-root/
         ├── CLAUDE.md                        # 推論フロー・パラメータ・実行単位の仕様
         ├── Dockerfile_devel                 # 既定（Transformers 版、CUDA 12.8）。compose の IMAGE_RUNTIME で切替
         ├── Dockerfile_devel_github          # GitHub 公式実装版（CUDA 12.4、checkpoints/ を使用）
+        ├── Dockerfile_cpu                   # CPU 版（Apple Silicon Mac の Docker 用、xformers なし・pycolmap はスタブ）
         ├── Dockerfile                       # compose の既定では未使用
         ├── requirements.txt
+        ├── stubs/pycolmap.py                # pycolmap スタブ（Dockerfile_cpu・setup_mac.sh 用。DA3 が import するが COLMAP 出力でしか使わない）
+        ├── scripts/
+        │   ├── setup_mac.sh                 # macOS ネイティブ環境（MPS）の構築。.mac/ に venv と third_party を作る
+        │   └── run_mac.sh                   # macOS ネイティブで推論サーバーを起動（webapp/.env のパスを使う）
         └── app/
             ├── main.py                      # FastAPIアプリ初期化・ルーター登録・モデルローダー登録・/health, /system/*
             ├── core/
@@ -212,7 +218,8 @@ project-root/
 - ビルド時のUID/GIDはホストのユーザーに合わせる（`UID=$(id -u) GID=$(id -g) docker compose up --build`）
 
 ### Import CLI（to_nusc_db.py）Rules
-- 実行例: `docker compose run --rm webapp python -m app.json_conversion.to_nusc_db --name mini --version v1.0-mini --dataroot nuscenes`
+- 実行例: `docker compose run --rm webapp python -m app.json_conversion.to_nusc_db --name mini --version v1.0-mini --dataroot nuscenes`（Mac では `docker compose -f docker-compose.mac.yml run ...`）
+- 画面に出す `docker compose` の参考コマンドは、`settings.COMPOSE_FILE_NAME`（各 compose ファイルの `environment` で自分のファイル名を渡す）を見て `-f` を付ける。compose ファイルを追加したら同じ環境変数を設定する
 - `--dataroot` は必須。`DATA_ROOT` 直下には複数のデータセットルートが並ぶ想定（`/data/nuscenes/v1.0-mini/...`）
 - **INSERTはFK依存の位相順に流す**
   `dataset → log → map_meta → sensor → calibrated_sensor → ego_pose → scene → sample → sample_data → category/attribute/visibility → instance → sample_annotation → annotation_attributes`
@@ -274,3 +281,7 @@ project-root/
 - 既定のイメージは `Dockerfile_devel`（Transformers 版）。GitHub 公式実装版を使う場合は `IMAGE_RUNTIME=devel_github IMAGE_TAG=cu124-devel-github` を指定する
 - 推論サーバーの requirements.txt には、ベースイメージに既にあるパッケージを書かない。無指定で書くと pip が最新版へ上げ、numpy が 2.x に置き換わってベースイメージの C 拡張（matplotlib 等）が壊れる。GroundingDINO は matplotlib を import するため直撃する
 - Dockerfile の末尾に import のスモークテストを置く。依存の壊れは最初の推論まで発覚せず、原因の切り分けに時間を取られる
+- Apple Silicon Mac では CUDA イメージは使えない（arm64 では cu128 の torchvision 0.24.1 も存在しない）。また Docker on macOS のコンテナから Metal（MPS）は使えないため、MPS で推論するときは推論サーバーだけをホストで動かす（`inference/scripts/setup_mac.sh` → `run_mac.sh`、webapp は `docker-compose.mac.yml`）。コンテナで CPU 推論する場合は `docker/cpu_devel_ubuntu2204.sh` でベースイメージを作り、`--profile cpu` で起動する
+- `Dockerfile_devel` の依存を変えたら、`Dockerfile_cpu` と `inference/scripts/setup_mac.sh` も揃える
+- `docker-compose.mac.yml` を `docker-compose.yml` への上書き（`-f` の重ね掛け）にしない。GPU 予約の `deploy` や `depends_on` を消す `!reset` は Compose v2.24 未満で使えない
+- `docker-compose.mac.yml` の `derived` はホストのディレクトリ（`HOST_DERIVED_ROOT`、既定 `webapp/derived`）のバインドマウント。ネイティブの推論サーバーと webapp コンテナで同じファイルを読み書きするため

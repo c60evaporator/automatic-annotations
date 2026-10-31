@@ -1,0 +1,141 @@
+# syntax=docker/dockerfile:1
+# inference/Dockerfile_cpu
+# CPU-only version of Dockerfile_devel (Apple Silicon Macs / hosts without NVIDIA GPUs).
+# Differences: CPU base image, CPU torchaudio, no xformers (CUDA only).
+# Build the base image with docker/cpu_devel_ubuntu2204.sh beforehand.
+# Base image
+FROM jidohub/base-cpu-devel-ubuntu22.04:latest
+
+# Proxy (HTTP_PROXY, HTTPS_PROXY, NO_PROXY and lowercase) is a predefined build arg, so it is only used during the build
+
+# Versions of the official repositories to install
+ARG DA3_COMMIT=3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
+ARG MAPANYTHING_VERSION=v1.1.3
+
+# Folder for cloning Depth-Anything-3/MapAnything (/workspace is hidden by the bind mount)
+ENV THIRD_PARTY_ROOT=/opt/third_party
+RUN mkdir -p ${THIRD_PARTY_ROOT}
+
+# Directories for storing model weights
+ENV HF_HOME=/opt/cache/huggingface \
+    TORCH_HOME=/opt/cache/torch \
+    CHECKPOINT_DIR=/opt/checkpoints
+RUN mkdir -p ${HF_HOME} ${TORCH_HOME} ${CHECKPOINT_DIR}
+
+# Shared libraries needed to import open3d (>=0.20). libgfortran5 is for the aarch64 wheel
+# (included in the CUDA base images, but not in ubuntu:22.04)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libegl1 \
+    libusb-1.0-0 \
+    libgfortran5 \
+    && rm -rf /var/lib/apt/lists/*
+
+############################
+# Common constraints
+############################
+# Install torchaudio matching torch 2.9.1 (required by uniception of MapAnything)
+RUN pip install torchaudio==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+# Pin torch/torchvision/torchaudio/numpy of the base image so that the dependencies cannot replace them
+# (pyarrow>=26 doesn't support numpy 1.x, opencv-python is aligned with opencv-python-headless of MapAnything)
+RUN pip freeze | grep -iE "^(torch|torchvision|torchaudio|numpy)==" > /etc/pip-constraints.txt \
+    && echo "pyarrow<26" >> /etc/pip-constraints.txt \
+    && echo "opencv-python==4.10.0.84" >> /etc/pip-constraints.txt
+
+############################
+# GroundingDINO / SAM2 / SigLIP2 (Transformers)
+############################
+RUN pip install -c /etc/pip-constraints.txt "transformers~=5.20.0"
+
+############################
+# Depth-Anything-3
+############################
+WORKDIR ${THIRD_PARTY_ROOT}
+RUN git clone https://github.com/ByteDance-Seed/Depth-Anything-3.git \
+    && git -C Depth-Anything-3 checkout ${DA3_COMMIT}
+WORKDIR ${THIRD_PARTY_ROOT}/Depth-Anything-3
+# addict is imported by depth_anything_3 but not listed in the dependencies
+# The following dependencies in pyproject.toml are excluded:
+#   - xformers: CUDA only. It is used optionally (SwiGLU falls back to PyTorch)
+#   - pycolmap: no aarch64 Linux wheel nor sdist. It is only used by the COLMAP export,
+#               but imported eagerly by depth_anything_3.api, so a stub module is installed instead
+RUN python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print('\n'.join(d for d in deps if not d.startswith(('xformers', 'pycolmap'))))" > /tmp/requirements.txt \
+    && pip install -c /etc/pip-constraints.txt -r /tmp/requirements.txt addict \
+    && pip install -c /etc/pip-constraints.txt --no-deps -e . \
+    && rm -f /tmp/requirements.txt
+COPY stubs/pycolmap.py /usr/local/lib/python3.11/site-packages/pycolmap.py
+
+############################
+# MapAnything
+############################
+WORKDIR ${THIRD_PARTY_ROOT}
+RUN git clone --branch ${MAPANYTHING_VERSION} --depth 1 https://github.com/facebookresearch/map-anything.git
+WORKDIR ${THIRD_PARTY_ROOT}/map-anything
+# Install the dependencies except rerun-sdk~=0.24.1 and plyfile>=1.1.4 (they require numpy>=2)
+RUN python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print('\n'.join(d for d in deps if not d.startswith('rerun-sdk')))" > /tmp/requirements.txt \
+    && pip install -c /etc/pip-constraints.txt -r /tmp/requirements.txt "plyfile<1.1.4" \
+    && pip install -c /etc/pip-constraints.txt --no-deps -e . \
+    && rm -f /tmp/requirements.txt
+# Pre-fetch the DINOv2 code loaded via torch hub (into TORCH_HOME)
+RUN python -c "import torch; torch.hub.list('facebookresearch/dinov2', trust_repo=True)"
+
+############################
+# Other dependencies
+############################
+# Patchwork++ (ground removal) and open3d (point cloud processing)
+# pypatchworkpp has no aarch64 Linux wheel, so it is built from source (build-essential/cmake in the base image).
+# The PyPI sdist is broken (it fetches the C++ core from the nonexistent tag "v"), so build the python/ subdirectory
+# of the GitHub repository at the same version, which uses the in-tree C++ core
+ARG PATCHWORKPP_VERSION=v1.4.1
+RUN pip install -c /etc/pip-constraints.txt \
+        "pypatchworkpp @ git+https://github.com/url-kaist/patchwork-plusplus.git@${PATCHWORKPP_VERSION}#subdirectory=python" \
+        open3d
+
+############################
+# API server dependencies
+############################
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -c /etc/pip-constraints.txt -r /tmp/requirements.txt
+
+############################
+# Import smoke test
+############################
+# ここで落とすことで、実行時（最初の推論リクエスト）ではなくビルド時に依存の壊れを検出する。
+# 特に numpy: ベースイメージの C 拡張は numpy 1.x でビルドされているため、2.x へ上がると壊れる。
+RUN python -c "\
+import numpy, matplotlib, torch, torchvision; \
+assert numpy.__version__.startswith('1.'), f'numpy が 1.x ではありません: {numpy.__version__}'; \
+import matplotlib.pyplot; \
+from transformers import GroundingDinoForObjectDetection, Sam2Model, Sam2VideoModel, Siglip2Model; \
+import depth_anything_3.api; \
+import mapanything.models; \
+import open3d, pypatchworkpp, cv2, fastapi, shapely; \
+print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
+
+############################
+# Create non-root user
+############################
+ARG USERNAME=developer
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} ${USERNAME} \
+    && useradd -m -u ${UID} -g ${GID} -s /bin/bash ${USERNAME}
+# Change the owner of /workspace dir
+RUN mkdir -p /workspace /derived /opt/shared \
+    && chown -R ${UID}:${GID} /workspace /derived /opt/shared ${THIRD_PARTY_ROOT} /opt/cache ${CHECKPOINT_DIR}
+
+USER ${USERNAME}
+WORKDIR /workspace
+
+# Set PYTHONPATH to ensure import from subprocesses
+ENV PYTHONPATH=/workspace:/opt/shared \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+############################
+# Run FastAPI
+############################
+# --workers should be always one to prevent multiple model load (memory overflow)
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", "--port", "8000", \
+     "--workers", "1", "--reload"]

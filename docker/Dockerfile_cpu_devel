@@ -1,0 +1,67 @@
+# docker/Dockerfile_cpu_devel
+# CPU-only base image (for Apple Silicon Macs / arm64 hosts without NVIDIA GPUs).
+# Docker on macOS runs containers in a Linux VM, so Metal (MPS) is not available here.
+# Use the native macOS setup (webapp/inference/scripts/setup_mac.sh) for MPS inference.
+# Python version
+ARG PYTHON_VERSION=3.11.11
+# Ubuntu version (aligned with the CUDA images; open3d>=0.20 aarch64 wheels need glibc>=2.35)
+ARG UBUNTU_VERSION=22.04
+# PyTorch versions
+ARG TORCH_VERSION=2.9.1
+ARG TORCHVISION_VERSION=0.24.1
+
+############################
+# Set the base image with Python
+############################
+# Python base image
+FROM python:${PYTHON_VERSION}-slim AS python
+
+# Ubuntu base image
+FROM ubuntu:${UBUNTU_VERSION}
+
+# Copy Python installation from the Python base image to the Ubuntu base image
+COPY --from=python /usr/local /usr/local
+
+############################
+# Install base packages
+############################
+ENV DEBIAN_FRONTEND=noninteractive
+# build-essential and cmake are for packages without arm64 Linux wheels (e.g. pypatchworkpp)
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    wget \
+    build-essential \
+    cmake \
+    libglib2.0-0 \
+    libgl1 \
+    libgomp1 \
+    libstdc++6 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+############################
+# Install PyTorch and Python libraries
+############################
+# Set environment variables to improve visibility and lessen image size
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+# Install PyTorch and torchvision
+# The local version suffix differs by architecture (x86_64/aarch64: torch "+cpu", torchvision none),
+# so it is not written here; "==X.Y.Z" also matches "X.Y.Z+cpu"
+ARG TORCH_VERSION
+ARG TORCHVISION_VERSION
+RUN pip install \
+    torch==${TORCH_VERSION} \
+    torchvision==${TORCHVISION_VERSION} \
+    --index-url https://download.pytorch.org/whl/cpu
+# Install Python libraries for runtime-devel common
+COPY constraints_cpu_runtime.txt /tmp/constraints_runtime.txt
+RUN pip install \
+    -r /tmp/constraints_runtime.txt \
+    && rm /tmp/constraints_runtime.txt
+# Install Python libraries for devel
+COPY constraints_cpu_devel.txt /tmp/constraints_devel.txt
+RUN pip install \
+    -r /tmp/constraints_devel.txt \
+    && rm /tmp/constraints_devel.txt

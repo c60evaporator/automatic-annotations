@@ -56,10 +56,38 @@ wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large
 
 ### 4. コンテナビルド
 
+#### Linuxの場合（CUDA）
+
 以下コマンドでコンテナをビルドします（TORCH_CUDA_ARCH_LISTが間違っているとビルドは通るがコンテナ内でのGPU推論が無効化されて激遅になるので注意してください）
 
 ```bash
 docker compose build --no-cache
+```
+
+#### Apple Silicon Macの場合（MPS）
+
+MacではCUDAイメージが使えず、またDockerコンテナからはMetal（MPS）が使えません。そのため`docker-compose.yml`ではなく`docker-compose.mac.yml`を使い、以下のどちらかの構成で動かします（データインポート等の`docker compose`コマンドにも`-f docker-compose.mac.yml`を付けてください）。
+
+`.env`には`GPU_DEVICE_ID`/`TORCH_CUDA_ARCH_LIST`は不要です。深度マップ等の保存先は`HOST_DERIVED_ROOT`で変更できます（既定は`webapp/derived`）。また[uv](https://docs.astral.sh/uv/)とlibusb（open3dが使用）が必要です（`brew install uv libusb`）
+
+以下コマンドで推論サーバーの必要パッケージ類をインストールします
+
+```bash
+./inference/scripts/setup_mac.sh
+```
+
+以下コマンドでwebコンテナをビルドします
+
+```bash
+docker compose -f docker-compose.mac.yml build
+```
+
+#### Apple Silicon Macの場合（CPU推論）
+
+以下ベースイメージをビルドしてから、`cpu`プロファイルで起動します（推論はかなり遅くなります）
+
+```bash
+cd ../docker && bash cpu_devel_ubuntu2204.sh
 ```
 
 ### 5. データインポート
@@ -74,13 +102,43 @@ docker compose run --rm webapp \
 
 ## Usage
 
+### サーバーの立ち上げ
+
+まずWebサーバーと推論サーバーを立ち上げます。プラットフォームに応じて以下のように方法は変わります
+
+#### Linuxの場合（CUDA）
+
 以下コマンドでアプリ立ち上げ
 
 ```bash
 docker compose up
 ```
 
-Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカルホストの場合`http://localhost`。デフォルトではポート80=ポート番号指定不要）を開く
+#### Apple Silicon Macの場合（MPS）
+
+以下コマンドで推論サーバーをホスト起動します
+
+```bash
+./inference/scripts/run_mac.sh
+```
+
+別ターミナルでDockerでwebappを起動します
+
+```bash
+docker compose -f docker-compose.mac.yml up
+```
+
+MPS未対応の演算は`PYTORCH_ENABLE_MPS_FALLBACK=1`によりCPUで実行されます
+
+#### Apple Silicon Macの場合（CPU推論）
+
+```bash
+INFERENCE_BASE_URL=http://inference:8000 docker compose -f docker-compose.mac.yml --profile cpu up --build
+```
+
+### ブラウザでアプリを開く
+
+Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカルホストの場合`http://localhost`。デフォルトではポート80=ポート番号指定不要）を開きます。
 
 画面は以下の6つのページ（左側のタブで切替）に分かれている。基本的には上から下のタブに向かって操作を実施していけばOK
 

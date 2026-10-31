@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     DATA_ROOT:    Path = Path("/data")
     DERIVED_ROOT: Path = Path("/derived")
 
-    # "cuda" / "cpu"。未指定なら起動時に自動判定する
+    # "cuda" / "mps" / "cpu"。未指定なら起動時に自動判定する（cuda → mps → cpu の順）
     DEVICE: str | None = None
 
     # --- Grounding DINO（Transformers 版）---------------------------------
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     def device(self) -> str:
         """実際に使うデバイス.
 
-        DEVICE 未指定なら CUDA の有無で決める。
+        DEVICE 未指定なら CUDA → MPS（Apple Silicon）→ CPU の順で決める。
         torch の import をここに閉じ込めてあるので、
         設定の読み込み自体は torch 無しでも通る。
         """
@@ -66,7 +66,11 @@ class Settings(BaseSettings):
         try:
             import torch
 
-            return "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                return "cuda"
+            if torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
         except ImportError:
             return "cpu"
 

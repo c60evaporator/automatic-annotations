@@ -11,3 +11,7 @@ __pycache__
 
 # Sample videos downloaded by notebooks
 models/sam2/notebook/videos/
+
+# Apple Silicon Mac: derived files (docker-compose.mac.yml) and the native inference environment (setup_mac.sh)
+webapp/derived/
+webapp/inference/.mac/

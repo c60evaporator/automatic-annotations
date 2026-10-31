@@ -101,6 +101,7 @@ UI（Detection2Dページの画面上部の「Inference Parameters」エクス�
 |`settings.GROUNDINGDINO_MODEL`|str|GroundingDINO（Transformers版）のHuggingFaceモデルID|"IDEA-Research/grounding-dino-base"|
 |`settings.SIGLIP2_MODEL`|str|ラベル再判定・Whole-Image再判定に使うSigLIP2のHuggingFaceモデルID|"google/siglip2-so400m-patch16-naflex"|
 |`settings.MAX_RESIDENT_MODELS`|int|同時にGPUへ載せるモデル数の上限。1のときGroundingDINOとSigLIP2は同時に載らないため、SigLIP2による再判定・Whole-Image再判定は全フレームの検出が終わった後に別フェーズとして実行される|1|
+|`settings.DEVICE`|str \| None|推論デバイス（"cuda"/"mps"/"cpu"）。未指定なら`settings.device`がcuda → mps → cpuの順で自動判定する（全モデル共通）|None|
 |`settings.USE_STUB_MODELS`|bool|trueならGPU不要のスタブ（`models_impl/*_stub.py`）で推論する（UIとジョブの流れの確認用）|False|
 
 ### 推論の実行単位

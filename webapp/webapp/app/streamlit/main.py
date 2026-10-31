@@ -25,10 +25,14 @@ datasets = list_datasets()
 if not datasets:
     st.warning("データセットがまだ登録されていません。")
     settings = get_settings()
+    # 既定以外の compose ファイル（Mac 用の docker-compose.mac.yml 等）で起動している場合は -f を付ける
+    compose_cmd = "docker compose"
+    if settings.COMPOSE_FILE_NAME != "docker-compose.yml":
+        compose_cmd += f" -f {settings.COMPOSE_FILE_NAME}"
     st.markdown(
         "先にインポート CLI を実行してください。\n\n"
         "```bash\n"
-        "docker compose run --rm webapp \\\n"
+        f"{compose_cmd} run --rm webapp \\\n"
         "  python -m app.json_conversion.to_nusc_db \\\n"
         "    --name mini --version v1.0-mini --dataroot nuscenes\n"
         "```\n\n"

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # （投入・ポーリング・再フィルタでそれぞれ別の値）
     INFERENCE_BASE_URL: str = "http://inference:8000"
 
+    # --- 起動環境 ---------------------------------------------------------
+    # このコンテナを起動した compose ファイル名（compose 側の environment で渡す）。
+    # 画面に出す参考コマンド（データインポート等）の -f 指定に使う
+    COMPOSE_FILE_NAME: str = "docker-compose.yml"
+
     # --- ラベル変換 -----------------------------------------------------
     NUSC_CATEGORY_TO_LABEL: dict[str, str] = {  # nuScenes category -> 検出ラベル
         "vehicle.car": "car",

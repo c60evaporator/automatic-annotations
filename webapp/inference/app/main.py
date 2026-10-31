@@ -138,6 +138,7 @@ def system_info() -> dict[str, Any]:
         "max_resident_models": settings.MAX_RESIDENT_MODELS,
         "loaded_models": model_registry.loaded_models(),
         "cuda": None,
+        "mps": None,
     }
     try:
         import torch
@@ -148,6 +149,13 @@ def system_info() -> dict[str, Any]:
                 "device_name": torch.cuda.get_device_name(0),
                 "vram_total_mb": round(total / 1024**2),
                 "vram_free_mb": round(free / 1024**2),
+                "torch_version": torch.__version__,
+            }
+        elif torch.backends.mps.is_available():
+            # MPS はユニファイドメモリのため VRAM の空き容量は取れない。確保量だけ返す
+            info["mps"] = {
+                "allocated_mb": round(torch.mps.current_allocated_memory() / 1024**2),
+                "driver_allocated_mb": round(torch.mps.driver_allocated_memory() / 1024**2),
                 "torch_version": torch.__version__,
             }
     except ImportError:

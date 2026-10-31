@@ -35,7 +35,8 @@ class Sam2Tracker:
 
         self.model_name = model_name
         self.device = device
-        # CUDA では bfloat16 で推論する（公式実装の autocast(bfloat16) に相当）
+        # CUDA では bfloat16 で推論する（公式実装の autocast(bfloat16) に相当）。
+        # MPS / CPU は float32（MPS の bfloat16 は演算の対応が不完全なため）
         self.dtype = torch.bfloat16 if str(device).startswith("cuda") else torch.float32
 
         logger.info("loading SAM2: %s", model_name)

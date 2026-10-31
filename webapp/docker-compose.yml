@@ -25,6 +25,8 @@ services:
       DERIVED_ROOT: /derived
       SQLITE_PATH: /db/app.db
       INFERENCE_BASE_URL: http://inference:8000
+      # 画面に出す参考コマンドの compose ファイル名
+      COMPOSE_FILE_NAME: docker-compose.yml
       # No proxy for connections to local services (inference and webapp containers)
       NO_PROXY: "localhost,127.0.0.1,inference,webapp"
       no_proxy: "localhost,127.0.0.1,inference,webapp"

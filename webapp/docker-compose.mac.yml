@@ -1,0 +1,97 @@
+# Apple Silicon Mac 向けの compose ファイル（docker-compose.yml とは独立して使う）
+#
+# Docker on macOS はコンテナを Linux VM 上で動かすため、コンテナから Metal（MPS）は使えない。
+# 推論サーバーの動かし方に応じて、以下のどちらかで起動する。
+#
+#   (1) MPS 推論（推奨）: 推論サーバーは macOS 上でネイティブに動かし、webapp だけをコンテナで動かす
+#       ./inference/scripts/setup_mac.sh   # 初回のみ
+#       ./inference/scripts/run_mac.sh     # 推論サーバー起動（別ターミナル）
+#       docker compose -f docker-compose.mac.yml up
+#
+#   (2) CPU 推論: 推論サーバーもコンテナ（Dockerfile_cpu）で動かす
+#       (cd ../docker && ./cpu_devel_ubuntu2204.sh)   # ベースイメージのビルド（初回のみ）
+#       INFERENCE_BASE_URL=http://inference:8000 docker compose -f docker-compose.mac.yml --profile cpu up
+#
+# NOTE: docker-compose.yml を上書きする形（-f で重ねる）にしていないのは、GPU 予約の deploy や
+#       depends_on を消すための !reset が Compose v2.24 未満では使えないため。
+#       inference をプロファイルで切り替えるので、webapp の depends_on は持たない
+#       （推論サーバーの起動前に UI が開いても、推論の実行時にエラーになるだけ）
+services:
+  # Frontend and DB (Streamlit and SQLite)
+  webapp:
+    image: annotation_web
+    build:
+      context: ./webapp
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTPS_PROXY:-}
+        - UID=${HOST_UID:-1000}
+        - GID=${HOST_GID:-1000}
+    ports:
+      - 80:8501
+    env_file:
+      - .env
+    environment:
+      DATA_ROOT: /data
+      DERIVED_ROOT: /derived
+      SQLITE_PATH: /db/app.db
+      # (1) ホストで動く推論サーバー / (2) inference コンテナ
+      INFERENCE_BASE_URL: "${INFERENCE_BASE_URL:-http://host.docker.internal:8000}"
+      # 画面に出す参考コマンド（データインポート等）に -f docker-compose.mac.yml を付けるため
+      COMPOSE_FILE_NAME: docker-compose.mac.yml
+      NO_PROXY: "localhost,127.0.0.1,inference,webapp,host.docker.internal"
+      no_proxy: "localhost,127.0.0.1,inference,webapp,host.docker.internal"
+      PYTHONPATH: /workspace:/opt/shared
+    volumes:
+      - ./webapp:/workspace
+      - ./common:/opt/shared/common:ro
+      - ${HOST_DATA_ROOT}:/data:ro
+      # ネイティブの推論サーバーが書いた深度マップ・点群を読むため、名前付きボリュームではなく
+      # ホストのディレクトリをバインドマウントする（run_mac.sh と同じ HOST_DERIVED_ROOT を使う）
+      - ${HOST_DERIVED_ROOT:-./derived}:/derived
+      - dbdata:/db
+
+  # Inference server on CPU (only with --profile cpu)
+  inference:
+    profiles: ["cpu"]
+    image: "${IMAGE_NAME:-autoann-app-inference}:cpu-devel"
+    build:
+      context: ./inference
+      dockerfile: Dockerfile_cpu
+      args:
+        USERNAME: "${USERNAME:-developer}"
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        http_proxy: "${HTTP_PROXY:-}"
+        https_proxy: "${HTTPS_PROXY:-}"
+    ports:
+      - 8000:8000
+    environment:
+      DATA_ROOT: /data
+      DERIVED_ROOT: /derived
+      PYTHONPATH: /workspace:/opt/shared
+      DEVICE: cpu
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      http_proxy: "${HTTP_PROXY:-}"
+      https_proxy: "${HTTPS_PROXY:-}"
+      NO_PROXY: "localhost,127.0.0.1,inference,webapp"
+      no_proxy: "localhost,127.0.0.1,inference,webapp"
+    volumes:
+      - ./inference:/workspace
+      - ./common:/opt/shared/common:ro
+      - ${HOST_DATA_ROOT}:/data:ro
+      - ${HOST_DERIVED_ROOT:-./derived}:/derived
+      - ~/.cache/huggingface:/opt/cache/huggingface
+    shm_size: "${SHM_SIZE:-8g}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 300s
+
+volumes:
+  dbdata:
