@@ -365,9 +365,9 @@ Depth Boxfittingでは、Instance Trackingのインスタンスマスクとtrack
 Depth Boxfittingは、以下のフローで行われます
 
 - 入力とするInstance Trackingの結果を選択
-- カメラ → キーフレームのループで、以下手順でカメラ画像からDepth-Anything-3による深度推定を実施
-    - 画像を入力してDepth-Anything-3で単眼深度推定推論
-    - sky_mask機能により空領域を保持
+- カメラ → キーフレームのループで、以下手順でカメラ画像からDepth-Anything-3/MapAnythingによる深度推定を実施
+    - 画像を入力してDepth-Anything-3/MapAnythingで単眼深度推定推論
+    - Mask機能により無効領域（空領域等）を保持
     - 内部パラメータを深度画像のサイズに合わせて補正
     - 補正後内部パラメータを用いて、深度画像をメートル単位に補正
 - キーフレームのループで、以下手順でカメラ間同一インスタンス結合・3Dバウンディングボックスのフィッティングを実施
@@ -375,7 +375,7 @@ Depth Boxfittingは、以下のフローで行われます
         - インスタンスマスクにクロージング処理を適用。クロージング処理のカーネルサイズは以下のように決める
             - 収縮: Dilationパラメータを使用
             - 膨張: 基本はErosionパラメータを使用するが、マスクの短辺がSmall Mask Short Side以下なら`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`を使用する
-        - 深度画像からsky_maskを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
+        - 深度画像から無効領域マスクを用いて空領域を削除したのちインスタンスマスクに投影し、補正後内部パラメータと外部パラメータを用いて点群に変換し、インスタンスごとDepth点群を得る
     - LiDARを使用する場合、以下手順でインスタンスごとLiDAR点群を作成してDepth点群と混合し、最終的なインスタンスごと点群を得る
         - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面除去を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
         - 合体したLiDAR点群のうち自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
@@ -463,13 +463,18 @@ Depth Boxfittingは、以下のフローで行われます
                 - Ground Height Method=least squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
             - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
         - grobal_track点群のz座標の分位点に基づき上面高さを決める（後で複数フレームを考慮して補正）
-    - global_track_idごとに以下手順でAIモデルによる
+    - global_track_idごとに以下手順でAIモデルによるボックス角度の再推定を実施（未実装）
         - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
-        - 
+        - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
+            - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正
+            - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_2"`のとき: Orient-Anything-2で補正
+            - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
     - global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する
+        - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（未実装）
+            - `settings.BOX_ORIENTATION_CORRECTIONS="part_hoe"`のとき: PartHOEで補正
+            - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない
         - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施
-            - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Box Height Correction Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。補正時は底面を固定し、上面の位置を動かす
-            - `settings.BOX_SIZE_CORRECTIONS="default"`のとき: そのラベルの`setting.DEFAULTE_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
+            - （詳細検討中）
             - `settings.BOX_HEIGHT_CORRECTIONS=None`のとき: 補正しない
         - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定
             - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
@@ -663,13 +668,16 @@ for camera_channel in CAMERA_CHANNELS:
 
 - LiDAR点群の読込と地面除去
 - インスタンスマスクのクロージング処理適用
-- 推論で得られたdepth画像のマスク投影点群化とsky_mask、ROR・DBSCAN適用
-- LiDAR点群のマスク投影とROR・DBSCANの適用
-- インスタンスごとのDepth点群とLiDAR点群の混合
+- 推論で得られたdepth画像のマスク投影点群化と無効領域マスク適用でインスタンスごとdepth点群を得る
+- LiDAR点群のマスク投影でインスタンスごとLiDAR点群を得る
+- インスタンスごとdepth点群、LiDAR点群にROR・DBSCAN、L-shape Filter、Distance Filter適用
+- インスタンスごとのdepth点群とLiDAR点群の混合
 - カメラ間同一インスタンス結合
 - Box Fitting
+- ボックス角度再推定
+- global_track_idごとに所属する全てのフレームを考慮してボックスの方向、高さ、幅、長さ補正
 
-は、以下のように実施します
+は、以下のパイプラインで実装するイメージです。
 
 ```python
 import pypatchworkpp

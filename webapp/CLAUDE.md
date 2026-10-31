@@ -7,98 +7,147 @@ NuScenes datasetをDBに読み込み、推論サーバーでAIモデルによる
 - DB: SQLite（`webapp/app/models`フォルダにあるSQL Alchemy形式スキーマを使用する）
 - Data: ホスト側のフォルダ（環境変数`HOST_DATA_ROOT`で指定）にnuscenesデータセットを格納してコンテナにマウント。メタデータを初期化時にDatabaseに読み込み、画像、点群データはローカルフォルダから直接読込
 - 推論サーバー: 以下3種類の推論をパイプライン的に実施。FastAPIでトリガーと結果を返すREST APIを提供
-  1. Detection2D: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出
+  1. Detection2D: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出し、SigLIP2でラベルを再判定
   2. Instance-Tracking: 1で検出したbounding boxesをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得
-  3. Depth Estimation & Box Fitting: Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionして3D bounding boxを割り当て
+  3. Depth Estimation & Box Fitting: Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionし、カメラ間の同一インスタンスを結合したうえで3D bounding boxを割り当て
+- 結果はnuScenes形式（JSONテーブル群）でエクスポートできる
+- 各推論のアルゴリズム詳細は`inference/CLAUDE.md`、各ページのUI仕様は`webapp/app/streamlit/CLAUDE.md`参照
 - 以下サービスをDockerコンテナで構成
   - webapp: Streamlitによるフロントエンド＋SQLiteによるDB
   - inference: FastAPI＋AIによる推論サーバー
+  - `common/`（webapp・inference共有モジュール）は両コンテナの `/opt/shared/common` に読み取り専用でマウントする
 
 ## Directory Structure
 ```
 project-root/
 :
-└── webapp/                                  # ★ここがコンテナの /workspace になる
+└── webapp/                                  # docker compose はここで実行する
     ├── CLAUDE.md
+    ├── README.md                            # セットアップ・使い方
     ├── docker-compose.yml
-    ├── tools/                                # 調査用スクリプト（webapp コンテナで標準入力から実行）
-    │   └── check_depth_boxfitting.py       # Box Fitting の結果（深度補正・距離フィルタ等）を DB から確認
-    ├── .env
-    ├── webapp/
+    ├── .env                                 # HOST_DATA_ROOT, HOST_UID/HOST_GID, GPU_DEVICE_ID 等（git管理外）
+    ├── tools/                               # 調査用スクリプト（webapp コンテナで標準入力から実行）
+    │   └── check_depth_boxfitting.py        # Box Fitting の結果（深度補正・距離フィルタ等）を DB から確認
+    ├── common/                              # webapp・inference の共有モジュール（両コンテナの /opt/shared/common に :ro マウント）
+    │   ├── box_ops.py                       # 2D ボックスの基本演算（IoU/IoS 等）
+    │   ├── mask_rle.py                      # インスタンスマスクの RLE 表現
+    │   ├── point_ops.py                     # 点群の間引き
+    │   └── transform3d.py                   # 3D 座標変換の最小セット
+    ├── checkpoints/                         # GroundingDINO/SAM2 の重み（GitHub 版イメージのみ使用。Transformers 版は ~/.cache/huggingface を使う）
+    ├── webapp/                              # Streamlit＋SQLite（コンテナの /workspace）
     │   ├── Dockerfile
-    │   ├── docker-entrypoint.sh            # 起動時に alembic upgrade head を実行
+    │   ├── docker-entrypoint.sh             # 起動時に alembic upgrade head を実行
     │   ├── requirements.txt
     │   ├── alembic.ini
     │   ├── alembic/
-    │   │   ├── env.py                      # render_as_batch=True 必須（SQLite）
+    │   │   ├── env.py                       # render_as_batch=True 必須（SQLite）
     │   │   ├── script.py.mako
     │   │   └── versions/
+    │   ├── scripts/
+    │   │   └── import_nuscenes.py           # 空（未実装）。インポートは to_nusc_db.py を使う
     │   └── app/
-    │       ├── json_conversion/            # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
-    │       │   ├── schemas_nuscenes.py     # NuScenes本体データセットJSONのPydantic形式スキーマ
-    │       │   ├── to_nuscenes.py          # NuScenes本体データセットをDBからJSONに変換
-    │       │   └── to_nusc_db.py           # NuScenes本体データセットをJSONからDBに変換（CLI）
+    │       ├── json_conversion/             # 元のJSON形式データセットとDBとを相互変換するためのモジュール集
+    │       │   ├── schemas_nuscenes.py      # NuScenes本体データセットJSONのPydantic形式スキーマ
+    │       │   ├── to_nuscenes.py           # 空（未実装）。エクスポートは services/nuscenes_export_service.py が担う
+    │       │   └── to_nusc_db.py            # NuScenes本体データセットをJSONからDBに変換（CLI）
     │       ├── core/
-    │       │   ├── config.py               # 環境変数・設定（Pydantic Settings）
-    │       │   └── logging.py              # ロギング設定
+    │       │   ├── config.py                # 環境変数・設定（Pydantic Settings）
+    │       │   └── logging.py               # ロギング設定
     │       ├── db/
-    │       │   ├── base.py                 # DeclarativeBase（naming_convention 必須）
-    │       │   ├── engine.py               # Engine生成 + SQLite PRAGMA
-    │       │   └── session.py              # 同期 Session ファクトリ
-    │       ├── models/                     # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
-    │       │   ├── __init__.py             # Alembicがモデルを検出できるよう全importを記載
-    │       │   ├── dataset.py              # Dataset（データセット単位）
-    │       │   ├── scene.py                # Log, Scene, Sample
-    │       │   ├── annotation.py           # Category, Attribute, Visibility, Instance, SampleAnnotation, annotation_attribute
-    │       │   ├── sensor.py               # Sensor, CalibratedSensor, EgoPose, SampleData
-    │       │   ├── map.py                  # MapMeta
-    │       │   └── ann_intermediate.py     # 自動アノテーションの中間出力（Detection2DParams, Detection2D, InstanceTracking2DParams, InstanceTracking2D, DepthEstimationParams, DepthEstimation）
-    │       ├── services/                   # ビジネスロジック層（Streamlit非依存）
-    │       │   ├── annotation_service.py   # prev/next チェーンの書き換え
-    │       │   ├── basemap_service.py      # basemap のリサイズキャッシュ（DERIVED_ROOT配下）
-    │       │   ├── nuscenes_export_service.py  # nuScenes 形式エクスポート
-    │       │   └── nuscenes_export_builders.py # 各 JSON ファイルの組み立て
-    │       ├── repositories/               # DBアクセスの抽象化（クエリの責務）。戻り値は必ず dict
-    │       │   ├── dataset.py              # DatasetRepository
-    │       │   ├── scene.py                # SceneRepository
-    │       │   ├── annotation.py           # AnnotationRepository
-    │       │   ├── sensor.py               # SensorRepository
-    │       │   └── map.py                  # MapRepository
-    │       └── streamlit/                  # StreamlitのUI実装（フロントエンド）
-    │           ├── main.py                 # メインページ（データセット選択）
-    │           ├── state.py                # セッション状態管理・ページガード
-    │           ├── data_access.py          # @st.cache_data 付きのデータ取得
+    │       │   ├── base.py                  # DeclarativeBase（naming_convention 必須）
+    │       │   ├── engine.py                # Engine生成 + SQLite PRAGMA（Alembic用は create_migration_engine）
+    │       │   └── session.py               # 同期 Session ファクトリ
+    │       ├── models/                      # ★手動作成・変更禁止ゾーン。SQLAlchemy ORMモデル（唯一の正）
+    │       │   ├── __init__.py              # Alembicがモデルを検出できるよう全importを記載
+    │       │   ├── dataset.py               # Dataset（データセット単位）
+    │       │   ├── scene.py                 # Log, Scene, Sample
+    │       │   ├── annotation.py            # Category, Attribute, Visibility, Instance, SampleAnnotation, annotation_attribute, SOURCE_* 定数
+    │       │   ├── sensor.py                # Sensor, CalibratedSensor, EgoPose, SampleData
+    │       │   ├── map.py                   # MapMeta
+    │       │   └── ann_intermediate.py      # 自動アノテーションの中間出力（Detection2DParams, Detection2D, InstanceTracking2DParams, InstanceTracking2D, DepthEstimationParams, DepthEstimation, LidarPointcloud, BoxFitting3D）
+    │       ├── repositories/                # DBアクセスの抽象化（クエリの責務）。戻り値は必ず dict
+    │       │   ├── dataset.py               # データセット単位のクエリ
+    │       │   ├── scene.py                 # シーン単位のクエリ
+    │       │   ├── sensor.py                # センサーフレーム単位のクエリ
+    │       │   ├── annotation.py            # アノテーション単位のクエリ
+    │       │   ├── detection2d.py           # 2D検出 run と結果のクエリ
+    │       │   ├── instance_tracking.py     # Instance Tracking run と結果のクエリ
+    │       │   ├── depth_boxfitting.py      # 深度推定＋Box Fitting run と結果のクエリ
+    │       │   └── nuscenes_export.py       # エクスポート対象行の取り出し
+    │       ├── services/                    # ビジネスロジック層（Streamlit非依存。frame_image.py のみキャッシュ付き）
+    │       │   ├── inference_client.py      # 推論サーバーとの通信（ジョブ投入・ポーリング・キャンセル・refilter）
+    │       │   ├── detection2d_service.py   # 2D検出 run の保存と読み出し
+    │       │   ├── instance_tracking_service.py # Instance Tracking run の保存と読み出し
+    │       │   ├── depth_boxfitting_service.py  # 深度推定＋Box Fitting run の保存と読み出し（Instance/SampleAnnotation の prev/next チェーン構築を含む）
+    │       │   ├── manual_merge.py          # 再実行時に手修正ボックスを引き継ぐ
+    │       │   ├── nuscenes_export_service.py   # nuScenes 形式エクスポート（出力対象のみで prev/next を張り直す）
+    │       │   ├── label_service.py         # ラベル体系の変換
+    │       │   ├── sweep_service.py         # トラッキング入力フレーム（sweep）の選択
+    │       │   ├── sample_service.py        # サンプル間引き・スライディングウィンドウのインデックス計算
+    │       │   ├── camera_service.py        # カメラの表示順
+    │       │   ├── annotation_2d.py         # 3D アノテーションのカメラ画像への 2D 投影
+    │       │   ├── gt_bev.py                # GT ボックスの BEV 表示用変換
+    │       │   ├── depth_pointcloud.py      # 深度マップから点群を作る
+    │       │   ├── data_file_service.py     # センサーデータ（画像・点群）のファイル読み込み
+    │       │   ├── derived_file_service.py  # DERIVED_ROOT 配下の派生ファイル読み込み
+    │       │   ├── frame_image.py           # センサー画像の取得（Streamlit キャッシュ付き）
+    │       │   ├── basemap_service.py       # basemap のリサイズキャッシュ（DERIVED_ROOT配下）
+    │       │   └── geometry/                # 座標変換・点群投影・3D box 頂点生成
+    │       └── streamlit/                   # StreamlitのUI実装（フロントエンド）
+    │           ├── CLAUDE.md                # 各ページのUI仕様
+    │           ├── main.py                  # メインページ（データセット選択）
+    │           ├── state.py                 # セッション状態管理・ページガード（require_*）
+    │           ├── data_access.py           # @st.cache_data 付きのデータ取得（clear_caches）
     │           ├── pages/
     │           │   ├── 1_Scene_Selection.py
     │           │   ├── 2_Detection2D.py
     │           │   ├── 3_Instance_Tracking.py
-    │           │   └── 4_Depth_Boxfitting.py
+    │           │   ├── 4_Depth_Boxfitting.py
+    │           │   └── 5_Export.py          # nuScenes 形式へのエクスポート
     │           └── components/
-    │               ├── waypoint_viewer.py
-    │               ├── det2d_viewer.py
-    │               ├── instance_tracking_viewer.py
-    │               ├── depth_est_viewer.py
-    │               └── pointcloud_viewer.py
-    ├── inference/                       # 推論サーバー
-    │   ├── Dockerfile
-    │   └── app/
-    │       ├── main.py                  # FastAPIアプリ初期化・ルーター登録
-    │       ├── core/
-    │       │   ├── config.py            # 環境変数・設定（Pydantic Settings）
-    │       │   ├── logging.py           # ロギング設定
-    │       │   ├── jobs.py              # 非同期推論ジョブの管理
-    │       │   └── models.py            # モデルの遅延ロードと GPU 占有の管理
-    │       ├── routers/
-    │       │   ├── det2d.py
-    │       │   ├── instance_tracking.py
-    │       │   └── depth_boxfitting.py
-    │       └── schemas/
-    │           ├── det2d.py
-    │           ├── instance_tracking.py
-    │           └── depth_boxfitting.py
-    ├── checkpoints/                    # GroundingDINO/SAM2の重み
-    └── common/                         # Webアプリ・推論の共通処理（座標変換へルパ等）
-    │   ├── Dockerfile
+    │               ├── basemap.py           # シーンに対応する basemap の解決
+    │               ├── waypoint_viewer.py   # basemap 上の自車軌跡
+    │               ├── det2d_viewer.py      # 2D bounding box の描画
+    │               ├── instance_tracking_viewer.py # インスタンスマスク・トラックの描画
+    │               ├── depth_viewer.py      # 深度マップの可視化
+    │               ├── pointcloud_viewer.py # 点群の 3D 表示（Plotly）
+    │               ├── box3d_viewer.py      # 3D ボックスのカメラ画像への投影描画
+    │               ├── bev_viewer.py        # BEV での 3D ボックス表示
+    │               └── sample_token.py      # 選択中 sample_token の表示
+    └── inference/                           # 推論サーバー（コンテナの /workspace）
+        ├── CLAUDE.md                        # 推論フロー・パラメータ・実行単位の仕様
+        ├── Dockerfile_devel                 # 既定（Transformers 版、CUDA 12.8）。compose の IMAGE_RUNTIME で切替
+        ├── Dockerfile_devel_github          # GitHub 公式実装版（CUDA 12.4、checkpoints/ を使用）
+        ├── Dockerfile                       # compose の既定では未使用
+        ├── requirements.txt
+        └── app/
+            ├── main.py                      # FastAPIアプリ初期化・ルーター登録・モデルローダー登録・/health, /system/*
+            ├── core/
+            │   ├── config.py                # 環境変数・設定（ラベル体系・各種閾値もここ）
+            │   ├── logging.py               # ロギング設定
+            │   ├── jobs.py                  # 非同期推論ジョブの管理（POST→job_id→GETポーリング、ワーカー1本）
+            │   └── models.py                # モデルの遅延ロード（LRU で MAX_RESIDENT_MODELS 個まで常駐）と gpu_lock
+            ├── routers/                     # 各ステップの /jobs エンドポイント（depth_boxfitting は同期の /refilter も持つ）
+            │   ├── det2d.py
+            │   ├── instance_tracking.py
+            │   └── depth_boxfitting.py
+            ├── schemas/                     # リクエスト／レスポンススキーマ
+            │   ├── det2d.py
+            │   ├── instance_tracking.py
+            │   └── depth_boxfitting.py
+            ├── models_impl/                 # モデルのラッパー。*_stub.py は USE_STUB_MODELS=true 時の GPU 不要スタブ
+            │   ├── grounding_dino.py, groundingdino_predict.py, prompt.py   # Grounding DINO（Transformers 版）
+            │   ├── siglip2_classifier.py    # SigLIP2 zero-shot 分類（ラベル再判定）
+            │   ├── sam2_tracker.py, sam2_video.py, sam2_masks.py           # SAM2 Video（Transformers 版）
+            │   ├── da3_depth.py             # Depth-Anything-3（公式リポジトリ版）
+            │   └── boxfitting_pipeline.py   # Depth Estimation & Box Fitting の本体
+            └── services/                    # 推論の前後処理（モデル非依存）
+                ├── postprocess.py, reclassify.py, whole_image.py, crop.py  # Detection2D: IoS結合・再判定・全画面救済
+                ├── tracking_match.py, fb_matching.py                       # Instance Tracking: track_id 引き継ぎ
+                ├── depth_ops.py, depth_correction.py, lidar_ops.py         # 深度→点群、LiDAR 基準の深度補正、LiDAR 読込・地面除去
+                ├── distance_filter.py, lshape_filter.py, refilter.py       # 点群ノイズ除去・保存済み深度からの再フィルタ
+                ├── inter_cam_merge.py       # カメラ間の同一インスタンス結合（global_track_id）
+                └── box_fitting.py, box_fitting_moa.py, box_bottom.py, box_size.py  # 3D ボックス当てはめと補正
 ```
 
 ## webappコンテナ（Streamlitによるフロントエンド＋SQLiteによるDB）
@@ -153,7 +202,8 @@ project-root/
 
 ### Docker Rules
 - **`./webapp` を `/workspace` にマウントし、WORKDIRは `/workspace`**。`./webapp/app` を `/app` にマウントすると `/app` が `app` パッケージの「中身」になり、`from app.core.config import ...` が `ModuleNotFoundError` になる。alembic.ini と alembic/ もコンテナ内に必要
-- **`ENV PYTHONPATH=/workspace` 必須**。`streamlit run` はスクリプトのあるディレクトリをsys.pathに入れるだけでCWDは入れない
+- **`ENV PYTHONPATH=/workspace:/opt/shared` 必須**。`streamlit run` はスクリプトのあるディレクトリをsys.pathに入れるだけでCWDは入れない。`/opt/shared` は共有モジュール `common` の親
+- **共有モジュール `./common` は `/workspace` の外（`/opt/shared/common`）に `:ro` でマウントする**。`/workspace` の内側に重ねると、ホストの `./webapp/webapp` に空ディレクトリが作られる
 - **派生物（DERIVED_ROOT）は `/data` の外に置く**。`${HOST_DATA_ROOT}:/data:ro` の内側にボリュームを重ねると、マウントポイントを作れず `read-only file system` で起動に失敗する。`/derived` を使う
 - **`USER` 切り替え前に `mkdir -p /db /derived && chown`** する。Dockerは空の名前付きボリュームを初期化する際にイメージ側ディレクトリの所有者をコピーするため、これが無いとボリュームがroot所有になり非rootユーザーがSQLiteを書けない
 - **起動コマンドは `ENTRYPOINT` ではなく `CMD`** に置く。`ENTRYPOINT` はマイグレーション適用スクリプト専用にし、`docker compose run --rm webapp python -m ...` でCLIを差し替え実行できるようにする
@@ -213,6 +263,14 @@ project-root/
 
 ## inferenceコンテナ（FastAPI＋AIによる推論サーバー）
 
+### API / モデル管理 Rules
+- 推論はジョブ方式（`POST /<step>/jobs` → 202 で job_id → `GET` でポーリング、`DELETE` でキャンセル）。ジョブはプロセス内メモリに保持し、ワーカーは1本（uvicorn も worker=1 前提）
+- モデルは起動時にロードしない。`main.py` の lifespan でローダーを登録するだけにし、最初のリクエストでロードする（`MAX_RESIDENT_MODELS` を超えたら古いものから解放）。GPU 実行は `gpu_lock` で直列化する
+- 重いライブラリの import はローダー関数の内側に置く。トップレベルで import すると1つ壊れただけでサーバーが起動しなくなる
+- `/health` はモデルのロードを待たずに即座に返す。compose の healthcheck で webapp の起動を待たせているため
+- `USE_STUB_MODELS=true` で GPU 不要のスタブ（`models_impl/*_stub.py`）に切り替わる。新しいモデルを追加するときはスタブも用意する
+
 ### Docker Rules
+- 既定のイメージは `Dockerfile_devel`（Transformers 版）。GitHub 公式実装版を使う場合は `IMAGE_RUNTIME=devel_github IMAGE_TAG=cu124-devel-github` を指定する
 - 推論サーバーの requirements.txt には、ベースイメージに既にあるパッケージを書かない。無指定で書くと pip が最新版へ上げ、numpy が 2.x に置き換わってベースイメージの C 拡張（matplotlib 等）が壊れる。GroundingDINO は matplotlib を import するため直撃する
 - Dockerfile の末尾に import のスモークテストを置く。依存の壊れは最初の推論まで発覚せず、原因の切り分けに時間を取られる
