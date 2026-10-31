@@ -1,4 +1,4 @@
-# Steramlit UIデザイン
+# Streamlit UIデザイン
 
 ## ページ一覧
 
@@ -6,107 +6,141 @@
 |---|---|
 |main.py|データセットを選択する（DATASET_IDをセッションに保持）|
 |pages/1_Scene_Selection.py|シーンを選択する（SCENE_TOKENをセッションに保持）|
-|pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出|
+|pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出し、SigLIP2でラベルを再判定|
 |pages/3_Instance_Tracking.py|2_Detection2D.pyで検出したボックスをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得|
-|pages/4_Depth_Boxfitting.py|Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionして3D bounding boxを割り当てる|
-|pages/5_Export.py|アノテーション結果をJSON形式で出力する|
+|pages/4_Depth_Boxfitting.py|Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionし、カメラ間で同一インスタンスを結合して3D bounding boxを割り当てる（成功したrunは`sample_annotations`に自動アノテーションとして書き込まれる）|
+|pages/5_Export.py|アノテーション結果をnuScenes形式（devkitが読めるJSONテーブル群）で出力し、zipでダウンロードする|
+
+## 全ページ共通の仕様
+- 各ページの先頭で`state.py`の`require_*()`を1行呼び、前提となる選択がなければ警告メッセージと遷移リンク（`safe_page_link`）を出して`st.stop()`する
+    - `require_dataset()`: 「先にデータセットを選択してください。」＋main.pyへの「データセット選択へ」リンク
+    - `require_scene()`: 上記に加え「先にシーンを選択してください。」＋1_Scene_Selection.pyへの「シーン選択へ」リンク
+- サイドバーに現在の選択（データセット名・シーン名）を表示する（`render_selection_sidebar`）
+- 推論ページ（2〜4）の表示オプション（opt_colのウィジェット）は、`init_sticky` / `sync_sticky`で正規キーにも値を退避する（「Run Inference」で`st.rerun()`が走ると、その下のウィジェットの状態がStreamlitに破棄されるため）
+- 推論ページ（2〜4）のopt_col最上部には、選択中のsample_token（調査時にDBと突き合わせるため）を表示する（`components/sample_token.py`）
+- 推論ページ（2〜4）の推論パラメータの詳細（デフォルト値・範囲・アルゴリズム）は`webapp/inference/CLAUDE.md`参照
 
 ## 各ページの仕様
 ### main.py
 - 最初に表示される画面であり、ここでデータセットを選択する
-- データセット一覧を、各種統計情報（シーン数、サンプル数、アノテーション数等）と一緒に画面上部にテーブル表示する
-- テーブルのチェックボックスをチェックして「このデータセットを使う」ボタンをクリックすると、データセット選択（DATASET_ID）がセッションに保存されて他の画面に遷移しても維持される
-- データセット選択がセッションに保存されると「シーン選択へ進む」ボタンが表示され、クリックすると1_Scene_Selection.pyの画面に遷移する
+- データセットが1件も登録されていなければ、インポートCLI（`python -m app.json_conversion.to_nusc_db ...`）の実行例を表示して終了する
+- データセット一覧を、各種統計情報（名前、バージョン、種別、データルート、シーン数、サンプル数、アノテーション数、説明、登録日時）と一緒に画面上部にテーブル表示する（行選択は単一行）
+- テーブルの行を選択して「このデータセットを使う」ボタンをクリックすると、データセット選択（DATASET_ID）がセッションに保存されて（他の画面に遷移しても維持される）、1_Scene_Selection.pyの画面に遷移する。データセットを変えると、シーン以下の選択・各推論の状態は全てクリアされる
+- 「再読み込み」ボタン: DBの変更をキャッシュに反映する（`clear_caches()`）
+- データセット選択がセッションに保存されていれば「選択中: ...」と表示し、「シーン選択へ進む」ボタンで1_Scene_Selection.pyの画面に遷移できる
 
 ### 1_Scene_Selection.py
 - シーンを選択するための画面
-- データセット選択（DATASET_ID）がセッションに保存されていない場合、「先にデータセットを選択してください」という文字とmain.pyに遷移する「データセット選択へ」ボタンのみ表示し、以降のUIを表示しない
-- 選択中のデータセット内のScene一覧を、各種統計情報（logから取得したlocation、開始時刻等）と一緒に画面上部にテーブル表示する
-- テーブルにはシーン内の「紐づくsample_annotationが1個以上あるsampleの数 / 全sample数」を「アノテーション済」列として表示し、このパーセンテージを「進捗」列としてバー表示する。また進捗が100%なら完了、0%なら未着手、それ以外なら実施中と表示する「状態」列も追加する
-- テーブルのチェックボックスをクリックすると、右下に各sampleの位置をwaypointとして地図上にPlotlyで表示する（sampleに紐づくLIDAR_TOPのego-poseを使用）
-- テーブルのチェックボックスをチェックして「このシーンでアノテーションを開始」ボタンをクリックすると、当該シーンを選択選択（SCENE_TOKENがセッションに保存されて他の画面に遷移しても維持される）して2_Detection2D.py画面に遷移する
+- データセット選択（DATASET_ID）がセッションに保存されていない場合、「先にデータセットを選択してください。」という文字とmain.pyに遷移する「データセット選択へ」リンクのみ表示し、以降のUIを表示しない
+- 選択中のデータセット内のScene一覧を、各種統計情報（シーン名、状態、進捗、アノテーション済、logから取得したロケーション、開始時刻、説明）と一緒に画面上部にテーブル表示する
+- テーブルにはシーン内の「紐づくsample_annotationが1個以上あるsampleの数 / 全sample数」を「アノテーション済」列として表示し、このパーセンテージを「進捗」列としてバー表示する。また進捗が100%なら「✅ 完了」、0%なら「⬜ 未着手」、それ以外なら「🟡 途中」、sampleが無ければ「— サンプル無し」と表示する「状態」列も追加する（全シーン分を1クエリで集計）
+- テーブルの行を選択すると（未選択なら確定済みのシーンを）、テーブルの下を info_col（1）と map_col（3）で左右に分割して以下を表示する
+    - info_col: シーン名、ロケーション、車両、撮影日、サンプル数、開始・終了時刻、説明と、「このシーンでアノテーションを開始」ボタン
+    - map_col: 各sampleの位置をwaypointとして、basemap上にPlotlyで表示する（sampleに紐づくLIDAR_TOPのego_poseを使用。軌跡の範囲±マージンにズーム）
+- 「このシーンでアノテーションを開始」ボタンをクリックすると、当該シーンを選択（SCENE_TOKENがセッションに保存されて他の画面に遷移しても維持される）して2_Detection2D.py画面に遷移する。シーンを変えると、各推論の状態はクリアされる
 
 ### 2_Detection2D.py
 - Grounding DINOを用いて、与えたラベルの2Dバウンディングボックスを検出する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Detection2D`参照
-- 画面上部はparam_col, map_colで左右に分割
-- param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
-    - Sample Interval: 推論を実施するsampleの間隔。number_inputで選択
-    - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる
-    - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる
-    - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合
-    - Whole-Image Fallback: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定（検出0件フレームの救済推論）関係。以下パラメータを指定可能
-        - Whole-Image Score Threshold: Whole-Image再判定時のSigLIP2スコアの閾値。この閾値以下の結果は削除
+- ページ表示時に`validate_label_config()`でラベル設定（閾値やカテゴリ変換の未定義など）を検査し、問題があれば「⚠️ ラベル設定に N 件の問題があります」エクスパンダーに一覧表示する
+- 画面上部はparam_col（2）, map_col（1）で左右に分割
+- param_col上部の「Inference Parameters」エクスパンダー（既定は閉じる）に推論パラメータを選択するUIを設置し、処理の適用順に以下のタブに分ける
+    - Detection2Dタブ
+        - Sample Interval: 推論を実施するsampleの間隔。number_inputで選択。下に対象sampleのインデックス一覧と推論回数（sample数 × カメラ数 × カテゴリグループ数）を表示
+        - Score Threshold: 検出したバウンディングボックスのscore閾値にかける倍率。sliderで選択。実際に適用する閾値はカテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなり、その値をテーブル表示する
+        - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの（テーブル表示）、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたもの（テキスト表示）となる
+    - Re-Classificationタブ
+        - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合。下に再判定の対象ラベル（`settings.RE_CLASSIFICATION_CANDIDATES`のkey）を表示
+    - Duplicate Suppressionタブ
+        - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される。下に「小さい方を削除」「大きい方を削除」のラベル一覧を表示
+    - Whole-Image Fallbackタブ: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定（検出0件フレームの救済推論）関係。下に採用候補・除外候補（`settings.WHOLE_IMAGE_CANDIDATES`のvalueがNoneでないもの・Noneのもの）を表示
+        - Whole-Image Score Threshold: Whole-Image再判定時のSigLIP2スコアの閾値。この閾値未満の結果は採用しない（論理削除として残る）
         - Whole-Image Resize Ratio: Whole-Image再判定時の画像リサイズ率
-    - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される
-- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /detection2d/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /detection2d/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
-- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存する
-    - 推論が完了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。ただし過去に手作業で修正したバウンディングボックスがあれば優先して使用するため、保存前に以下処理をsample_data_tokenごと（Sample＆カメラごと）に実行
-        - `detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
+- param_col中央上部の枠付きcontainerに、現在のパラメータの要約（エクスパンダーを畳んでいても分かるように）と、推論を実施する「Run Inference」ボタン・「Cancel」ボタン・進捗表示を設置
+    - 「Run Inference」ボタン: 推論サーバーに接続できるか確認したうえで、上で選択したパラメータと対象フレーム（推論サーバーはDBを持たないため、対象画像はwebapp側で決めて渡す）を渡して推論を実行する`POST /detection2d/jobs`リクエストを推論サーバーに送信し、job_idをsession_stateに保持する。ジョブ実行中は押せない
+    - 「Cancel」ボタン: ジョブ実行中のみ表示。`DELETE /detection2d/jobs/{job_id}`でジョブをキャンセルする
+    - 進捗表示: `st.fragment(run_every=1.0)`で1秒ごとに`GET /detection2d/jobs/{job_id}?since=...`をポーリングし、進捗バー・status・経過時間・完了フレーム数を表示する（フラグメントの中だけを再実行し、画像グリッドを巻き込んで再描画しない）。完了したフレームから部分結果（partial）を差分で受け取り、画像グリッドに逐次反映する
+- ポーリングで推論終了（succeeded / failed / cancelled）を検知したら（終了を2回検知して2回保存するのを防ぐため保存済みjob_idをsession_stateに持っておく）、以下の要件を満たすよう結果をDBの`detection_2d_params`、`detection_2ds`テーブルに保存する
+    - 推論が終了したら、即時に自動保存（人間がボタンを押したら保存すると、せっかく時間をかけて推論した結果が消えうるため）。失敗・キャンセルしたrunも`status`付きで残す。ただし過去に手作業で修正したバウンディングボックスがあれば優先して使用するため、保存前に以下処理をsample_data_tokenごと（Sample＆カメラごと）に実行
+        - 手修正は「いま表示しているrun」のものだけ引き継ぐ（全runから集めると、古いパラメータ時代の修正が混ざるため）
+        - 表示中のrunの`detection_2ds`テーブル内の`manually_modified=True`のレコード（マニュアル編集済ボックス）と、推論した全ボックスに対してIoUを計算して貪欲マッチング（1つの手修正ボックスが複数の推論ボックスとマッチして同じ手修正ボックスが複製されるのを防ぐため）を実施
         - マッチングしたIoUが閾値（`settings.DET2D_MANUAL_REPLACE_IOU`）以上のボックスがあれば、マッチングした推論ボックスをマッチングしたマニュアル編集済ボックスに置き換える
         - マッチしなかったマニュアル編集済ボックスは、そのまま推論結果に追加する
         - 手修正にはボックスの削除処理も存在するが、今回の置き換えロジックのスコープ外（推論ボックスを削除する処理は実施しない）
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`instance_tracking_2d_params`から参照されていない`detection_2d_params`レコードが`settings.DET2D_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
+    - ラベル体系（`settings.NUSC_CATEGORY_TO_LABEL`等）は実行時点のスナップショットとしてrunに保存する（後からconfigを変えても過去のrunの解釈が変わらないようにするため）
+    - 保存は上書きではなくレコード追加として行う。保存後、同じ(dataset_id, scene_token)のrunが`settings.DET2D_MAX_RUNS_PER_SCENE`件を超えていれば、新しい順に上限件数を残し、それより古いrunのうち`instance_tracking_2d_params`から参照されておらず実行中でもないものを削除する（CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `detection_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`instance_tracking_2d_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
-    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える
-    - 「削除」ボタン: 押すと選択した`detection_2d_params`テーブルのレコードと、CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される。CASCADEで紐づくInstance Tracking、Depth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
-- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。このスライダはSample Intervalパラメータの間隔に基づく選択したサンプルのリスト（推論もこのサンプルのみ実施される）をselect_sliderで表示する
+    - 保存したrunを表示中のrunにし、手修正の反映結果をDBから読み直して表示する
+- `detection_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部の「保存済みの推論結果（N 件）」エクスパンダーに、ラジオボタン付きでレコード一覧をリスト表示する。各行には表示中のrunを示す「★」、開始時刻、`status`、ボックス数、Sample Interval、参照している`instance_tracking_2d_params`の件数（参照されている場合のみ）、run ID（`tools/`の調査スクリプトに渡すため）を表示する。リストの下には「この run を表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「この run を表示」ボタン: 押すと後述のview_colで表示される「推論バウンディングボックス」をラジオボタン選択したレコードのものに切り替える（選択中のrunが表示中なら押せない）
+    - 「削除」ボタン: 押すと選択した`detection_2d_params`テーブルのレコードと、CASCADEで紐づく`detection_2ds`テーブルのレコードも削除される。選択中のrunがInstance Trackingから参照されている場合は、「削除すると連鎖して消えます」という警告をボタンの上に表示する（CASCADEで紐づくInstance Tracking、Depth Boxfitting関係のレコードも削除されるため）
+- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。このスライダはSample Intervalパラメータの間隔に基づく選択したサンプルのリスト（推論もこのサンプルのみ実施される）をselect_sliderで表示する（初期値はリストの中央）
 - map_colに各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する（選択中sample強調表示以外は1_Scene_Selection.py画面で使用したコンポーネントと同じものを使用する）
-- 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像と「推論バウンディングボックス」（定義は後述）を表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
-    - Show boxesチェックボックス: チェックすると画像にバウンディングボックスを重ねて表示し、チェックしていないと画像のみを表示する
-    - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
+- 画面下部は、view_col（8）, opt_col（1）で左右に分割する。view_colは各カメラ（`settings.CAM_DISPLAY_ORDER`の順）の画像と「推論バウンディングボックス」（定義は後述）を表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
+    - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
         - チェックしていない場合: 2列3行で6カメラを表示し推論バウンディングボックスを重ねる
-        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthのバウンディングボックスを、右側の画像には推論バウンディングボックスを重ねて表示
-    - Min scoreスライダ: 選択したscoreを超えたバウンディングボックスのみを表示
-    - チェックボックス付きlabel凡例: チェックしているlabelのバウンディングボックスのみを表示。この凡例は選択中のsampleのバウンディングボックスに存在するlabelのみ表示。一括チェックする「全て」ボタンと、一括チェック解除する「解除」ボタンも設置
-    - Box textラジオボタン: 画像上でバウンディングボックスの上に表示する文字の種類（文字色はバウンディングボックスの色と一致）を指定する。以下の選択肢を持つ
+        - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truth（3Dアノテーションを2D投影したもの）のバウンディングボックスを、右側の画像には推論バウンディングボックスを重ねて表示
+    - Show deletedチェックボックス: チェックするとSigLIP2のラベル再判定やWhole-Image再判定で論理削除されたボックスも表示する（Box textがLabelのときは"deleted"と表示される）。切り替えると表示中のrunをDBから読み直す
+    - Min scoreスライダ: 選択したscore以上のバウンディングボックスのみを表示
+    - Box textラジオボタン: 画像上でバウンディングボックスの上に表示する文字の種類（文字色はバウンディングボックスの色と一致）を指定する。以下の選択肢を持つ（デフォルトはNone）
         - None: 何も表示しない
         - Detection Label: GroundingDINOの推論結果を表示（SubLabelから`settings.LABEL_TO_SUBLABEL`で逆引きして得られる）
         - SubLabel: 実際にGroundingDINOのプロンプトに渡したサブラベルを表示
-        - Re-Classification: SigLIP2で再判定して得られたラベルを表示
-        - Label: 最終的なラベルを表示（SigLIP2で再判定して得られたラベルを`settings.RE_CLASSIFICATION_CANDIDATES`で参照して得られる）
+        - Re-Classification: SigLIP2で再判定して得られたラベル候補を表示（再判定の対象外だったボックスは何も表示しない）
+        - Label: 最終的なラベルを表示（SigLIP2で再判定して得られたラベル候補を`settings.RE_CLASSIFICATION_CANDIDATES`で参照して得られる）
         - Score: スコアを表示（小数点以下2桁まで表示）
+    - チェックボックス付きlabel凡例: チェックしているlabelのバウンディングボックスのみを表示。この凡例は選択中のsampleのバウンディングボックスに存在するlabelのみ（Compare with GTのときはGT側のlabelも含めて）件数付きで表示。一括チェックする「全て」ボタンと、一括チェック解除する「解除」ボタンも設置
 - view_colに表示する推論バウンディングボックスは、以下のように決める
-    - （現在のセッションでの）推論実施前: `detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のもの。`status='succeeded'`のレコードがなければバウンディングボックスを表示しなし
-    - 推論実施後: 推論結果のバウンディングボックス（基本的には推論実施前と同様に`detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のものになるはず）
-    - 表示対象の変更方法: 手動操作を行わなければ上記のように表示対象が決まるが、前述のparam_col中央下部のexpanderで「このrunを表示」ボタンを押すと、ラジオボタンで選択した`detection_2d_params`テーブルのレコードのものに切り替わる
+    - （現在のセッションでの）推論実施前: 以下の優先順で決めたrun
+        1. 最新の成功した`instance_tracking_2d_params`が参照している`detection_2d_params`のrun（後段が実際に使っている入力を見せるため）
+        2. `detection_2d_params`テーブルの`status='succeeded'`のレコードのうち`started_at`が最新のもの
+        3. どちらも無ければバウンディングボックスを表示しない
+    - 推論実行中: 推論サーバーから受け取った部分結果を逐次表示（未処理のカメラは処理待ちとして表示）
+    - 推論実施後: 保存した推論結果のrun（手修正の反映後）
+    - 表示対象の変更方法: 手動操作を行わなければ上記のように表示対象が決まるが、前述のparam_col中央下部のエクスパンダーで「この run を表示」ボタンを押すと、ラジオボタンで選択した`detection_2d_params`テーブルのレコードのものに切り替わる
 
 ### 3_Instance_Tracking.py
-- SAM2を用いて、与えたラベルの2Dバウンディングボックスを検出する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Instance Tracking`参照
-- 画面上部はparam_col, map_colで左右に分割
-- param_col上部のexpanderに以下の推論パラメータを選択するUIを設置
-    - Box Prompt: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブルのレコードをラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
-    - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。デフォルト値`settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`settings.SWEEPS_PER_SAMPLE`を上限としたnumber_input
-    - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`settings.DEFAULT_TRACKING_IOU_THRESHOLD`
-    - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、外径バウンディングボックス同士のIoUにするか、Mask IoUにするかを選択。”Box”, “Mask”のselectboxで良さそう。デフォルトは”Box”
-    - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。以下の選択肢を持つ
-        - Label: ラベルが一致する場合のみマッチング対象とする
-        - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
-        - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
-    - Track ID Inheritance: IoUマッチングに使用する手法を指定するSelectbox。以下の選択肢を持つ（両手法の詳細は`webapp/inference/CLAUDE.md`参照）
-        - continuous_id: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチング
-        - forward_backward_matching: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施
-- 推論container: Detection2D画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
-- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
-- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
-    - 推論が完了したら、即時に自動保存
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`から参照されていない`instance_tracking_2d_params`レコードが`settings.TRACKING_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
+- SAM2を用いて、Detection2Dで検出したボックスをプロンプトとして各インスタンスのマスクとtrack_idを取得する画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Instance Tracking`参照
+- プロンプトに使える（`status='succeeded'`の）Detection2Dのrunが無い場合、「先に 2D Object Detection を実行してください。」という警告と2_Detection2D.pyへのリンクのみ表示し、以降のUIを表示しない
+- 画面上部はparam_col（2）, map_col（1）で左右に分割
+- param_col上部の「Inference Parameters」エクスパンダーに推論パラメータを選択するUIを設置
+    - Box Prompt（タブの外）: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブルの`status='succeeded'`のレコードを、開始時刻・ボックス数・Sample Intervalと共にラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
+    - Instance Trackingタブ
+        - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。非キーフレームは伝播にのみ使う。デフォルト値`settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`settings.SWEEPS_PER_SAMPLE`と`MAX_SWEEPS_PER_SAMPLE`（=10）の小さい方を上限としたnumber_input
+    - Track ID Inheritanceタブ
+        - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`settings.DEFAULT_TRACKING_IOU_THRESHOLD`
+        - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、マスクの外接矩形同士のIoU（"box"）にするか、Mask IoU（"mask"）にするかを選択するSelectbox。デフォルト値`settings.DEFAULT_TRACKING_IOU_METHOD`
+        - IoU Label Match: 上記IoUマッチング時にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。デフォルト値`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`。以下の選択肢を持つ
+            - label: ラベルが一致する場合のみマッチング対象とする
+            - category_group: カテゴリグループが一致する場合のみマッチング対象とする
+            - none: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
+        - Track ID Inheritance: IoUマッチングに使用する手法を指定するラジオボタン。デフォルト値`settings.DEFAULT_TRACK_ID_INHERITANCE`。以下の選択肢を持つ（両手法の詳細は`webapp/inference/CLAUDE.md`参照）
+            - continuous_id: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチング
+            - forward_backward_matching: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施（推論時間は約2倍）
+- param_col中央上部の枠付きcontainerに、現在のパラメータの要約と「Run Inference」「Cancel」ボタン・進捗表示を設置（動作はDetection2D画面と同様）。「Run Inference」ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストが推論サーバーに送信され、1秒ごとに`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される。区間境界のsampleにはプロンプト由来と伝播由来の結果が別々に届くため、由来（origin）ごとに部分結果を取り込む
+- ポーリングで推論終了を検知（終了を2回検知して2回保存するのを防ぐため保存済みjob_idをsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
+    - 推論が終了したら、即時に自動保存（失敗・キャンセルしたrunも`status`付きで残す）
+    - 保存は上書きではなくレコード追加として行う。保存後、同じ(dataset_id, scene_token)のrunが`settings.TRACKING_MAX_RUNS_PER_SCENE`件を超えていれば、新しい順に上限件数を残し、それより古いrunのうち`depth_estimation_params`から参照されておらず実行中でもないものを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。選択中のレコードが参照している`depth_estimation_params`テーブルのレコードがあれば、参照されている旨を表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
-    - 「このrunを表示」ボタン: 押すと後述のview_colで表示されるインスタンスマスク等の情報をラジオボタン選択したレコードのものに切り替える
-    - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。CASCADEで紐づくDepth Boxfittng関係のレコードも削除されるが、この場合は削除前に警告を出す
+- `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部の「保存済みの推論結果（N 件）」エクスパンダーに、ラジオボタン付きでレコード一覧をリスト表示する。各行には表示中のrunを示す「★」、開始時刻、`status`、インスタンス数・トラック数、Sweeps per Sample、方式（fwd / fwd+bwd）、参照している`depth_estimation_params`の件数（参照されている場合のみ）、run IDを表示する。リストの下には「この run を表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「この run を表示」ボタン: 押すと後述のview_colで表示されるインスタンスマスク等の情報をラジオボタン選択したレコードのものに切り替える
+    - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。選択中のrunがDepth Estimationから参照されている場合は、「削除すると連鎖して消えます」という警告をボタンの上に表示する（CASCADEで紐づくDepth Boxfitting関係のレコードも削除されるため）
+- view_colに表示するrunは、推論実施前は「最新の成功した`depth_estimation_params`が参照しているrun → 最新の成功したrun」の優先順で決め、推論実施後は保存した推論結果のrunとする（「この run を表示」で切り替え可能）
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置。Detection2D画面と異なり、全てのSampleを選択できるようにする（トラッキングはIntervalの間のフレームにも実行されるため）。Sample選択だとキーフレーム以外は選択できなくなるが、これで特に問題ない（キーフレーム以外のフレームは推論のトラッキング伝播には使用するが、結果自体は使用しないため表示できなくとも良い）
+    - 例外として、continuous_idのrunでCompare propagationをチェックしている間は、プロンプトを与えたsample（表示中のrunのSample Interval間隔のsample）のみ選択できる（それ以外のsampleには伝播結果しか無く、比較の意味がないため）
+    - 選択肢が変わって選択中のsampleが範囲外になったら、選択肢の中央に寄せる
 - map_colにはDetection2D画面と同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
-- 画面下部は、view_col, opt_colで左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示（labelごとに色分け）し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
-    - Compare propagation: track_idの引き継ぎ時のインスタンス同士のマッチングを確認するモード。チェックの有無により以下のように表示が変わる
-        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる。Track ID Inheritance="forward_backward_matching"のとき、各インスタンスの表示マスクは以下のように決める
-            - そのインスタンスがBackward・Forwardどちらかの伝播にのみ存在（マッチング成立せず）: 伝播が存在するインスタンスマスクをそのまま表示
-            - そのインスタンスがBackward・Forward両方の伝播に存在（マッチング成立）: 最終的に採用するマスクの決め方と同じく、そのフレームからプロンプトボックスが近い方のインスタンスマスクを表示（例. ForwardがSample4から、BackwardがSample8から伝播している場合、Sample4〜6ではForwardのマスクを、Sample7〜8ではBackwardのマスクを表示）
+- 画面下部は、view_col（8）, opt_col（1）で左右に分割する。view_colは各カメラの画像とインスタンスマスクを表示し、opt_colに配置した表示条件を指定するための以下ウィジェットに基づき、以下のように表示を変える
+    - Compare propagationチェックボックス: track_idの引き継ぎ時のインスタンス同士のマッチングを確認するモード。forward_backward_matchingのrunでは全キーフレームで、continuous_idのrunではプロンプトを与えたsampleでのみ有効（それ以外のsampleでは無効化され、「プロンプトを与えた sample を選ぶと比較できます」と表示する。無効化してもチェック状態は書き換えず、使用時に有効条件とANDを取る）。チェックの有無により以下のように表示が変わる
+        - チェックしていない場合: 2列3行で6カメラを表示し推論マスクやバウンディングボックス等を重ねる。各インスタンスの表示マスクは以下のように決める（1フレーム1トラックに1件）
+            - Track ID Inheritance="forward_backward_matching"のとき
+                - そのインスタンスがBackward・Forwardどちらかの伝播にのみ存在（マッチング成立せず）: 伝播が存在するインスタンスマスクをそのまま表示
+                - そのインスタンスがBackward・Forward両方の伝播に存在（マッチング成立）: 最終的に採用するマスクの決め方と同じく、そのフレームからプロンプトボックスが近い方のインスタンスマスク（`is_selected`が立っている方）を表示（例. ForwardがSample4から、BackwardがSample8から伝播している場合、Sample4〜6ではForwardのマスクを、Sample7〜8ではBackwardのマスクを表示）
+            - Track ID Inheritance="continuous_id"のとき: 区間境界のsampleにはプロンプト由来と伝播由来の両方があるが、プロンプト由来（検出器の出力そのもの）を優先して表示
         - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、track_idの引き継ぎに使用する2種類のインスタンスマスクを比較する。Track ID Inheritanceに応じて以下のように表示が変わる
-            - continuous_idのとき: 左側の画像には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合、ボックスは表示しない）。右側の画像には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
-            - forward_backward_matchingのとき: 左側の画像にはForward方向トラッキングで伝播されたマスクを、右側の画像にはBackward方向トラッキングで伝播されたマスクを表示する。プロンプトボックスを与えるフレーム（Sample Interval間隔で存在）は2つのブロックに重複して所属するため、2種類のBackwardおよびForwardマスクが存在することとなるが、左側の画像（Forward）にはプロンプトを与えて得られたマスク（前のブロックからForward伝播されたマスクではない）を、右側の画像（Backward）にはそのブロックの最後のフレームからBackward伝播されてきたマスク（プロントを与えて得られたマスクではない）を表示する。Show boxesラジオボタンでPromptを選択している場合、左側の画像（Forward）にプロンプトボックスを表示する。
+            - continuous_idのとき: 左側の画像（Propagated）には前のSample Intervalから伝播したマスクを表示する（Show boxesでPromptを選択している場合も、ボックスは表示しない）。右側の画像（Prompt）には今回のSample Intervalで推論したマスクを表示する（Show boxesラジオボタンでPromptを選択している場合、プロンプトボックスは表示する）
+            - forward_backward_matchingのとき: 左側の画像（Forward）にはForward方向トラッキングで伝播されたマスクを、右側の画像（Backward）にはBackward方向トラッキングで伝播されたマスクを表示する。プロンプトボックスを与えるフレーム（Sample Interval間隔で存在）は2つのブロックに重複して所属するため、2種類のBackwardおよびForwardマスクが存在することとなるが、左側の画像（Forward）にはプロンプトを与えて得られたマスク（前のブロックからForward伝播されたマスクではない）を、右側の画像（Backward）にはそのブロックの最後のフレームからBackward伝播されてきたマスク（プロンプトを与えて得られたマスクではない）を表示する。Show boxesラジオボタンでPromptを選択している場合、左側の画像（Forward）にプロンプトボックスを表示する。
     - Show boxesラジオボタン: 画像上でのバウンディングボックスの表示方法を指定する。以下の選択肢を持つ（デフォルトはPrompt）
-        - Prompt: プロンプトとして与えたbox（Sample Intervalで選ばれたSampleでしか表示されないことになる）
+        - Prompt: プロンプトとして与えたbox（表示中のrunが参照するDetection2Dのrunのボックス。Sample Intervalで選ばれたSampleでしか表示されないことになる）
         - Instance: インスタンスマスクの外接矩形（全Sampleにおいて表示される）
         - None: バウンディングボックスを表示しない
     - Colorラジオボタン: マスクとバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
@@ -116,134 +150,218 @@
         - None: 何も表示しない
         - Label: ラベル文字を表示（文字色はマスクの色と一致）
         - Track ID: Track IDを表示（文字色はマスクの色と一致）
-    - 凡例のリスト表示: Colorで選択した色に応じてチェックボックス付き凡例をリスト表示（レイアウトはDetection2D画面のものを踏襲）
+    - 凡例のリスト表示: Colorで選択した色に応じて、ラベル別（「Labels」）またはTrack ID別（「Track IDs」）のチェックボックス付き凡例を件数付きでリスト表示し、チェックしているもののみを表示する（レイアウトはDetection2D画面のものを踏襲。Compare propagation中は左右両方のインスタンスから作る。ラベル別とTrack ID別でチェック状態は別管理）
 
 ### 4_Depth_Boxfitting.py
-- Depth-Anything-3を用いてカメラ画像から深度推定してDepth点群を取得し、それを各インスタンスマスクに投影して（LiDAR点群があればこれも混合して）インスタンスごとの点群を作成し、3Dバウンディングボックスを当てはめる画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Depth Boxfitting`参照
-- 画面上部はparam_col, map_colで左右に分割
-- param_col上部のexpanderに推論パラメータを選択するUIを設置し、以下のタブに分ける
-    - Instance Tracking（これのみタブではなくラジオボタン）: 入力として使用するInstance Trackingの結果。`instance_tracking_2d_params`テーブル内の`status='succeeded'`のレコードをラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
+- Depth-Anything-3を用いてカメラ画像から深度推定してDepth点群を取得し、それを各インスタンスマスクに投影して（LiDAR点群があればこれも混合して）インスタンスごとの点群を作成し、カメラ間で同一インスタンスを結合して3Dバウンディングボックスを当てはめる画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Depth Boxfitting`参照
+- 入力に使える（`status='succeeded'`の）Instance Trackingのrunが無い場合、「先に Instance Tracking を実行してください。」という警告と3_Instance_Tracking.pyへのリンクのみ表示し、以降のUIを表示しない
+- 画面上部はparam_col（2）, map_col（1）で左右に分割
+- param_col上部の「Inference Parameters」エクスパンダーに推論パラメータを選択するUIを設置し、処理の適用順に以下のタブに分ける（各パラメータのデフォルト値・範囲は`webapp/inference/CLAUDE.md`のDepth Boxfittingの「UIで指定可能なパラメータ」参照）
+    - Instance Tracking（これのみタブではなくラジオボタン）: 入力として使用するInstance Trackingの結果。`instance_tracking_2d_params`テーブル内の`status='succeeded'`のレコードを、開始時刻・インスタンス数・トラック数・Sweeps per Sampleと共にラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
     - Generalタブ: Depth/LiDAR点群両方の処理に適用するパラメータ
-        - Use LiDAR: LiDAR点群を使用するかどうかを指定するチェックボックス
-        - Dilation: インスタンスマスクのクロージング処理の膨張カーネルサイズ
-        - Erosion: インスタンスマスクのクロージング処理の収縮カーネルサイズ
-        - Small Mask Short Side: 各種小マスク向け倍率を適用するためのマスクの短辺サイズ閾値（これより小さければ収縮カーネルサイズにはSmall Mask Erosion Ratioを、Depth ROR nb_points, Depth DBSCANにはSmall Mask nb_points / min_samples Ratioを適用）
-        - Small Mask Erosion Ratio: 短辺がSmall Mask Short Side以下のマスクの収縮カーネルサイズに適用する倍率。適用後カーネルサイズは`round(Dilation+(Erosion-Dilation)*Small Mask Erosion Ratio)`
+        - Use LiDAR: インスタンスごとLiDAR点群を作成し、Depth点群の補正・混合に使うかどうかを指定するチェックボックス
+        - Mask Closing
+            - Dilation: インスタンスマスクのクロージング処理の膨張カーネルサイズ（奇数のみ）
+            - Erosion: インスタンスマスクのクロージング処理の収縮カーネルサイズ（奇数のみ）
+        - Small Mask
+            - Small Mask Short Side [px]: 各種小マスク向け倍率を適用するためのマスクの外接矩形の短辺サイズ閾値（これ以下なら収縮カーネルサイズにはSmall Mask Erosion Ratioを、Depth ROR nb_points, Depth DBSCAN min_samplesにはSmall Mask nb_points / min_samples Ratioを適用。0で無効）
+            - Small Mask Erosion Ratio: 短辺がSmall Mask Short Side以下のマスクの収縮量に適用する倍率。適用後カーネルサイズは`Dilation + 2 × round((Erosion − Dilation) / 2 × Small Mask Erosion Ratio)`
+        - L-shape Filter（下に対象ラベル`settings.LSHAPE_FILTER_LABELS`を表示）
+            - Enable L-shape Filter: L-shape Filterを実施するかどうかを指定するチェックボックス（オフにすると以下のL-shape Filter関係のウィジェットが全タブで無効化される）
+            - L-shape Support Band [m]: 輪郭点が面に「乗っている」とみなす幅
+            - L-shape Violation Weight: L字当てはめで面より手前に残る輪郭点1つあたりの減点
+        - Distance Filter（下にラベルごとの方式`settings.DISTANCE_FILTER_METHODS`を表示）
+            - Distance Quantile [%]: センサからの距離の分位点
+            - Distance Margin [m]: long_side方式で前後に取る余裕
+            - Distance DBSCAN eps [m]: dbscan方式のDBSCANのeps
+            - Distance DBSCAN min_samples: dbscan方式のDBSCANのmin_samples
     - Depth Estimationタブ: 深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
-            - radius: radiusパラメータ（注目する点を中心とした球の半径）
+            - Radius: radiusパラメータ（注目する点を中心とした球の半径）
         - DBSCAN: ノイズ除去の2段階目の処理であるDBSCANに使用するパラメータ
             - eps: epsパラメータ（近傍とみなす半径）
             - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
-        - Small Mask nb_points / min_samples Ratio: 短辺がSmall Mask Short Side以下のマスクのSmall Mask nb_points / min_samples Ratioに適用する倍率
-    - LiDAR Pointcloudタブ: LiDAR点群の結合・ノイズ除去・Depth点群とのに使用するパラメータ
-        - Depth Correction: Depth点群の深さ方向位置をLiDAR点群で補正する際のアルゴリズムを選択するプルダウン。"scale"（中央値の比で補正）、"shift"（中央値の差で補正）、"affine"（2パラメータ）の選択肢を持つ
+        - Small Mask
+            - Small Mask nb_points / min_samples Ratio: 短辺がSmall Mask Short Side以下のマスクのDepth ROR nb_points・Depth DBSCAN min_samplesに適用する倍率
+        - L-shape Filter
+            - Azimuth Bin [deg]: 手前輪郭を作る方位ビンの幅
+            - Near Quantile [%]: 各ビンで輪郭点とする距離の分位点
+            - Margin Min [m] / Margin Ratio: 除去閾値`max(Margin Min, Margin Ratio × 基準距離)`のパラメータ
+    - LiDAR Pointcloudタブ: LiDAR点群の結合・ノイズ除去・Depth点群との混合に使用するパラメータ
+        - Depth Correction: Depth点群の深さ方向位置をLiDAR点群で補正する際のアルゴリズムを選択するプルダウン。"scale"（中央値の比で補正）、"shift"（中央値の差で補正）、"affine"（2パラメータ）の選択肢を持つ（`settings.DEPTH_CORRECTION_METHODS`）
         - LiDAR Sweeps: キーフレームあたりで結合するLiDAR点群のsweep数
         - Min LiDAR Points to use LiDAR: インスタンスごとLiDAR点群をインスタンス点群として使用するための点数の下限しきい値（これを下回ったインスタンスはDepth点群のみ使用する）
-        - Max LiDAR Points to use Depth: Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれを上回ったインスタンスはLiDAR点群のみ使用する）
+        - Max LiDAR Points to use Depth: Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点群数がこれ以上のインスタンスはLiDAR点群のみ使用する。0で無効）
+        - Min Correspondences for Pointwise Correction: Depth点群の最終補正で、点ごとの対応から補正係数を求めるのに必要な対応点の数
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
-            - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
-            - radius: radiusパラメータ（注目する点を中心とした球の半径）
+            - nb_points: nb_pointsパラメータ
+            - Radius: radiusパラメータ
         - DBSCAN: ノイズ除去の2段階目の処理であるDBSCANに使用するパラメータ
-            - eps: epsパラメータ（近傍とみなす半径）
-            - min_samples: min_samplesパラメータ（コア点とみなすために半径eps内に存在しなければならない最小のデータ点数）
+            - eps: epsパラメータ
+            - min_samples: min_samplesパラメータ
+        - L-shape Filter
+            - Azimuth Bin [deg]: 手前輪郭を作る方位ビンの幅
+            - Near Quantile [%]: 各ビンで輪郭点とする距離の分位点
+            - Margin [m]: 除去閾値（LiDARは固定値）
     - Inter-cam Mergeタブ: 複数カメラ間での同一インスタンス結合に使用するパラメータ
-        - Enable Merge: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス
-        - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン。以下の選択肢を持つ
-            - BEV convex-hull: XY平面での凸包の重なりがしきい値以上＆重心距離がしきい値以下なら同一判定。同一判定されたフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。以下のパラメータを使用
-                - Overlap Threshold: XY平面での凸包の重なりのしきい値
-                - Max Hull Gap: インスタンス凸包間距離のしきい値。凸包間の最短距離がこれ以上離れた組は、凸包を作る前に捨てる
-                - Min Match Frames: 同一判定されたフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する
+        - カメラ間の結合を行う: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス（オフにすると以下のウィジェットが無効化され、（カメラ, track_id）ごとにglobal_track_idを割り当てる）
+        - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン（`settings.MERGE_METHODS`）。以下の選択肢を持つ
+            - BEV convex-hull: XY平面での凸包の隙間がMax Hull Gap以下かつ重なり率（IoS）がOverlap Threshold以上なら、そのキーフレームで同一判定。同一判定されたキーフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。以下のパラメータを使用
+                - Overlap Threshold: XY平面での凸包の重なり率（IoS）のしきい値
+                - Max Hull Gap [m]: インスタンス凸包間の隙間のしきい値。凸包間の隙間がこれより離れた組は、重なりを計算する前に捨てる
                 - Max Same-Camera Gap: 同一カメラのトラック同士は、このキーフレーム数を超えて離れている場合は結合されない（同一キーフレームを含む場合も結合されない）
-        - Label Match: 上記同一インスタンス結合判定にラベルまたはカテゴリグループの一致も考慮するかを指定するSelectbox。以下の選択肢を持つ
-            - Label: ラベルが一致する場合のみマッチング対象とする
-            - Category Group: カテゴリグループが一致する場合のみマッチング対象とする
-            - None: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
-    - Box Fittingタブ: 3Dバウンディングボックスのインスタンスごと点群へのフィッティングに使用するパラメータ
-        - Min Points to fit Box: Box Fittingを行うためのglobal_track点数の下限しきい値（これを下回ったglobal_trackは3Dバウンディングボックスを推定しない）
-        - Method: 3Dバウンディングボックスのフィッティングに使用するアルゴリズム。以下の選択肢をもつ
-            - convex_hull_moa: [こちらの論文](https://arxiv.org/abs/2302.01034)の手法。以下のパラメータを指定可能
-                - angle_step_deg: 最もフィットするyaw角度を探索するステップ
-                - z_percentile: 高さの下限と上限として採用するパーセンタイル
-- 推論container: Detection2D・Instance Tracking画面と同様（「Run Inference」ボタンを押すと推論実行リクエストがInferenceサーバーに送信され、定期的にポーリングして得られた進捗が表示される）
-- param_col中央上部の枠付きcontainerに推論を実施する「Run Inference」ボタンを設置。ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストがInferenceサーバーに送信され、定期的に`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される
-- ポーリングで推論完了を検知（完了を2回検知して2回保存するのを防ぐため保存済み`params_id`をsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`depth_estimation_params`、`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルに保存する
-    - 推論が完了したら、即時に自動保存
-    - 保存は上書きではなくレコード追加として行う。保存時に同じ(dataset_id, scene_token)の`depth_estimation_params`レコードが`settings.DEPTH_MAX_RUNS_PER_SCENE`件以上あれば、最も古いレコードを削除する（CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される）
-    - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `depth_estimation_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部のexpanderにラジオボタン付きで`status`（推論が成功したかどうか）と共にレコード一覧をリスト表示する。リストの下には「このrunを表示」と「削除」ボタンを設置し、押すと以下のように動作する
-    - 「このrunを表示」ボタン: 押すと後述のview_colで表示される点群や3Dバウンディングボックス等の情報をラジオボタン選択したレコードのものに切り替える
-    - 「削除」ボタン: 押すと選択した`depth_estimation_params`テーブルのレコードと、CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルのレコードも削除される
-- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置し、全てのSampleを選択できるようにする
-- map_colにはDetection2Dページ・Instance Trakcingページと同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
-- 画面下部は、Depth Estimation, Pointcloud, Box Fitting, Box on Camの4つのタブで分割した上で、view_col, opt_colで左右に分割する。view_colは各種推論結果をカメラ・LiDAR点群等のセンサデータと重ねて描画し、opt_colに配置した表示条件を指定するためのウィジェットに基づき表示を変化させる。各タブの詳細は以下
-    - Depth Estimationタブ: 各カメラの単眼深度推定結果をヒートマップとして表示する。opt_colには以下ウィジェットを持つ
+                - Min Match Frames: 同一判定されたキーフレーム数がこのしきい値以上なら同一インスタンスと判定して結合する
+        - Label Match: 上記同一インスタンス結合判定にラベルまたはカテゴリグループの一致も考慮するかを指定するラジオボタン（横並び）。以下の選択肢を持つ
+            - label: ラベルが一致する場合のみマッチング対象とする
+            - category_group: カテゴリグループが一致する場合のみマッチング対象とする
+            - none: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
+    - Box Fittingタブ: 3Dバウンディングボックスのフィッティングに使用するパラメータ。フィッティング手法・底面推定方式・寸法補正方式はラベルごとにconfig（`settings.BOXFIT_METHODS`、`settings.BOX_BOTTOM_ESTIMATIONS`、`settings.BOX_HEIGHT_CORRECTIONS`等）で指定し、現在の割り当てをキャプションで表示する
+        - Common
+            - Min Points to fit Box: Box Fittingを行うための点数の下限しきい値（カメラ間結合後、global_track単位・キーフレームごとに判定し、これを下回ったキーフレームは3Dバウンディングボックスを推定しない）
+        - convex_hull_moa（[こちらの論文](https://arxiv.org/abs/2302.01034)の手法）
+            - Angle Step [deg]: 最もフィットするyaw角度を探索するステップ
+        - Bottom Estimation
+            - z_percentile: 底面の高さとして採用する点群のz座標のパーセンタイル（percentile方式・ground方式の切り替え先）
+            - Ground Estimation Radius [m]: ground方式で使う地面点の、ボックス外形からのXY距離の上限
+            - Min Ground Points: ground方式に必要な地面点の数（これ以下ならpercentile方式に切り替える）
+            - Ground Height Method: ground方式で地面点から底面高さを求める方法（"percentile" / "least_squares"）
+            - Ground Percentile [%]: Ground Height Method=percentileのときの地面点のz座標の分位点（least_squaresのときは無効化）
+        - Top Estimation
+            - z_percentile: 上面の高さとして採用する点群のz座標のパーセンタイル
+        - Min Frames for Size Correction: percentile方式の寸法補正に必要なフレーム数
+        - Height Estimation / Width Estimation / Length Estimation
+            - Height Percentile [%] / Width Percentile [%] / Length Percentile [%]: percentile方式の寸法補正で、global_trackの全フレームのボックス寸法から取る分位点
+- param_col中央上部の枠付きcontainerに、現在のパラメータの要約と「Run Inference」「Cancel」ボタン・進捗表示を設置（動作はDetection2D・Instance Tracking画面と同様）
+    - 「Run Inference」ボタン: 他のステップと異なり、**推論を投げる前に`depth_estimation_params`のレコード（status='running'）を作成してrunのidを確定させる**（深度マップとLiDAR点群は推論サーバーが`DERIVED_ROOT`配下のrunごとのディレクトリへ直接書くため、書き込み先のディレクトリ名になるidを先に決める必要がある）。そのうえで上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストを推論サーバーに送信し、1秒ごとに`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される（部分結果はdepth / lidar / boxの種別ごとに積む）
+- ポーリングで推論終了を検知（終了を2回検知して2回保存するのを防ぐため保存済みjob_idをsession_stateに持っておく）したら、以下の要件を満たすよう結果を作成済みのrunに書き込む
+    - 推論が終了したら、即時に自動保存（失敗・キャンセルしたrunも`status`付きで残す）
+    - `depth_estimations`、`lidar_pointclouds`、`box_fittings`テーブルにレコードを追加し、runの`status`・推論時間・カメラ間結合の診断情報（`merge_diagnostics`）を更新する。深度マップ・LiDAR点群の実体は`.npz`として`DERIVED_ROOT`に置き、DBにはパスのみ保持する
+    - runが成功した場合、フィッティングしたボックスを`sample_annotations`テーブル（global座標）へ書き込む（`source='auto'`。global_track_idごと（結合しないrunでは（カメラ, track_id）ごと）に`instances`テーブルのレコードを1つ作り、prev/nextチェーンも張る。`depth_estimation_params_id`で生成元のrunを辿れる）。生成したアノテーション数はtoastで通知する
+    - 保存後、同じ(dataset_id, scene_token)のrunが`settings.DEPTH_MAX_RUNS_PER_SCENE`件を超えていれば、新しい順に上限件数を残し、それより古いrunを削除する（CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`、`sample_annotations`テーブルのレコードと、`DERIVED_ROOT`配下の派生ファイルも削除される）
+- `depth_estimation_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部の「保存済みの推論結果（N 件）」エクスパンダーに、ラジオボタン付きでレコード一覧をリスト表示する。各行には表示中のrunを示す「★」、開始時刻、`status`、フィッティング成功数 / 全インスタンス数、生成したアノテーション数、Use LiDAR、run ID（`tools/check_depth_boxfitting.py`の`--run`に渡すため）を表示する。リストの下には「この run を表示」と「削除」ボタンを設置し、押すと以下のように動作する
+    - 「この run を表示」ボタン: 押すと後述のview_colで表示される点群や3Dバウンディングボックス等の情報をラジオボタン選択したレコードのものに切り替える
+    - 「削除」ボタン: 押すと選択した`depth_estimation_params`テーブルのレコードと、CASCADEで紐づく`depth_estimations`、`lidar_pointclouds`、`box_fittings`、`sample_annotations`テーブルのレコード、および`DERIVED_ROOT`配下の派生ファイルも削除される。選択中のrunが3Dアノテーションを生成している場合は、「削除すると一緒に消えます」という警告をボタンの上に表示する
+- view_colに表示するrunは、推論実施前は最新の成功したrunとし、推論実施後は保存した推論結果のrunとする（「この run を表示」で切り替え可能）。表示するrunが無い場合、各タブには「保存済みの推論結果がありません。」と表示する
+- param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置し、全てのSampleを選択できるようにする（初期値は中央）
+- map_colにはDetection2Dページ・Instance Trackingページと同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
+- 画面下部は、Depth Estimation, PointCloud, Box Fitting, Box on Camの4つのタブで分割した上で、view_col（8）, opt_col（1）で左右に分割する。view_colは各種推論結果をカメラ・LiDAR点群等のセンサデータと重ねて描画し、opt_colに配置した表示条件を指定するためのウィジェットに基づき表示を変化させる。点群・ボックスはパイプラインと同じく、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で表示する。各タブの詳細は以下
+    - Depth Estimationタブ: 各カメラの単眼深度推定結果をヒートマップとして2列で表示する。opt_colには以下ウィジェットを持つ
         - Show masksラジオボタン: 深度画像に重ねて表示するインスタンスマスクの表示方法を指定する。以下の選択肢を持つ（デフォルトはNone）
             - None: インスタンスマスク表示なし
-            - Original: クロージング処理適用前のマスクを表示
-            - Closed: クロージング処理適用後のマスクを表示
-        - Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - Original: クロージング処理適用前のマスク（Instance Trackingの結果）を表示
+            - Closed: クロージング処理適用後のマスク（Box Fittingの保存値）を表示
+        - Mask Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
-        - Instance textラジオボタン: インスタンスマスクの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
+        - Instance textラジオボタン: インスタンスマスクの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはNone）
             - None: 何も表示しない
             - Label: ラベル文字を表示（文字色はマスクの色と一致）
             - Track ID: Track IDを表示（文字色はマスクの色と一致）
-    - PountCloudタブ: 単眼深度推定およびLiDARから作成したインスタンスごと点群を3D散布図で表示する。opt_colには以下ウィジェットを持つ
-        - Raw LiDARチェックボックス: チェックすると生のLiDAR点群（全点表示だと重すぎるのでボクセル間引き済。PatchWork++で地面判定された部分は表示しない）を薄い灰色で表示
-        - LiDAR Groundチェックボックス: チェックするとLiDAR点群のうちPatchWork++で地面判定された部分（全点表示だと重すぎるのでボクセル間引き済）を茶色で表示
-        - Raw LiDARチェックボックス: チェックすると生のDepth点群（全点表示だと重すぎるのでボクセル間引き済）を薄い水色で表示
-        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Pointsラジオボタンで指定したノイズ除去を適用し、Instance Colorで指定した色で表示）
-        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Pointsラジオボタンで指定したノイズ除去を適用し、Instance Colorで指定した色で表示）
-        - Instance Pointsラジオボタン: 表示するインスタンスごと点群（LiDAR Instances/Depth Instancesチェックボックスで表示）にROR/DBSCANによるノイズ除去を適用するかを指定。以下の選択肢を持つ（デフォルト状態では選択無効で、推論サーバーでの推論実行時の処理結果をそのまま適用し、後述のFilter Paramsエクスパンダーで再フィルタを実行した後のみこのラジオボタンを選択できる）
-            - Raw: ノイズ除去適用前のインスタンスごと点群を表示
-            - ROR/DBSCAN: ノイズ除去適用後のインスタンスごと点群を表示
-        - Fitted Boxesチェックボックス: チェックするとBox Fittingでフィッティングされた3Dバウンディングボックスを重ねて表示
-        - Instance Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+        - 凡例のリスト表示: Show masksがNone以外のとき、Mask Colorに応じてラベル別またはTrack ID別のチェックボックス付き凡例を表示し、チェックしているもののみを表示する
+    - PointCloudタブ: 単眼深度推定およびLiDARから作成したインスタンスごと点群を3D散布図で表示する。opt_colには以下ウィジェットを持つ
+        - Raw LiDARチェックボックス: チェックすると生のLiDAR点群（全点表示だと重すぎるのでボクセル間引き済。Patchwork++で地面判定された部分は表示しない）を薄い灰色で表示（デフォルト`settings.SHOW_RAW_LIDAR`）
+        - LiDAR Groundチェックボックス: チェックするとLiDAR点群のうちPatchwork++で地面判定された部分（全点表示だと重すぎるのでボクセル間引き済）を茶色で表示（デフォルト`settings.SHOW_RAW_LIDAR_GROUND`。Raw LiDARがオフなら無効）
+        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Pointsラジオボタンで指定した段階の点群を、Instance Colorで指定した色で表示）。Use LiDAR=Falseのrunでは無効（デフォルトはrunがUse LiDARならオン。runを切り替えると既定値に戻るよう、ウィジェットのkeyにrun IDを含める）
+        - Raw Depthチェックボックス: チェックすると生のDepth点群（全点表示だと重すぎるのでボクセル間引き済）を薄い水色で表示（デフォルト`settings.SHOW_RAW_DEPTH_POINTCLOUD`）
+        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Pointsラジオボタンで指定した段階の点群を、Instance Colorで指定した色で表示。デフォルトはオン）
+        - Instance Pointsラジオボタン: 表示するインスタンスごと点群（LiDAR Instances/Depth Instancesチェックボックスで表示）の処理段階を指定。以下の選択肢を持つ（デフォルトはDistance Filter）。DBに保存されているのは最終段階（Distance Filter後＝フィッティングに使った点群）のみで、それ以外を選ぶと保存済みの深度マップとクロージング後マスクから推論時と同じパラメータで再計算して表示する（後述のFilter ParamsでApplyした後はその値で再計算する）
+            - Raw: ノイズ除去適用前のインスタンスごと点群
+            - ROR/DBSCAN: ROR/DBSCAN適用後のインスタンスごと点群
+            - L-shape Filter: さらにL-shape Filterを適用した点群（対象外のラベルはROR/DBSCANと同じ）
+            - Distance Filter: さらにDistance Filterを適用した点群（対象外のラベルはL-shape Filterと同じ）
+        - Depth Instanceラジオボタン: Depth点群を補正前（raw）と、LiDARを基準に補正した後（LiDAR corrected）のどちらで表示するか（デフォルトはraw）。補正できなかったインスタンスは補正前で表示し、LiDAR corrected選択時はDepth点群を使わなかった（LiDARのみで当てはめた）インスタンスのDepth点群は表示しない
+        - L-shape Filterチェックボックス: L-shape Filterの途中経過を重ねて表示する（赤い×／＋が手前輪郭の点（Depth／LiDAR）、半透明の面が検出したL字。面の色はInstance Colorの指定に従う）。可視化情報の無い古いrunのインスタンスがあれば件数を表示する
+        - Fitted Boxesチェックボックス: チェックするとBox Fittingでフィッティングされた3Dバウンディングボックスを重ねて表示（色はInstance Colorの指定に従う）
+        - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
-            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
-        - カメラごとの表示指定チェックボックス: チェックされているカメラに紐づくインスタンスごと点群のみを表示する
-    - Box Fittingタブ: 3Dバウンディングボックスのフィッティング結果をBEV視点で表示する。現状は[こちらの論文](https://arxiv.org/abs/2302.01034)の手法（Method="convex_hull_moa"）を前提とした表示にしている
-        - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
+            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（global_track_id。結合していないrunではtrack_id）で色分け
+        - Camerasチェックボックス: カメラごとに設置し、チェックされているカメラに紐づくインスタンスごと点群のみを表示する
+    - Box Fittingタブ: 3Dバウンディングボックスのフィッティング結果をBEV視点で表示する。現状は[こちらの論文](https://arxiv.org/abs/2302.01034)の手法（convex_hull_moa）を前提とした表示にしている。view_colには、インスタンス数・ボックス生成数（・GT数）のキャプションと、カメラ間結合の診断情報（後述のMerge Diagnostics）も表示する
+        - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: インスタンスごと点群とフィッティングした3Dバウンディングボックスを表示するキャンバスのみを設置
-            - チェックしている場合: 左右にキャンバスを並べ、左側のキャンバスにはGround truthのバウンディングボックスを、右側のキャンバスにはインスタンスごと点群とフィッティングしたバウンディングボックスを重ねて表示
-        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Colorで指定した色で表示）
-        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Colorで指定した色で表示）
-        - Convex-Hullチェックボックス: チェックすると当てはめに使った凸包を重ねて表示
-        - Instance Colorラジオボタン: インスタンスマスクの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+            - チェックしている場合: 左右にキャンバスを並べ、左側のキャンバスにはGround truthのバウンディングボックス（基準ego座標に変換し、ラベル色で表示）を、右側のキャンバスにはインスタンスごと点群とフィッティングしたバウンディングボックスを重ねて表示（左右で同じ表示範囲に揃える）
+        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Colorで指定した色で表示）。Use LiDAR=Falseのrunでは無効（デフォルトはオフ）
+        - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Colorで指定した色で表示。デフォルトはオン）。Depth点群を使わなかったインスタンスのDepth点群は表示しない
+        - Convex-Hullチェックボックス: チェックすると当てはめに使った凸包を重ねて表示（デフォルトはオフ）
+        - Depth Instanceラジオボタン: Depth点群を補正前（raw）と補正後（LiDAR corrected）のどちらで表示するか（デフォルトはLiDAR corrected。当てはめに使っているのが補正後の点群なので、rawだとボックスと点群がずれて見えるため）
+        - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
             - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
-    - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。
-        - Compare with GT チェックボックス: チェックの有無に応じて以下のように表示を変える
+        - Merge Diagnosticsエクスパンダー: runに`merge_diagnostics`がある場合に表示し、以下をテーブル表示する（閾値を緩めても結合されない場合に、原因を確認するため）
+            - 結合の条件（推論時のInter-cam Mergeパラメータ）
+            - グループ: global_track_idごとのメンバー（カメラ:track_id）、ラベル、フレーム数
+            - 点数不足で当てはめなかったグループ: 結合後の点数がMin Points to fit Boxに届かなかったglobal_track_idと、スキップしたフレーム数 / 全フレーム数、最小・中央値の点数
+            - トラック対の判定: トラック対ごとの最大重なり率、最小の凸包の隙間、status（accepted / rejected / gated）、却下理由
+    - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。view_colには推定ボックス数（・GT数）のキャプションも表示する
+        - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる
-            - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthのバウンディングボックスを、右側の画像にはフィッティングしたバウンディングボックスを重ねて表示
+            - チェックしている場合: 2列6行で行ごとに各カメラ画像を2個ずつ表示し、左側の画像にはGround truthの3Dバウンディングボックス（カメラごとのego_poseで変換）を、右側の画像にはフィッティングしたバウンディングボックスを重ねて表示
         - Instance Colorラジオボタン: 3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
             - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
-        - Instance textラジオボタン: 画像上でインスタンスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
+        - Instance textラジオボタン: 画像上でボックスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
             - None: 何も表示しない
-            - Label: ラベル文字を表示（文字色はマスクの色と一致）
-            - Track ID: Track IDを表示（文字色はマスクの色と一致）
+            - Label: ラベル文字を表示（文字色はボックスの色と一致）
+            - Track ID: Track IDを表示（文字色はボックスの色と一致）
+            - Global Track: global_track_idを表示
+        - チェックボックス付きlabel凡例: config（`settings.LABEL_TO_CATEGORY_GROUP`等）の全ラベルを件数付きで表示し、チェックしているlabelのボックスのみを表示する（検出結果に含まれるラベルだけを出すと、推論のたびに並びとチェック状態が変わるため）
 - PointCloudタブを選択しているとき、view_colには点群表示用のキャンバス以外にも、上から順番に以下のウィジェットを表示する（点群表示用のキャンバスが一番下）
-    - ビュー指定ボタン: クリックすると点群が規定の視点方向で再表示される。以下の3種類の視点を選択できる
-        - Global Viewボタン: 押すと、グローバル座標に対して固定された方向の視点（config.pyの`DEFAULT_GLOBAL_POINTCLOUD_EYE`と`DEFAULT_GLOBAL_POINTCLOUD_UP`で指定）となる
+    - ビュー指定ボタン: クリックすると点群が規定の視点方向で再表示される（同じボタンを押し直したときも視点を戻せる）。以下の3種類の視点を選択できる（デフォルトはGlobal View）
+        - Global Viewボタン: 押すと、グローバル座標に対して固定された方向の視点（config.pyの`DEFAULT_GLOBAL_POINTCLOUD_EYE`と`DEFAULT_GLOBAL_POINTCLOUD_UP`で指定。基準ego_poseの回転を打ち消して適用するため、車両が回っても向きが変わらない）となる
         - Top Viewボタン: 押すと真上から見た視点にする（X軸=前方が右、Y軸=左方が上となるように表示される）
         - Forward Viewボタン: 押すと真後ろから見た視点にする（Y軸=左方が左、Z軸=上方が上になるように表示される）
-    - Filter Paramsエクスパンダー: ROR/DBSCANによる点群のノイズ除去を再実行してパラメータ調整するための以下ウィジェットを設置
-        - 上の行: インスタンスごとLiDAR点群に適用する以下のROR/DBSCANパラメータを指定
+    - Filter Paramsエクスパンダー: 推論パイプライン全体を回し直さず、保存済みの深度マップ・LiDAR点群とクロージング後マスクから、選択中のsample（表示中のカメラ）のインスタンスごと点群を作り直して、ノイズ除去・L-shape Filter・Distance Filterのパラメータを調整するための以下ウィジェットを設置（初期値は表示中のrunの推論時の値。runを切り替えると初期値も切り替わる）
+        - LiDAR: インスタンスごとLiDAR点群に適用する以下のROR/DBSCANパラメータを指定
             - ROR nb_points
-            - ROR radius
+            - ROR Radius
             - DBSCAN eps
             - DBSCAN min_samples
-        - 真ん中の行: インスタンスごとDepth点群に適用する以下のROR/DBSCANパラメータを指定
+        - Depth: インスタンスごとDepth点群に適用する以下のROR/DBSCANパラメータを指定
             - ROR nb_points
-            - ROR radius
+            - ROR Radius
             - DBSCAN eps
             - DBSCAN min_samples
+        - L-shape Filter: 以下のパラメータを指定
+            - Enable L-shape Filter
+            - Support Band [m] / Violation Weight
+            - Depth: Azimuth Bin [deg] / Near Quantile [%] / Margin Min [m] / Margin Ratio
+            - LiDAR: Azimuth Bin [deg] / Near Quantile [%] / Margin [m]
+        - Distance Filter（方式は表示中のrunの値を表示）: Distance Quantile [%] / Distance Margin [m] / Distance DBSCAN eps [m] / Distance DBSCAN min_samples
         - 下の行: 以下のボタンを設置
-            - Applyボタン: 上で指定したパラメータに基づきROR/DBSCANによる外れ値除去を再実行してキャンバスに表示する
-            - Resetボタン: 推論サーバーでの推論実行時の点群表示に戻す
+            - Applyボタン: 上で指定したパラメータで点群を作り直してキャンバスに表示する（スライダの無いパラメータ（Small Mask nb_points / min_samples Ratio、Min LiDAR Points to use LiDAR、Max LiDAR Points to use Depth、L-shape Filterの対象ラベル・内部定数等）は推論時の値を引き継ぐ）。Apply後は、インスタンス数・残存点数と「この結果は保存されません（runの記録は実行時のまま）」というキャプションと、推論時との除去点数の比較を表示する。Global Trackの色分けは推論時のカメラ間結合の結果のまま（再フィルタでは結合をやり直さない）
+            - Resetボタン: 推論サーバーでの推論実行時の点群表示に戻す（Apply後のみ有効）
+
+### 5_Export.py
+- 自動生成した3Dアノテーション（またはGT）を、nuScenes devkitが読めるJSONテーブル群として出力する画面。実装は`app/services/nuscenes_export_service.py`（テーブルの組み立て）と`app/repositories/nuscenes_export.py`（対象行の取り出し）
+- データセット選択（DATASET_ID）がセッションに保存されていない場合、`require_dataset()`でメッセージとmain.pyへのリンクのみ表示する（シーン選択は必須ではない）
+- 画面上部はparam_col（2）, info_col（1）で左右に分割
+- param_colに以下の出力条件を指定するウィジェットを設置
+    - 対象シーンラジオボタン（横並び）: 以下の選択肢を持つ（デフォルトは「選択したシーンのみ」）
+        - 選択したシーンのみ: 下にシーンのmultiselect（シーン名とsample数を表示）を表示し、選んだシーンのみを出力する。初期値はセッションで選択中のシーン（無ければ先頭のシーン）
+        - データセット全体: データセット内の全シーンを出力する
+    - アノテーションラジオボタン: 出力する`sample_annotations`の生成元（`source`列）を指定する。以下の選択肢を持つ（デフォルトは「自動生成のみ」）。手修正（`source='manual'`）はいずれの選択肢にも含まれない
+        - 自動生成のみ（source=auto）: Depth Boxfittingで生成したアノテーションのみ
+        - GT のみ（source=imported）: インポートしたGTのアノテーションのみ
+        - 両方: 自動生成とGTの両方
+    - Box Fitting run で絞るSelectbox: アノテーションが「自動生成のみ」または「両方」のときのみ表示。対象シーンの先頭（multiselectで最初に選んだシーン、データセット全体のときはデータセットの先頭シーン）の`status='succeeded'`の`depth_estimation_params`のrun（開始時刻とアノテーション数を表示）から選び、そのrunが生成した自動アノテーションのみを出力する。デフォルトは「すべての run」（絞らない）。成功したrunが無く「自動生成のみ」のときは、「先に Depth Estimation & Box Fitting を実行してください。」という警告を表示する
+    - バージョン名テキスト入力: 出力ディレクトリ名（nuScenesのversionに相当）。デフォルトは"v1.0-auto"
+- info_colに、出力されるもの（devkitが読むJSONテーブル13種類。画像・LiDARファイルは含まない）と使い方（解凍したフォルダを元データセットのdatarootに置き、`NuScenes(version=..., dataroot=...)`で読み込む）の説明を表示する
+- 画面中央に「エクスポート」ボタンを設置（シーンが無ければ無効）。押すと以下の処理を行い、結果をsession_stateに保持する（ダウンロードボタンの再描画で消えないように）
+    - 以下の13テーブルを組み立てる: category, attribute, visibility, instance, sensor, calibrated_sensor, ego_pose, log, scene, sample, sample_data, sample_annotation, map
+        - 参照を閉じる: シーンを絞って出すので、sample_data → ego_pose → calibrated_sensor → sensorと辿って必要な行だけを集める（1つでも欠けるとdevkitのトークン解決が落ちる）
+        - チェーンの張り直し: アノテーションを生成元やrunで絞ると、instanceのfirst/last/nbrやsample_annotationのprev/nextが出力に無い行を指しうるため、出力対象だけで組み直す。アノテーションが1つも残らないinstanceは出力しない
+        - トークンの正規化: 自動生成したUUIDのハイフンを除き、nuScenesのトークンの書式（32桁の英数字）に揃える（参照側も同じ変換を通す）
+        - 可視性が未設定の自動アノテーションには`v80-100`のvisibilityを入れる（学習時に除外されないよう「見えている」側に倒す）。attributeは推定していないので空配列とする
+        - mapは取り込んでいないが、devkitが読み込むテーブルなので空配列で出す
+    - `DERIVED_ROOT/export/<UTC時刻（YYYYMMDD_HHMMSS）>/<バージョン名>/*.json`に書き出し（出力サイズ優先で改行・インデント無し）、同じ階層に`<バージョン名>.zip`を作成する
+    - 対象のシーンが無い等の場合はエラーメッセージを表示する
+- エクスポート後は以下を表示する
+    - 「<バージョン名> を書き出しました」というメッセージ
+    - 主要テーブル（sample_annotation, instance, sample, sample_data）の件数をmetricで表示し、全テーブルの件数は「テーブルごとの件数」エクスパンダーにテーブル表示
+    - 「ダウンロード（N MB）」ボタン: zipファイル（`<バージョン名>.zip`）をダウンロードする
+    - サーバー上の出力先パス
+    - 「この出力を削除」ボタン: サーバー上の出力（`DERIVED_ROOT/export/<UTC時刻>`）を削除し、表示もクリアする
