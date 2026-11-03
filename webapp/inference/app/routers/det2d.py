@@ -90,6 +90,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
             boxes,
             threshold=req.ios_delete_threshold,
             direction_by_label=req.ios_delete_direction,
+            multi_big_vertical_coverage=req.ios_multi_big_vertical_coverage,
         )
         result.boxes = [BBox2D(**b) for b in boxes]
 

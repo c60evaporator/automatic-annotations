@@ -172,6 +172,7 @@ class Settings(BaseSettings):
                 "truck": "truck",
                 "building": None},
         "motorcycle": {"motorcycle": "motorcycle",
+                       "a photo of a car at night": "car",
                        "human legs": None,
                        "mural": None},
         "bicycle": {"bicycle": "bicycle",
@@ -219,19 +220,24 @@ class Settings(BaseSettings):
     #   "small" … 小さい方を削除（物体の一部を拾った検出を落とす。車両向け）
     #   "big"   … 大きい方を削除（複数の物体をまとめて囲った検出を落とす。
     #             並ぶことが多い barrier / traffic_cone / 歩行者向け）
+    #   "multi_big" … 子（内包される小さいボックス）が 2 個以上あり、子の上端から下端
+    #             までが親の高さの DET2D_IOS_MULTI_BIG_VERTICAL_COVERAGE 倍を超えるときだけ、
+    #             親を削除する。子は削除しない（複数台のまとめ検出は落としたいが、
+    #             手前の車の背後に見える車は別物体として残したい car 向け）
     # ここに無いラベルは判定しない
     DET2D_IOS_DELETE_DIRECTION: dict[str, str] = {
-        "car": "small",
+        "car": "multi_big",
         "truck": "small",
         "construction_vehicle": "small",
         "bus": "small",
         "trailer": "small",
-        "barrier": "big",
+        "barrier": "multi_big",
         "traffic_cone": "big",
         "motorcycle": "big",
         "bicycle": "big",
         "pedestrian": "big",
     }
+    DET2D_IOS_MULTI_BIG_VERTICAL_COVERAGE: float = 0.8
 
     # 切り出し時にボックスを広げる比率。
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る

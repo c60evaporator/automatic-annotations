@@ -75,8 +75,10 @@ class Detection2DRequest(BaseModel):
     whole_image_resize_ratio: float = 0.5
     # 内包関係の重複検出を落とす IoS の閾値。0 なら判定しない
     ios_delete_threshold: float = 0.0
-    # {ラベル: "small" | "big"}。ここに無いラベルは判定しない
+    # {ラベル: "small" | "big" | "multi_big"}。ここに無いラベルは判定しない
     ios_delete_direction: dict[str, str] = Field(default_factory=dict)
+    # multi_big で親を削除するのに必要な、子が親の高さを占める割合の下限
+    ios_multi_big_vertical_coverage: float = 0.8
 
     # スタブ用: 1推論あたりの待ち時間（秒）。本実装では無視される
     stub_delay_sec: float | None = None
@@ -95,7 +97,7 @@ class BBox2D(BaseModel):
     detection_label: str | None = None
     # SigLIP2 が返した候補ラベル（デバッグ・確認用）
     reclassified_as: str | None = None
-    # 何によって削除されたか（reclassification / ios_small / ios_big）
+    # 何によって削除されたか（reclassification / ios_small / ios_big / ios_multi_big）
     deleted_by: str | None = None
     # 再判定で「使わない」と判定されたか（論理削除）
     is_deleted: bool = False

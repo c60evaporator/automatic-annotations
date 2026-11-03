@@ -21,14 +21,20 @@ Detection2Dは、以下のフローで行われます
     - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
 - 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
     - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
-    - 閾値を超えた場合、面積が小さい方or大きい方のボックスを削除する（大小どちらを削除するかは後述の`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに決める）
+    - 閾値を超えた場合、ラベルごとに指定した`settings.DET2D_IOS_DELETE_DIRECTION`辞書（keyがラベル名、valueが削除条件）に基づき、以下のように削除するボックスを決める
+        - `settings.DET2D_IOS_DELETE_DIRECTION="small"`のとき: 面積が小さい方のボックス（子）を削除する
+        - `settings.DET2D_IOS_DELETE_DIRECTION="big"`のとき: 面積が大きい方のボックス（親）を削除する
+        - `settings.DET2D_IOS_DELETE_DIRECTION="multi_big"`のとき: 以下の条件をすべて満たす場合のみ親のボックスを削除する
+            - IoSが閾値以上の子が2個以上ある
+            - 「親のボックスの下端と、子のボックスの最も下の下端のうち上にある方」から「親のボックスの上端と、子のボックスの最も上の上端のうち下にある方」までの高さが、親ボックスの高さに`settings.DET2D_IOS_MULTI_BIG_VERTICAL_COVERAGE`を掛けたものより大きい
+            - 子のボックスは削除しない（条件を満たさない場合は親も子も残す）
 - そのカメラ・フレームのボックス検出数が0の場合、画像全体をリサイズ（Whole-Image Resize Ratioで割合指定）してSigLIP2で推論を実施（Whole-Image再判定）。`settings.WHOLE_IMAGE_CANDIDATES`から推論のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す）。推論のスコアがWhole-Image Score Threshold以下または割り当てられたラベル（辞書のvalue）がNoneなら結果を使用せず削除し、どちらでもない場合は割り当てられたラベルの全画面のボックスを追加する
 
-`settings.DET2D_IOS_DELETE_DIRECTION`は以下のようにラベルをkeyとし、"small"ならIoSが閾値を超えたら小さい方のボックスを削除し、"big"なら大きい方のボックスを削除するようにします
+`settings.DET2D_IOS_DELETE_DIRECTION`は以下のようにラベルをkeyとします
 
 ```python
 DET2D_IOS_DELETE_DIRECTION: dict[str, str] = {
-        "car": "small",
+        "car": "multi_big",
         "truck": "small",
         "construction_vehicle": "small",
         "bus": "small",
@@ -55,7 +61,7 @@ UI（Detection2Dページの画面上部の「Inference Parameters」エクス�
 |Score Threshold|Detection2D|float|検出したバウンディングボックスのscore閾値にかける倍率。実際に適用する閾値は、カテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる（1.0で頭打ち）|1.0|0.0〜2.0|
 |NMS Threshold|Detection2D|float|検出したバウンディングボックスでNMSを実施する際に、IoUの閾値にかける倍率。実際に適用する閾値は、同ラベル間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別ラベル間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる（いずれも1.0で頭打ち）|1.0|0.0〜2.0|
 |Re-Classification Crop Margin|Re-Classification|float|SigLIP2の再判定用切り出し画像をGroudingDINOのバウンディングボックスから拡張する割合（ボックスの幅・高さに対する比）|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`（0.1）|0.0〜`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|
-|IoS Delete Threshold|Duplicate Suppression|float|ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される。0で無効|`settings.DET2D_IOS_DELETE_THRESHOLD`（0.8）|0.0〜`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|
+|IoS Delete Threshold|Duplicate Suppression|float|ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士について、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した方法でボックスを削除する。0で無効|`settings.DET2D_IOS_DELETE_THRESHOLD`（0.8）|0.0〜`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|
 |Whole-Image Score Threshold|Whole-Image Fallback|float|Whole-Image再判定時のSigLIP2スコアの閾値。この閾値未満の結果は採用しない（論理削除として残るので、表示オプションのShow deletedで確認できる）|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`（0.04）|0.0〜`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|
 |Whole-Image Resize Ratio|Whole-Image Fallback|float|Whole-Image再判定時の画像リサイズ率|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`（0.5）|0.1〜`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|
 
@@ -83,7 +89,8 @@ UI（Detection2Dページの画面上部の「Inference Parameters」エクス�
 |`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|float|Whole-Image Resize Ratioパラメータの最大値|1.0|原理上の最大値|
 |`settings.DET2D_IOS_DELETE_THRESHOLD`|float|IoS Delete Thresholdパラメータのデフォルト値|0.8|実データで誤結合とダブルカウントのバランスを取るよう調整|
 |`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|float|IoS Delete Thresholdパラメータの最大値|1.0|原理上の最大値|
-|`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除|[config.py参照](../webapp/app/core/config.py)|同じ物体で複数box検出されやすいラベル（車両系）は"small"で小さい方を削除し、複数物体がまとめて検出されやすいラベル（barrier,traffic_cone等の小物体系）は"big"で大きい方を削除|
+|`settings.DET2D_IOS_DELETE_DIRECTION`|dict[str, str]|ボックス同士を総当たりでIoSで結合判定する際の、ラベルごとに大小どちらのボックスを削除するかを指定する辞書。keyがラベル名を表し、valueが"small"なら小さい方の、"big"なら大きい方のボックスを削除し、"multi_big"なら前述の条件を満たす場合のみ大きい方のボックスを削除|[config.py参照](../webapp/app/core/config.py)|同じ物体で複数box検出されやすいラベル（car以外の車両系）は"small"で小さい方を削除し、複数物体がまとめて検出されやすいラベル（barrier,traffic_cone等の小物体系）は"big"で大きい方を削除。carは複数台のまとめ検出と、手前の車の背後に見える車の両方が頻発するので"multi_big"|
+|`settings.DET2D_IOS_MULTI_BIG_VERTICAL_COVERAGE`|float|`settings.DET2D_IOS_DELETE_DIRECTION="multi_big"`で親のボックスを削除するのに必要な、子のボックスの上端から下端までの範囲が親のボックスの高さに占める割合の下限|0.8|実データ数シーンで、まとめ検出と「手前の車の背後に複数の車が並ぶケース」が分かれるよう設定（要調整）。車の上端は地平線付近に揃うため、この割合はおおよそ「親までの距離 ÷ 最も手前の子までの距離」となり、遠方の車ほど誤削除しやすい|
 |`settings.DET2D_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
 |`settings.DET2D_MODEL_NAME`|str|runの記録に残すモデル名|"IDEA-Research/grounding-dino-base"|HuggingFaceのモデルIDを指定。推論サーバー側の`settings.GROUNDINGDINO_MODEL`と合わせる必要がある|
 |`settings.DET2D_MANUAL_REPLACE_IOU`|float|再実行時、このIoU以上で重なる手修正ボックスがあれば、推論ボックスを手修正ボックスで置き換える（手修正ボックスは推論サーバーへは送らない）|0.5|手修正を再推論で失わないようにするため|

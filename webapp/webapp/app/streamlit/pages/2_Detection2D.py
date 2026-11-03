@@ -216,8 +216,10 @@ with param_col:
             )
             small = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "small"]
             big = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "big"]
+            multi_big = [l for l, d in settings.DET2D_IOS_DELETE_DIRECTION.items() if d == "multi_big"]
             st.caption(
                 f"小さい方を削除: {', '.join(small)} / 大きい方を削除: {', '.join(big)}"
+                f" / 複数を内包する大きい方のみ削除: {', '.join(multi_big)}"
                 "（config の DET2D_IOS_DELETE_DIRECTION で指定）"
             )
 
@@ -310,6 +312,7 @@ def _build_payload() -> dict:
         "whole_image_resize_ratio": float(whole_image_resize),
         "ios_delete_threshold": float(ios_threshold),
         "ios_delete_direction": dict(settings.DET2D_IOS_DELETE_DIRECTION),
+        "ios_multi_big_vertical_coverage": settings.DET2D_IOS_MULTI_BIG_VERTICAL_COVERAGE,
         "stub_delay_sec": settings.DET2D_STUB_DELAY_SEC,
     }
 

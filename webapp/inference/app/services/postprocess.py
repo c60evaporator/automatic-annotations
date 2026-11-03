@@ -78,6 +78,9 @@ def same_class_nms(
 
 DELETE_SMALL = "small"
 DELETE_BIG = "big"
+DELETE_MULTI_BIG = "multi_big"
+# multi_big で親を削除するのに必要な、内包する子の数
+MULTI_BIG_MIN_CHILDREN = 2
 
 
 def box_ios(a: dict[str, Any], b: dict[str, Any]) -> float:
@@ -109,13 +112,16 @@ def suppress_contained_boxes(
     *,
     threshold: float,
     direction_by_label: dict[str, str],
+    multi_big_vertical_coverage: float = 0.8,
 ) -> int:
     """同じラベルで内包関係にあるボックスの片方へ削除印を付ける.
 
     Args:
-        direction_by_label: ``{ラベル: "small" | "big"}``。
+        direction_by_label: ``{ラベル: "small" | "big" | "multi_big"}``。
             ここに無いラベルは判定しない
         threshold: IoS の下限
+        multi_big_vertical_coverage: multi_big で親を削除するのに必要な、
+            子が親の高さを占める割合の下限（_is_group_box 参照）
 
     Returns:
         削除印を付けた数。``boxes`` は **その場で書き換える**。
@@ -153,6 +159,14 @@ def suppress_contained_boxes(
     for label, indices in by_label.items():
         direction = direction_by_label[label]
         areas = {i: box_area(boxes[i]) for i in indices}
+        if direction == DELETE_MULTI_BIG:
+            for i in indices:
+                if _is_group_box(boxes, i, indices, areas, threshold,
+                                 multi_big_vertical_coverage):
+                    boxes[i]["is_deleted"] = True
+                    boxes[i]["deleted_by"] = f"ios_{direction}"
+                    marked += 1
+            continue
         for position, i in enumerate(indices):
             for j in indices[position + 1:]:
                 if box_ios(boxes[i], boxes[j]) < threshold:
@@ -167,3 +181,41 @@ def suppress_contained_boxes(
                     boxes[target]["deleted_by"] = f"ios_{direction}"
                     marked += 1
     return marked
+
+
+def _is_group_box(
+    boxes: Sequence[dict[str, Any]],
+    parent: int,
+    indices: Sequence[int],
+    areas: dict[int, float],
+    threshold: float,
+    vertical_coverage: float,
+) -> bool:
+    """親のボックスが、複数の物体をまとめて囲った検出かどうか.
+
+    子（親より小さく IoS が閾値以上のボックス）が 2 個以上あり、子の上端から
+    下端までの範囲（親の範囲に切り詰める）が親の高さの vertical_coverage 倍を
+    超えるときに True を返す。
+
+    ## なぜ縦方向で見るのか
+
+    親の下端は、親の中で最も手前にある物体の接地位置で決まる。まとめ検出では
+    最も手前の物体も子として検出されるので、子の下端が親の下端まで届く。
+    手前の車の背後に別の車が並ぶ場合は、親の下端は手前の車自身のタイヤで決まり、
+    奥の車の下端はそこまで届かない。横方向は後者でも子が親の幅全体に広がるので
+    判別に使えない。
+    """
+    # 面積が同じときも決まるように index を第 2 キーにする
+    children = [
+        boxes[j] for j in indices
+        if (areas[j], j) < (areas[parent], parent)
+        and box_ios(boxes[parent], boxes[j]) >= threshold
+    ]
+    if len(children) < MULTI_BIG_MIN_CHILDREN:
+        return False
+
+    top = float(boxes[parent]["ymin"])
+    bottom = float(boxes[parent]["ymax"])
+    covered_top = max(top, min(float(c["ymin"]) for c in children))
+    covered_bottom = min(bottom, max(float(c["ymax"]) for c in children))
+    return covered_bottom - covered_top > (bottom - top) * vertical_coverage

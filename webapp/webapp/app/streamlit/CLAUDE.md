@@ -51,7 +51,7 @@
     - Re-Classificationタブ
         - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合。下に再判定の対象ラベル（`settings.RE_CLASSIFICATION_CANDIDATES`のkey）を表示
     - Duplicate Suppressionタブ
-        - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した大小どちらかのボックスのみが保持される。下に「小さい方を削除」「大きい方を削除」のラベル一覧を表示
+        - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した方法でボックスが削除される。下に「小さい方を削除」「大きい方を削除」「複数を内包する大きい方のみ削除」のラベル一覧を表示
     - Whole-Image Fallbackタブ: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定（検出0件フレームの救済推論）関係。下に採用候補・除外候補（`settings.WHOLE_IMAGE_CANDIDATES`のvalueがNoneでないもの・Noneのもの）を表示
         - Whole-Image Score Threshold: Whole-Image再判定時のSigLIP2スコアの閾値。この閾値未満の結果は採用しない（論理削除として残る）
         - Whole-Image Resize Ratio: Whole-Image再判定時の画像リサイズ率
