@@ -103,7 +103,7 @@ samples = list_samples(dataset_id, scene_token)
 cam_sensors = order_cameras(list_sensors(dataset_id, modality="camera"))
 settings = get_settings()
 
-st.subheader("Depth Estimation & Box Fitting by Depth-Anything-3")
+st.subheader("Depth Estimation & Box Fitting")
 
 JOB_ID = S.BOXFIT_JOB_ID
 PENDING_RUN = S.BOXFIT_PENDING_RUN_ID
@@ -583,6 +583,33 @@ with param_col:
                 )
 
         with depth_tab:
+            st.markdown("**Depth Estimation Model**")
+            depth_model = st.selectbox(
+                "Weights", settings.DEPTH_ESTIMATION_MODELS,
+                index=settings.DEPTH_ESTIMATION_MODELS.index(
+                    settings.DEFAULT_DEPTH_ESTIMATION_MODEL
+                ),
+                key="_w_depth_model",
+            )
+            depth_pose_conditioned = depth_model in settings.POSE_CONDITIONED_DEPTH_MODELS
+            if depth_pose_conditioned:
+                depth_window_size = st.slider(
+                    "Window Size", 1, settings.DEPTH_WINDOW_SIZE_MAX,
+                    value=settings.DEPTH_WINDOW_SIZE_DEFAULT, step=1,
+                    key="_w_depth_window_size",
+                    help="カメラごとに 1 回の推論へまとめる連続フレーム数",
+                )
+                depth_window_stride = st.slider(
+                    "Window Stride", 1, settings.DEPTH_WINDOW_STRIDE_MAX,
+                    value=settings.DEPTH_WINDOW_STRIDE_DEFAULT, step=1,
+                    key="_w_depth_window_stride",
+                    help="次のウィンドウへずらすフレーム数（Window Size 以下で有効）",
+                )
+                if depth_window_stride > depth_window_size:
+                    st.caption(
+                        f"Window Stride は Window Size を超えられないため、"
+                        f"{depth_window_size} として実行します"
+                    )
             st.markdown("**ROR**")
             depth_ror_nb = st.slider(
                 "nb_points", 1, settings.DEPTH_ROR_NB_POINTS_MAX,
@@ -1005,6 +1032,11 @@ box_fitting_params = {
     },
 }
 depth_params = {
+    # Pose-conditioned モデルのときだけ送る
+    **({
+        "window_size": int(depth_window_size),
+        "stride": min(int(depth_window_stride), int(depth_window_size)),
+    } if depth_pose_conditioned else {}),
     "ror_nb_points": int(depth_ror_nb), "ror_radius": float(depth_ror_radius),
     "dbscan_eps": float(depth_dbscan_eps), "dbscan_min_samples": int(depth_dbscan_min),
     # 小物体の ROR nb_points / DBSCAN min_samples にかける倍率（深度のみ）
@@ -1072,6 +1104,7 @@ def _save_completed_job(job: dict) -> None:
 with param_col:
     with st.container(border=True):
         st.caption(
+            f"model={depth_model} / "
             f"tracking={next(r['nbr_instances'] for r in tracking_runs if r['id']==selected_tracking_id)} inst / "
             f"use_lidar={use_lidar} / sweeps={num_lidar_sweeps} / "
             f"closing={mask_dilation}-{mask_erosion}"
@@ -1090,6 +1123,7 @@ with param_col:
                         params_id = create_pending_run(
                             dataset_id, scene_token,
                             tracking_run_id=selected_tracking_id,
+                            model_name=depth_model,
                             use_lidar=bool(use_lidar),
                             num_lidar_sweeps=int(num_lidar_sweeps),
                             mask_params=mask_params, depth_params=depth_params,
@@ -1107,6 +1141,7 @@ with param_col:
                             lidar_params=lidar_params,
                             box_fitting_params=box_fitting_params,
                             merge_params=merge_params,
+                            depth_model=depth_model,
                             stub_delay_sec=settings.BOXFIT_STUB_DELAY_SEC,
                         )
                         job = submit_boxfitting(payload)
@@ -1181,7 +1216,7 @@ with param_col:
                 mark = "★ " if run["id"] == current else ""
                 return (f"{mark}{run['started_at'].strftime('%m-%d %H:%M:%S')}  "
                         f"[{run['status']}]  {run['nbr_fitted']}/{run['nbr_box_fittings']} fitted  "
-                        f"ann {run['nbr_annotations']}  lidar={run['use_lidar']}"
+                        f"ann {run['nbr_annotations']}  lidar={run['use_lidar']}  {run['model_name']}"
                         # tools/check_depth_boxfitting.py の --run に渡す ID
                         f"  run={run['id']}")
 

@@ -9,7 +9,7 @@ NuScenes datasetをDBに読み込み、推論サーバーでAIモデルによる
 - 推論サーバー: 以下3種類の推論をパイプライン的に実施。FastAPIでトリガーと結果を返すREST APIを提供
   1. Detection2D: Grounding DINOを用いて、与えたラベルの2D bounding boxを検出し、SigLIP2でラベルを再判定
   2. Instance-Tracking: 1で検出したbounding boxesをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得
-  3. Depth Estimation & Box Fitting: Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionし、カメラ間の同一インスタンスを結合したうえで3D bounding boxを割り当て
+  3. Depth Estimation & Box Fitting: Depth-Anything-3またはMapAnythingでカメラ画像から推論した点群とLiDAR点群をミックスして、2で検出したマスク範囲にprojectionし、カメラ間の同一インスタンスを結合したうえで3D bounding boxを割り当て
 - 結果はnuScenes形式（JSONテーブル群）でエクスポートできる
 - 各推論のアルゴリズム詳細は`inference/CLAUDE.md`、各ページのUI仕様は`webapp/app/streamlit/CLAUDE.md`参照
 - 以下サービスをDockerコンテナで構成
@@ -146,10 +146,12 @@ project-root/
             │   ├── siglip2_classifier.py    # SigLIP2 zero-shot 分類（ラベル再判定）
             │   ├── sam2_tracker.py, sam2_video.py, sam2_masks.py           # SAM2 Video（Transformers 版）
             │   ├── da3_depth.py             # Depth-Anything-3（公式リポジトリ版）
+            │   ├── map_anything_depth.py    # MapAnything（公式リポジトリ版）
             │   └── boxfitting_pipeline.py   # Depth Estimation & Box Fitting の本体
             └── services/                    # 推論の前後処理（モデル非依存）
                 ├── postprocess.py, reclassify.py, whole_image.py, crop.py  # Detection2D: IoS結合・再判定・全画面救済
                 ├── tracking_match.py, fb_matching.py                       # Instance Tracking: track_id 引き継ぎ
+                ├── sliding_window.py        # Pose-conditioned 深度推定のウィンドウ分割
                 ├── depth_ops.py, depth_correction.py, lidar_ops.py         # 深度→点群、LiDAR 基準の深度補正、LiDAR 読込・地面除去
                 ├── distance_filter.py, lshape_filter.py, refilter.py       # 点群ノイズ除去・保存済み深度からの再フィルタ
                 ├── inter_cam_merge.py       # カメラ間の同一インスタンス結合（global_track_id）

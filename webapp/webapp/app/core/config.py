@@ -291,8 +291,23 @@ class Settings(BaseSettings):
     TRACKING_STUB_DELAY_SEC: float | None = 0.05
 
     # --- Depth Estimation & Box Fitting ------------------------------------
-    # run の記録に残すモデル名（HuggingFace のモデル ID。推論サーバー側の DEPTH_ANYTHING_MODEL と合わせる）
-    DEPTH_MODEL_NAME: str = "depth-anything/DA3METRIC-LARGE"
+    # 深度推定モデルの候補（HuggingFace のモデル ID）と既定値
+    DEPTH_ESTIMATION_MODELS: list[str] = [
+        "depth-anything/da3metric-large",
+        "depth-anything/da3nested-giant-large",
+        "facebook/map-anything-apache",
+    ]
+    DEFAULT_DEPTH_ESTIMATION_MODEL: str = "facebook/map-anything-apache"
+    # カメラ姿勢を与えて複数フレームをまとめて推論するモデル
+    POSE_CONDITIONED_DEPTH_MODELS: list[str] = [
+        "depth-anything/da3nested-giant-large",
+        "facebook/map-anything-apache",
+    ]
+    # Pose-conditioned 推論のウィンドウ（1 回にまとめるフレーム数と、ずらす幅）
+    DEPTH_WINDOW_SIZE_DEFAULT: int = 9
+    DEPTH_WINDOW_SIZE_MAX: int = 40
+    DEPTH_WINDOW_STRIDE_DEFAULT: int = 5
+    DEPTH_WINDOW_STRIDE_MAX: int = 40
     # 深度マップの保存倍率。1/2 にすると容量は 1/4（1 run 約 565MB → 141MB）
     DEPTH_MAP_DOWNSCALE: float = 0.5
     # 保持する run 数。派生ファイルが 1 run 約 280MB あるため少なめにする

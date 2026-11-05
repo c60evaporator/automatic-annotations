@@ -49,6 +49,12 @@ class BoxFittingStub:
     def to(self, device: str):
         return self
 
+    # スタブはモデルを持たず、常にフレーム単位で処理する
+    pose_conditioned = False
+
+    def set_depth_model(self, model_id: str) -> None:
+        pass
+
     # ── 1. 深度推定 ───────────────────────────────────────────────────────
 
     def estimate_depth(

@@ -6,8 +6,8 @@ compose がホストの ~/.cache/huggingface を HF_HOME にマウントして�
 
 推論は models/depth_anything3/src/inference.py と同じ関数構成にしてある:
   - predict_metric_depth: 姿勢なしの推論（メトリック深度・内部パラメータ・空マスク）
+  - predict_pose_conditioned_depth: 内部パラメータと姿勢を与えた複数フレーム推論
   - get_metric_depth: 推論結果をメトリック深度と深度解像度の内部パラメータへ変換
-姿勢付き推論（predict_pose_conditioned_depth）は後で同じ形で追加する。
 
 torch / depth_anything_3 への import はこのモジュール内に閉じてあり、
 モデルの初回ロード時にだけ読み込まれる。
@@ -131,21 +131,56 @@ def predict_metric_depth(
     return metric_depths, scaled_intrinsics, non_sky_masks
 
 
-class DepthAnything3Estimator:
-    """DA3 による単眼深度推定."""
+def predict_pose_conditioned_depth(
+    model: Any,
+    model_name: str,
+    images: list[Image.Image],
+    camera_intrinsics: list[Any],
+    camera_poses: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """DA3 で内部パラメータと姿勢を与えた複数フレーム深度推定を行う.
 
-    def __init__(self, model_name: str = "DA3METRIC-LARGE", device: str = "cuda") -> None:
+    Args:
+        camera_intrinsics: 元画像の内部パラメータ（各 3x3）
+        camera_poses: world→camera の外部パラメータ（各 4x4、OpenCV 座標系）
+
+    Returns:
+        predict_metric_depth と同じ
+    """
+    from depth_anything_3.utils.alignment import compute_sky_mask
+
+    prediction = model.inference(
+        images,
+        extrinsics=np.stack(camera_poses, axis=0).astype(np.float32),
+        intrinsics=np.stack(camera_intrinsics, axis=0).astype(np.float32),
+    )
+    metric_depths, scaled_intrinsics = get_metric_depth(prediction, model_name=model_name)
+    non_sky_masks = None
+    if getattr(prediction, "sky", None) is not None:
+        non_sky_masks = np.asarray(compute_sky_mask(prediction.sky), dtype=bool)
+    return metric_depths, scaled_intrinsics, non_sky_masks
+
+
+class DepthAnything3Estimator:
+    """DA3 による深度推定.
+
+    DA3NESTED 系は姿勢付きの複数フレーム推論（estimate_window）、
+    DA3METRIC-LARGE は単眼推論（estimate）で使う。
+    """
+
+    def __init__(self, model_id: str = "depth-anything/da3metric-large", device: str = "cuda") -> None:
         # 重い import はここで行う。モジュールのトップに置くと
         # サーバー起動時に torch が読み込まれ、1 つでも壊れていると
         # サーバー自体が起動しなくなる
         from depth_anything_3.api import DepthAnything3
 
-        self.model_name = model_name
+        self.model_id = model_id
+        self.model_name = model_id.split("/")[-1]
+        # 内部パラメータを自前で返すモデルは、姿勢を与えて複数フレームで推論する
+        self.pose_conditioned = self.model_name.upper() in METRIC_NATIVE_MODELS
         self.device = device
-        logger.info("loading Depth-Anything-3: %s", model_name)
-        self.model = DepthAnything3.from_pretrained(
-            f"depth-anything/{model_name}"
-        ).to(device=device)
+        logger.info("loading Depth-Anything-3: %s", model_id)
+        self.model = DepthAnything3.from_pretrained(model_id).to(device=device)
         logger.info("Depth-Anything-3 ready on %s", device)
 
     def to(self, device: str):
@@ -163,16 +198,22 @@ class DepthAnything3Estimator:
             {"metric_depth", "scaled_intrinsic", "non_sky_mask"}
             non_sky_mask はモデルが空を返さない場合 None。
         """
-        # DA3NESTED 系は内部パラメータを自前で返すので渡さない
-        native = self.model_name.upper() in METRIC_NATIVE_MODELS
         depths, intrinsics, non_sky_masks = predict_metric_depth(
-            self.model,
-            self.model_name,
-            [image],
-            camera_intrinsics=None if native else [camera_intrinsic],
+            self.model, self.model_name, [image], camera_intrinsics=[camera_intrinsic],
         )
         return {
             "metric_depth": np.asarray(depths[0], dtype=np.float32),
             "scaled_intrinsic": np.asarray(intrinsics[0], dtype=np.float64),
             "non_sky_mask": None if non_sky_masks is None else non_sky_masks[0],
         }
+
+    def estimate_window(
+        self,
+        images: list[Image.Image],
+        camera_intrinsics: list[Any],
+        camera_poses: list[np.ndarray],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+        """1 ウィンドウの深度を推定する（戻り値は predict_pose_conditioned_depth と同じ）."""
+        return predict_pose_conditioned_depth(
+            self.model, self.model_name, images, camera_intrinsics, camera_poses
+        )

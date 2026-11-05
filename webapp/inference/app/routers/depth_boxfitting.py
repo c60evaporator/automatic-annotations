@@ -5,8 +5,7 @@ Detection2D / Instance Tracking と同じジョブ方式に揃えてある。
 ## 処理の流れ
 
   1. 深度推定    カメラを外側、sample を内側にループ
-                 （将来 Pose-Conditioned な複数フレーム推定へ広げるため、
-                  同一カメラの連続フレームが並ぶ順序にしておく）
+                 （姿勢付きモデルは同一カメラの連続フレームをウィンドウで推定）
   2. LiDAR 統合  sample ごと。use_lidar に関係なく常に実行する
                  （UI が比較用に生 LiDAR と地面を表示できるようにする）
   3. Box Fitting インスタンスごと
@@ -35,6 +34,7 @@ from app.schemas.depth_boxfitting import (
     RefilterRequest,
     RefilterResponse,
 )
+from app.services.sliding_window import create_sliding_windows
 
 logger = get_logger(__name__)
 
@@ -76,12 +76,59 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
     with model_registry.use_gpu("depth_anything") as pipeline:
         # --- 1. 深度推定（カメラ外側）-----------------------------------
+        pipeline.set_depth_model(req.depth_model or settings.DEFAULT_DEPTH_MODEL)
+
         by_channel: dict[str, list[Any]] = defaultdict(list)
         for frame in req.camera_frames:
             by_channel[frame.channel].append(frame)
 
+        def add_depth_results(results: list[dict[str, Any]], channel: str) -> None:
+            nonlocal done
+            for result in results:
+                depth_results.append(result)
+                job.append_partial({"kind": "depth", "data": result})
+                done += 1
+                job.set_progress(done, message=f"深度推定 {channel}")
+
+        def depth_error_result(frame: Any, exc: Exception) -> dict[str, Any]:
+            # 失敗したフレームだけ error を持たせ、全体は止めない
+            logger.warning("depth estimation failed for %s: %s", frame.filename, exc)
+            return {
+                "sample_data_token": frame.sample_data_token,
+                "depth_path": "", "depth_width": 0, "depth_height": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
         for channel, frames in by_channel.items():
-            for frame in sorted(frames, key=lambda f: f.timestamp):
+            frames = sorted(frames, key=lambda f: f.timestamp)
+
+            # 姿勢付きモデル: 同一カメラの連続フレームをウィンドウでまとめて推定
+            if pipeline.pose_conditioned:
+                window_ranges, used_ranges = create_sliding_windows(
+                    len(frames),
+                    int(depth_params["window_size"]),
+                    int(depth_params["stride"]),
+                )
+                for (start, end), used_range in zip(window_ranges, used_ranges, strict=True):
+                    if job.cancel_requested():
+                        break
+                    window_frames = frames[start:end]
+                    try:
+                        results = pipeline.estimate_depth_window(
+                            [frame.model_dump() for frame in window_frames],
+                            output_dir, used_range,
+                            dataroot=dataroot, downscale=req.depth_downscale,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        results = [
+                            depth_error_result(frame, exc)
+                            for frame in window_frames[used_range[0]:used_range[1]]
+                        ]
+                    add_depth_results(results, channel)
+                continue
+
+            # 単眼モデル: フレームごとに推定
+            for frame in frames:
                 if job.cancel_requested():
                     break
                 try:
@@ -92,18 +139,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                         stub_delay_sec=req.stub_delay_sec,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    # 1 フレームの失敗で全体を止めない
-                    logger.warning("depth estimation failed for %s: %s",
-                                   frame.filename, exc)
-                    result = {
-                        "sample_data_token": frame.sample_data_token,
-                        "depth_path": "", "depth_width": 0, "depth_height": 0,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                depth_results.append(result)
-                job.append_partial({"kind": "depth", "data": result})
-                done += 1
-                job.set_progress(done, message=f"深度推定 {channel}")
+                    result = depth_error_result(frame, exc)
+                add_depth_results([result], channel)
 
         # --- 2. LiDAR の統合と地面除去 ----------------------------------
         # sweep は sample ごとにまとめ、時刻順（末尾がキーフレーム）にする

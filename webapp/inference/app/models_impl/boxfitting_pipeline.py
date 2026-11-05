@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from app.core import models as model_registry
 from app.core.logging import get_logger
 from app.services.box_fitting import fit_box, method_for_label
 from app.services.depth_ops import (
@@ -41,7 +42,7 @@ from app.services.depth_ops import (
 )
 from common.mask_rle import decode_rle, encode_rle
 from common.point_ops import downsample_to_max, points_to_json
-from common.transform3d import camera_to_ego, ego_to_ego
+from common.transform3d import camera_to_ego, ego_to_ego, invert_transform, make_transform
 
 logger = get_logger(__name__)
 
@@ -56,18 +57,39 @@ DEFAULT_MIN_POINTS_FOR_BOX = 10
 
 
 class BoxFittingPipeline:
-    """DA3 による深度推定と、インスタンスごとの点群生成."""
+    """深度推定（Depth-Anything-3 / MapAnything）と、インスタンスごとの点群生成."""
 
-    def __init__(self, model_name: str, device: str = "cuda") -> None:
-        from app.models_impl.da3_depth import DepthAnything3Estimator
-
-        self.estimator = DepthAnything3Estimator(model_name, device=device)
+    def __init__(self, device: str = "cuda") -> None:
+        self.estimator: Any = None
         self.device = device
 
     def to(self, device: str):
-        self.estimator.to(device)
+        if self.estimator is not None:
+            self.estimator.to(device)
         self.device = device
         return self
+
+    def set_depth_model(self, model_id: str) -> None:
+        """深度推定モデルを用意する. 別のモデルが載っていれば解放してから載せる."""
+        if self.estimator is not None:
+            if self.estimator.model_id == model_id:
+                return
+            estimator, self.estimator = self.estimator, None
+            model_registry.release(estimator)
+
+        if model_id.startswith("facebook/map-anything"):
+            from app.models_impl.map_anything_depth import MapAnythingEstimator
+            self.estimator = MapAnythingEstimator(model_id, device=self.device)
+        elif model_id.startswith("depth-anything/"):
+            from app.models_impl.da3_depth import DepthAnything3Estimator
+            self.estimator = DepthAnything3Estimator(model_id, device=self.device)
+        else:
+            raise ValueError(f"未対応の深度推定モデルです: {model_id}")
+
+    @property
+    def pose_conditioned(self) -> bool:
+        """姿勢付きの複数フレーム推論を使うモデルか."""
+        return bool(self.estimator.pose_conditioned)
 
     # ── 1. 深度推定 ───────────────────────────────────────────────────────
 
@@ -97,10 +119,71 @@ class BoxFittingPipeline:
             image = img.convert("RGB")
 
         result = self.estimator.estimate(image, calib.get("camera_intrinsic"))
-        depth = result["metric_depth"]
-        intrinsic = result["scaled_intrinsic"]
-        non_sky = result["non_sky_mask"]
+        return self._save_depth(
+            frame, output_dir, result["metric_depth"], result["scaled_intrinsic"],
+            result["non_sky_mask"], downscale,
+        )
 
+    def estimate_depth_window(
+        self,
+        frames: list[dict[str, Any]],
+        output_dir: Path,
+        used_range: tuple[int, int],
+        *,
+        dataroot: Path | str = "",
+        downscale: float = 1.0,
+    ) -> list[dict[str, Any]]:
+        """同一カメラの連続フレームをまとめて姿勢付きで推定する.
+
+        Args:
+            frames: ウィンドウ内のフレーム（時刻順）
+            used_range: 結果を保存するフレームの範囲（ウィンドウ内の相対 index）
+
+        Returns:
+            used_range のフレームの結果（estimate_depth と同じ形式）
+        """
+        images = []
+        for frame in frames:
+            with Image.open(Path(dataroot) / frame["filename"]) as img:
+                images.append(img.convert("RGB"))
+        camera_intrinsics = [
+            (frame.get("calibrated_sensor") or {}).get("camera_intrinsic") for frame in frames
+        ]
+        # world→camera の外部パラメータ
+        camera_poses = [
+            invert_transform(
+                make_transform(frame["ego_pose"]["rotation"], frame["ego_pose"]["translation"])
+                @ make_transform(
+                    frame["calibrated_sensor"]["rotation"],
+                    frame["calibrated_sensor"]["translation"],
+                )
+            )
+            for frame in frames
+        ]
+        depths, intrinsics, masks = self.estimator.estimate_window(
+            images, camera_intrinsics, camera_poses
+        )
+        return [
+            self._save_depth(
+                frames[index], output_dir,
+                np.asarray(depths[index], dtype=np.float32),
+                np.asarray(intrinsics[index], dtype=np.float64),
+                None if masks is None else masks[index],
+                downscale,
+            )
+            for index in range(*used_range)
+        ]
+
+    def _save_depth(
+        self,
+        frame: dict[str, Any],
+        output_dir: Path,
+        depth: np.ndarray,
+        intrinsic: np.ndarray,
+        non_sky: np.ndarray | None,
+        downscale: float,
+    ) -> dict[str, Any]:
+        """1 フレームの深度を .npz に保存し、結果の dict を返す."""
         # 容量削減のための追加縮小。内部パラメータも同じ倍率で合わせる
         if 0 < downscale < 1.0:
             height = max(1, int(depth.shape[0] * downscale))

@@ -467,7 +467,7 @@ class DepthEstimationParams(Base):
         nullable=False,
         index=True,
     )
-    model_name: Mapped[str] = mapped_column(String, nullable=False)  # 'depth-anything-3-*' 等
+    model_name: Mapped[str] = mapped_column(String, nullable=False)  # 'facebook/map-anything-apache' 等
     # 処理する sample の間隔。Box Fitting は全 sample を対象にするので通常 1。
     # プロンプト間隔（4 等）は instance_tracking_2d_params 側を辿れば分かる
     sample_interval: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))

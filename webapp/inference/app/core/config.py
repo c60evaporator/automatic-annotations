@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     # 初回実行時に HuggingFace からのダウンロードが走る（数 GB）
     SIGLIP2_MODEL: str = "google/siglip2-so400m-patch16-naflex"
 
-    # --- Depth-Anything-3（公式リポジトリ版）-------------------------------
-    # 重みは HuggingFace（depth-anything/<モデル名>）から HF_HOME へ自動ダウンロードされる。
-    # DA3METRIC-LARGE / DA3NESTED-GIANT-LARGE(-1.1) に対応（da3_depth.get_metric_depth）
-    DEPTH_ANYTHING_MODEL: str = "DA3METRIC-LARGE"
+    # --- 深度推定（Depth-Anything-3 / MapAnything。公式リポジトリ版）--------
+    # 重みは HuggingFace から HF_HOME へ自動ダウンロードされる。
+    # モデルはリクエストの depth_model で選ぶ。これは未指定のときの既定値
+    DEFAULT_DEPTH_MODEL: str = "facebook/map-anything-apache"
     # これ以遠の点は点群にしない [m]。遠方は誤差が大きく、
     # 入れるとクラスタリングが引きずられる
     DEPTH_MAX_DISTANCE: float = 60.0

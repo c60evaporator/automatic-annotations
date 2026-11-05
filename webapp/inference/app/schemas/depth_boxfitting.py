@@ -3,7 +3,7 @@
 処理は 3 段階で、粒度がそれぞれ違う:
 
   1. 深度推定    … カメラ × sample（カメラを外側にループする。
-                    将来 Pose-Conditioned な複数フレーム推定へ広げるため）
+                    姿勢付きモデルは同一カメラの連続フレームをウィンドウで推定）
   2. LiDAR 統合  … sample（sweep をキーフレーム座標へ揃えて合体）
   3. Box Fitting … インスタンス
 
@@ -71,7 +71,11 @@ class BoxFittingRequest(BaseModel):
     # ここに入る LiDAR 点は自車の反射なので落とす。空なら落とさない
     ego_box: dict[str, Any] = Field(default_factory=dict)
 
-    # UI のタブに対応した設定群
+    # 深度推定モデルの HuggingFace ID。None ならサーバーの DEFAULT_DEPTH_MODEL
+    depth_model: str | None = None
+
+    # UI のタブに対応した設定群。
+    # 姿勢付きモデルでは depth_params の window_size / stride を使う
     mask_params: dict[str, Any] = Field(default_factory=dict)
     depth_params: dict[str, Any] = Field(default_factory=dict)
     lidar_params: dict[str, Any] = Field(default_factory=dict)

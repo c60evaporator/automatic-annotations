@@ -89,7 +89,7 @@ def _evict_if_needed(reserve: int = 0) -> None:
     while len(_models) + reserve > limit and _models:
         name, model = _models.popitem(last=False)
         logger.info("unloading model: %s", name)
-        _release(model)
+        release(model)
 
 
 def unload(name: str) -> bool:
@@ -97,17 +97,17 @@ def unload(name: str) -> bool:
     model = _models.pop(name, None)
     if model is None:
         return False
-    _release(model)
+    release(model)
     return True
 
 
 def unload_all() -> None:
     while _models:
         _, model = _models.popitem(last=False)
-        _release(model)
+        release(model)
 
 
-def _release(model: Any) -> None:
+def release(model: Any) -> None:
     """モデルを解放して VRAM を返す."""
     try:
         if hasattr(model, "to"):

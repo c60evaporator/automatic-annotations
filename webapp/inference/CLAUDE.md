@@ -400,18 +400,18 @@ k : F_i または B_j が存在するフレーム
 
 ## Depth Boxfitting
 
-Depth Boxfittingでは、Instance Trackingのインスタンスマスクとtrack_id、およびカメラ画像・LiDAR点群を入力として、Depth-Anything-3による深度推定と、複数カメラ間での同一インスタンス結合、および[こちらの手法](https://arxiv.org/abs/2302.01034)によるボックス位置推定を実施し、各物体の3Dバウンディングボックスとinstance_idを得ます
+Depth Boxfittingでは、Instance Trackingのインスタンスマスクとtrack_id、およびカメラ画像・LiDAR点群を入力として、Depth-Anything-3またはMapAnythingによる深度推定と、複数カメラ間での同一インスタンス結合、および[こちらの手法](https://arxiv.org/abs/2302.01034)によるボックス位置推定を実施し、各物体の3Dバウンディングボックスとinstance_idを得ます
 
 ### 推論の実施フロー
 
 Depth Boxfittingは、以下のフローで行われます
 
 - 入力とするInstance Trackingの結果を選択
-- カメラ → キーフレームのループで、以下手順でカメラ画像からDepth-Anything-3による深度推定を実施（MapAnythingは未実装）
-    - 画像を入力してDepth-Anything-3で単眼深度推定推論
-    - Mask機能により無効領域（空領域等）を保持
-    - 内部パラメータを深度画像のサイズに合わせて補正
-    - 補正後内部パラメータを用いて、深度画像をメートル単位に補正
+- カメラ → キーフレームのループで、以下手順でカメラ画像から、Depth Estimation Modelパラメータで選択したモデルにより深度推定を実施
+    - 単眼モデル（`depth-anything/da3metric-large`）のとき: 画像を1枚ずつ入力して推論し、補正した内部パラメータを用いて深度画像をメートル単位に補正
+    - Pose-conditionedモデル（`settings.POSE_CONDITIONED_DEPTH_MODELS`）のとき: カメラごとに連続するキーフレームをWindow Sizeフレームのウィンドウにまとめ、内部パラメータとカメラ姿勢（ego_pose × calibrated_sensor）を与えて推論。ウィンドウはWindow Strideずつずらし、中央寄りのフレームの結果を採用する（各フレームはちょうど1つのウィンドウで採用される。キーフレーム数がWindow Size以下なら全フレームを1ウィンドウで推論）。実装は`webapp/inference/app/services/sliding_window.py`
+    - Mask機能により無効領域（空領域等）を保持（`da3nested-giant-large`は空マスクを返さないため無効領域なし）
+    - MapAnythingは前処理で中央を切り出すため、インスタンスマスクと位置が合うよう、元画像を単純リサイズした画素格子へ深度を移す（切り出しで失われた範囲は無効領域）
     - 深度画像を`settings.DEPTH_MAP_DOWNSCALE`倍に縮小し（内部パラメータも同じ倍率で補正）、深度・内部パラメータ・無効領域マスクを`.npz`として`DERIVED_ROOT`に保存
 - キーフレームのループで、LiDARの読込を実施（Use LiDARに関わらず常に実施。UIでの比較表示に使うため）
     - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面判定を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する（Patchwork++のsensor_heightにはLiDARの実際の取り付け高さを渡す）
@@ -515,7 +515,6 @@ Depth Boxfittingは、以下のフローで行われます
             - [こちらの手法](https://arxiv.org/abs/2302.01034)で3Dバウンディングボックスの平面方向の大きさとyaw角を推定（BEVの凸包に対し、yaw角をBox FittingタブのAngle Step刻みに振り、センサーから見たオクルージョン面積が最小になる向きを選ぶ）。センサー原点には、グループ内で点数が最も多いカメラの位置を使う
             - 長辺をlength、短辺をwidthとする
             - 凸包の面積 ÷ 矩形の面積（0〜1、大きいほど良い）を`fitting_score`とする
-        - 他の手法（PartHOE等の向き推定と組み合わせるもの）は未実装
     - ラベルごとに指定した`settings.BOX_BOTTOM_ESTIMATIONS`辞書（keyがラベル名、valueが推定方法。辞書に無いラベルは"percentile"）に基づき、3Dバウンディングボックスの底面を推定する
         - `settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のとき: global_track点群のz座標のパーセンタイル（Bottom Estimationのz_percentileパラメータで指定）に基づき底面高さを決める
         - `settings.BOX_BOTTOM_ESTIMATIONS="ground"`のとき: Patchwork++で判定した地面位置に基づき底面高さを決める（Use LiDAR時のみ適用可能。Use LiDARがオフならpercentileと同じ方法）。地面推定時には全ての地面点群を使うのではなく、Box外形からのXY平面上距離がGround Estimation Radius以内の地面点群を用い、Ground Height Methodパラメータに応じて以下のようにボックス底面高さを推定する。なお地面点群の数がMin Ground Points以下なら、`settings.BOX_BOTTOM_ESTIMATIONS="percentile"`のときの方法で底面高さを決める
@@ -523,22 +522,29 @@ Depth Boxfittingは、以下のフローで行われます
             - Ground Height Method=least_squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
         - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: 基準ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
     - global_track点群のz座標の分位点（Top Estimationのz_percentileパラメータで指定）に基づき上面高さを決める（後で複数フレームを考慮して補正）
+- 同一フレーム同ラベル別カメラでボックスの重なりが大きいインスタンスを結合（基本は上で実施したInter-cam mergeと同様に）し、再度BoxFittingを実施（**未実装**）
 - global_track_idごとに以下手順でAIモデルによるボックス角度の再推定を実施（**未実装**。`settings.BOX_ORIENTATION_ESTIMATIONS`も未追加で、実装時に追加する。後述の疑似コードは実装方針を示すもの）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_2"`のとき: Orient-Anything-2で補正
+    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。（**未実装**）
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: Orient-Anything-2で補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。元の角度から±90度回転する場合、以下手順で、元の長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）し、見えている面は動かさずに反対側の面のみを動かし、見えていない面は両側面の中心を固定して反対側の面を含めた両面を対称に動かす
+            - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
+            - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
+            - 以下のように面が見えているかを判定する
+                - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
+                - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
 - 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する（寸法補正は`webapp/inference/app/services/box_size.py`）
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（**未実装**。`settings.BOX_ORIENTATION_CORRECTIONS`も未追加）
-        - `settings.BOX_ORIENTATION_CORRECTIONS="part_hoe"`のとき: PartHOEで補正
+    - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（**未実装**）
+        - `settings.BOX_ORIENTATION_CORRECTIONS="neighbour_mean"`のとき: 前後フレームとの角度差がどちらも閾値を超えたとき、前後フレームの中間角度に補正する。回転中心はボックスをBEV視点で見たときの2つの短辺のうち、自車に近い方の中心から引いた垂線に沿って、ボックスの内側に短辺の長さの半分だけ進んだ点とする。
         - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
     - 現状は向きを揃える処理が無いため、各フレームのMOAの「長辺=length、短辺=width」をそのまま集計する（後ろ姿だけのフレームでは長辺と短辺が入れ替わり、向きも90°ずれることがある）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）
+    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う。ボックス角度推定で`settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のときと同じ判定方法）
         - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
         - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
         - 以下のように面が見えているかを判定する
@@ -577,6 +583,9 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Distance Margin [m]|General（Distance Filter）|float|Distance Filter（long_side）で前側・後側の両方に取る余裕|`settings.DISTANCE_FILTER_MARGIN_DEFAULT`（0.3）|0.0〜`settings.DISTANCE_FILTER_MARGIN_MAX`|
 |Distance DBSCAN eps [m]|General（Distance Filter）|float|Distance Filter（dbscan）のBEV DBSCANのeps（Depth・LiDAR共通）|`settings.DISTANCE_FILTER_DBSCAN_EPS_DEFAULT`（0.5）|0.05〜`settings.DISTANCE_FILTER_DBSCAN_EPS_MAX`|
 |Distance DBSCAN min_samples|General（Distance Filter）|int|Distance Filter（dbscan）のBEV DBSCANのmin_samples（Depth・LiDAR共通）|`settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_DEFAULT`（3）|1〜`settings.DISTANCE_FILTER_DBSCAN_MIN_SAMPLES_MAX`|
+|Weights|Depth Estimation（Depth Estimation Model）|str|深度推定モデルのHuggingFaceモデルID|`settings.DEFAULT_DEPTH_ESTIMATION_MODEL`（"facebook/map-anything-apache"）|`settings.DEPTH_ESTIMATION_MODELS`|
+|Window Size|Depth Estimation（Depth Estimation Model）|int|Pose-conditionedモデルのとき表示。カメラごとに1回の推論へまとめる連続キーフレーム数|`settings.DEPTH_WINDOW_SIZE_DEFAULT`（9）|1〜`settings.DEPTH_WINDOW_SIZE_MAX`|
+|Window Stride|Depth Estimation（Depth Estimation Model）|int|Pose-conditionedモデルのとき表示。次のウィンドウへずらすフレーム数（Window Sizeを超える値はWindow Sizeとして実行）|`settings.DEPTH_WINDOW_STRIDE_DEFAULT`（5）|1〜`settings.DEPTH_WINDOW_STRIDE_MAX`|
 |nb_points|Depth Estimation（ROR）|int|インスタンスごとDepth点群に適用するRORのnb_pointsパラメータ（Depth ROR nb_points）|`settings.DEPTH_ROR_NB_POINTS_DEFAULT`（5）|1〜`settings.DEPTH_ROR_NB_POINTS_MAX`|
 |Radius|Depth Estimation（ROR）|float|インスタンスごとDepth点群に適用するRORのradiusパラメータ（Depth ROR radius）|`settings.DEPTH_ROR_RADIUS_DEFAULT`（0.8）|0.1〜`settings.DEPTH_ROR_RADIUS_MAX`|
 |eps|Depth Estimation（DBSCAN）|float|インスタンスごとDepth点群に適用するDBSCANのepsパラメータ（Depth DBSCAN eps）|`settings.DEPTH_DBSCAN_EPS_DEFAULT`（1.0）|0.1〜`settings.DEPTH_DBSCAN_EPS_MAX`|
@@ -649,7 +658,8 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.DEPTH_MAP_DOWNSCALE`|float|深度マップの保存解像度倍率（内部パラメータも同じ倍率で補正して保存する）。1/2にすると保存容量が1/4に削減できる|0.5|1 runあたり約565MB → 141MB|
 |`settings.DEPTH_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限。超えたら古いものから削除する|3|派生ファイルが1 runあたり約280MBあるため少なめにする|
 |`settings.BOXFIT_STORED_POINTS_MAX`|int|DBに保存するインスタンス点群の上限点数（ボクセル間引き後）。フィッティングには間引き前の点群を使う|500|-|
-|`settings.DEPTH_MODEL_NAME`|str|runの記録に残す深度推定のモデル名（HuggingFaceのモデルID。推論サーバー側の`settings.DEPTH_ANYTHING_MODEL`と合わせる必要がある）|"depth-anything/DA3METRIC-LARGE"|-|
+|`settings.DEPTH_ESTIMATION_MODELS`|list[str]|Weightsパラメータの選択肢（HuggingFaceのモデルID）|`["depth-anything/da3metric-large", "depth-anything/da3nested-giant-large", "facebook/map-anything-apache"]`|-|
+|`settings.POSE_CONDITIONED_DEPTH_MODELS`|list[str]|カメラ姿勢を与えて複数フレームをまとめて推論するモデル（Window Size / Window Strideを表示する）|`["depth-anything/da3nested-giant-large", "facebook/map-anything-apache"]`|-|
 |`settings.BOXFIT_STUB_DELAY_SEC`|float \| None|モデル使用時には使用しない（スタブでの待ち時間を指定する）|0.02|-|
 |`settings.POINTCLOUD_DISPLAY_MAX_POINTS`|int|表示のみ使用。Plotlyへ渡す総点群数の上限。これ以上の数の点群は間引かれる|50000|超えると転送量と描画が重くなる|
 |`settings.DEFAULT_GLOBAL_POINTCLOUD_EYE`|list[float]|表示のみ使用。PointCloudタブでGlobal Viewボタンを押したときの視線位置（global座標。ego_poseの回転を打ち消して適用）|[-1.0, -0.5, 1.5]|-|
@@ -665,21 +675,21 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 
 |設定名|型|内容|値|
 |---|---|---|---|
-|`settings.DEPTH_ANYTHING_MODEL`|str|Depth-Anything-3のモデル名（重みは`depth-anything/<モデル名>`からHF_HOMEへ自動ダウンロード）。DA3METRIC-LARGE / DA3NESTED-GIANT-LARGE(-1.1)に対応|"DA3METRIC-LARGE"|
+|`settings.DEFAULT_DEPTH_MODEL`|str|リクエストに`depth_model`が無いときの深度推定モデル（重みはHF_HOMEへ自動ダウンロード）|"facebook/map-anything-apache"|
 |`settings.DEPTH_MAX_DISTANCE`|float|これより遠い深度の点は点群にしない [m]（遠方は誤差が大きく、入れるとクラスタリングが引きずられるため）|60.0|
 
 ### 推論の実行単位
 
 Depth Boxfittingは、以下の段階ごとに実施する（進捗のtotalは3段階の合計）
 
-1. 深度推定: カメラを外側、キーフレームを内側にループして、カメラフレームごとに実施（対象キーフレーム数 × カメラ数C回推論が実施される）
+1. 深度推定: カメラを外側、キーフレームを内側にループして実施。単眼モデルはカメラフレームごとに推論（対象キーフレーム数 × カメラ数C回）、Pose-conditionedモデルはカメラごとにウィンドウ単位で推論
 2. LiDAR統合: キーフレームごとに実施（Use LiDARに関わらず常に実施）。LiDAR点群はキーフレームのsweepに加え、LiDAR Sweepsパラメータで指定したsweep数分だけ結合した点群を使用することに注意（キーフレームから直近LiDAR Sweepsで指定した数だけのsweepを結合）
 3. インスタンス点群作成（パス1）: カメラフレームごとに、そのフレームの全インスタンスをまとめて処理（深度マップを1フレームにつき1回だけ読むため）
 4. カメラ間結合・Box Fitting・寸法補正（パス2）: シーン全体（入力したInstance Trackingの全キーフレーム）をまとめて実施
 
 ### 推論モデルの実装
 
-深度推定のDepth-Anything-3モデルは、GitHubの公式リポジトリ版（コミットを固定してインストール）を使用するが、重みはHuggingFaceから自動ダウンロードされる（HF_HOMEにホストの~/.cache/huggingfaceフォルダがマウントされ、ホストと共有される）。モデル名は推論サーバーの`settings.DEPTH_ANYTHING_MODEL`で指定する。
+深度推定のDepth-Anything-3・MapAnythingモデルは、GitHubの公式リポジトリ版（コミットまたはタグを固定してインストール）を使用するが、重みはHuggingFaceから自動ダウンロードされる（HF_HOMEにホストの~/.cache/huggingfaceフォルダがマウントされ、ホストと共有される）。モデルはリクエストの`depth_model`（UIのWeightsパラメータ）で選択する。別のモデルが載っていれば解放してから載せる（`BoxFittingPipeline.set_depth_model`）。Pose-conditioned推論の実装は`webapp/inference/app/models_impl/da3_depth.py`と`webapp/inference/app/models_impl/map_anything_depth.py`の`predict_pose_conditioned_depth`関数を参照。
 
 Depth-Anything-3のモデルインスタンスは以下のように作成する
 
@@ -692,7 +702,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 da3_model = DepthAnything3.from_pretrained(f"depth-anything/{DA3_MODEL_NAME}").to(device=device)
 ```
 
-推論時は以下のようにカメラ・サンプルのループでDA3推論を実施して結果を保持する（predict_metric_depth関数はDA3で推論し、内部で呼ぶget_metric_depth関数で深度マップをメートル単位に修正して内部パラメータのスケールを深度マップの解像度に合わせ、空マスクも返す。詳細は`webapp/inference/app/models_impl/da3_depth.py`参照。姿勢付き推論のpredict_pose_conditioned_depth関数は今後同じ形で追加する）
+推論時は以下のようにカメラ・サンプルのループでDA3推論を実施して結果を保持する（predict_metric_depth関数はDA3で推論し、内部で呼ぶget_metric_depth関数で深度マップをメートル単位に修正して内部パラメータのスケールを深度マップの解像度に合わせ、空マスクも返す。詳細は`webapp/inference/app/models_impl/da3_depth.py`参照）
 
 ```python
 depth_est_results = {}

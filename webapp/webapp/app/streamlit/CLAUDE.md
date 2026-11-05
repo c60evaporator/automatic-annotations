@@ -8,7 +8,7 @@
 |pages/1_Scene_Selection.py|シーンを選択する（SCENE_TOKENをセッションに保持）|
 |pages/2_Detection2D.py|Grounding DINOを用いて、与えたラベルの2D bounding boxを検出し、SigLIP2でラベルを再判定|
 |pages/3_Instance_Tracking.py|2_Detection2D.pyで検出したボックスをプロンプトとして与えたSAM2を用いて、各インスタンスのマスクとtrack_idを取得|
-|pages/4_Depth_Boxfitting.py|Depth-Anything-3でカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionし、カメラ間で同一インスタンスを結合して3D bounding boxを割り当てる（成功したrunは`sample_annotations`に自動アノテーションとして書き込まれる）|
+|pages/4_Depth_Boxfitting.py|Depth-Anything-3またはMapAnythingでカメラ画像から推論した点群とLiDAR点群をミックスして、3_Instance_Tracking.pyで検出したマスク範囲にprojectionし、カメラ間で同一インスタンスを結合して3D bounding boxを割り当てる（成功したrunは`sample_annotations`に自動アノテーションとして書き込まれる）|
 |pages/5_Export.py|アノテーション結果をnuScenes形式（devkitが読めるJSONテーブル群）で出力し、zipでダウンロードする|
 
 ## 全ページ共通の仕様
@@ -153,7 +153,7 @@
     - 凡例のリスト表示: Colorで選択した色に応じて、ラベル別（「Labels」）またはTrack ID別（「Track IDs」）のチェックボックス付き凡例を件数付きでリスト表示し、チェックしているもののみを表示する（レイアウトはDetection2D画面のものを踏襲。Compare propagation中は左右両方のインスタンスから作る。ラベル別とTrack ID別でチェック状態は別管理）
 
 ### 4_Depth_Boxfitting.py
-- Depth-Anything-3を用いてカメラ画像から深度推定してDepth点群を取得し、それを各インスタンスマスクに投影して（LiDAR点群があればこれも混合して）インスタンスごとの点群を作成し、カメラ間で同一インスタンスを結合して3Dバウンディングボックスを当てはめる画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Depth Boxfitting`参照
+- Depth-Anything-3またはMapAnythingを用いてカメラ画像から深度推定してDepth点群を取得し、それを各インスタンスマスクに投影して（LiDAR点群があればこれも混合して）インスタンスごとの点群を作成し、カメラ間で同一インスタンスを結合して3Dバウンディングボックスを当てはめる画面。アルゴリズム詳細については`webapp/inference/CLAUDE.md`の`Depth Boxfitting`参照
 - 入力に使える（`status='succeeded'`の）Instance Trackingのrunが無い場合、「先に Instance Tracking を実行してください。」という警告と3_Instance_Tracking.pyへのリンクのみ表示し、以降のUIを表示しない
 - 画面上部はparam_col（2）, map_col（1）で左右に分割
 - param_col上部の「Inference Parameters」エクスパンダーに推論パラメータを選択するUIを設置し、処理の適用順に以下のタブに分ける（各パラメータのデフォルト値・範囲は`webapp/inference/CLAUDE.md`のDepth Boxfittingの「UIで指定可能なパラメータ」参照）
@@ -175,7 +175,11 @@
             - Distance Margin [m]: long_side方式で前後に取る余裕
             - Distance DBSCAN eps [m]: dbscan方式のDBSCANのeps
             - Distance DBSCAN min_samples: dbscan方式のDBSCANのmin_samples
-    - Depth Estimationタブ: 深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
+    - Depth Estimationタブ: 深度推定モデルと、深度推定で得られたDepth点群のノイズ除去に使用するパラメータ
+        - Depth Estimation Model: 深度推定モデルの選択
+            - Weights: 重みファイル名（HuggingFaceのモデルID）
+            - Window Size: カメラごとに1回の推論へまとめる連続フレーム数（Pose-conditionedモデルのときのみ表示）
+            - Window Stride: 次のウィンドウへずらすフレーム数（Pose-conditionedモデルのときのみ表示）
         - ROR: ノイズ除去の1段階目の処理であるROR（Radius Outlier Removal）に使用するパラメータ
             - nb_points: nb_pointsパラメータ（指定した半径の球内に存在しなければならない最小の点の個数）
             - Radius: radiusパラメータ（注目する点を中心とした球の半径）

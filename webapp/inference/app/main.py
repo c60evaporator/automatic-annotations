@@ -76,9 +76,8 @@ def register_model_loaders() -> None:
             return BoxFittingStub()
 
         from app.models_impl.boxfitting_pipeline import BoxFittingPipeline
-        return BoxFittingPipeline(
-            model_name=settings.DEPTH_ANYTHING_MODEL, device=settings.device
-        )
+        # 深度推定モデルはリクエストごとに選ぶ（set_depth_model）
+        return BoxFittingPipeline(device=settings.device)
 
     model_registry.register_loader("grounding_dino", load_grounding_dino)
     model_registry.register_loader("sam2", load_sam2)

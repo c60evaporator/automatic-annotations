@@ -76,7 +76,7 @@ def build_boxfitting_payload(
     lidar_params: dict[str, Any],
     box_fitting_params: dict[str, Any] | None = None,
     merge_params: dict[str, Any] | None = None,
-
+    depth_model: str | None = None,
     stub_delay_sec: float | None = None,
 ) -> dict[str, Any]:
     """推論サーバーへ送るリクエストを組み立てる.
@@ -164,6 +164,7 @@ def build_boxfitting_payload(
         "instances": instances_payload,
         "use_lidar": use_lidar,
         "num_lidar_sweeps": num_lidar_sweeps,
+        "depth_model": depth_model or settings.DEFAULT_DEPTH_ESTIMATION_MODEL,
         "mask_params": mask_params,
         "depth_params": depth_params,
         "lidar_params": lidar_params,
@@ -223,7 +224,7 @@ def create_pending_run(
         return DepthBoxFittingRepository(session).create_run(
             dataset_id, scene_token,
             instance_tracking_2d_params_id=tracking_run_id,
-            model_name=model_name or settings.DEPTH_MODEL_NAME,
+            model_name=model_name or settings.DEFAULT_DEPTH_ESTIMATION_MODEL,
             use_lidar=use_lidar,
             num_lidar_sweeps=num_lidar_sweeps,
             mask_params=mask_params,
