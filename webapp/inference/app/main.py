@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.jobs import get_job_manager, reset_job_manager
 from app.core.logging import get_logger, setup_logging
 from app.core import models as model_registry
-from app.routers import depth_boxfitting, det2d, instance_tracking
+from app.routers import box_orientation, depth_boxfitting, det2d, instance_tracking
 
 logger = get_logger(__name__)
 
@@ -82,7 +82,21 @@ def register_model_loaders() -> None:
     model_registry.register_loader("grounding_dino", load_grounding_dino)
     model_registry.register_loader("sam2", load_sam2)
     model_registry.register_loader("siglip2", load_siglip2)
+    def load_part_hoe():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.part_hoe_stub import PartHOEEstimatorStub
+            return PartHOEEstimatorStub()
+
+        from app.models_impl.part_hoe import PartHOEEstimator, ensure_checkpoint
+        # 重みは Hugging Face に無いため、無ければ CHECKPOINT_DIR へダウンロードする
+        checkpoint = ensure_checkpoint(
+            settings.CHECKPOINT_DIR / settings.PARTHOE_CHECKPOINT,
+            settings.PARTHOE_CHECKPOINT_URL,
+        )
+        return PartHOEEstimator(checkpoint, settings.PARTHOE_ROOT, settings.device)
+
     model_registry.register_loader("depth_anything", load_depth_anything)
+    model_registry.register_loader("part_hoe", load_part_hoe)
 
 
 @asynccontextmanager
@@ -114,6 +128,7 @@ app = FastAPI(
 app.include_router(det2d.router)
 app.include_router(instance_tracking.router)
 app.include_router(depth_boxfitting.router)
+app.include_router(box_orientation.router)
 
 
 @app.get("/health", tags=["system"])

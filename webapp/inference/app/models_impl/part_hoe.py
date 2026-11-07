@@ -57,6 +57,36 @@ def ensure_checkpoint(path: Path, url: str) -> Path:
     return path
 
 
+def crop_person(image: np.ndarray, bbox: list[float]) -> np.ndarray:
+    """画像から人物を切り出して、モデルの入力サイズ (H, W) にする.
+
+    公式の学習データ（coco_hoe_dataset._box2cs）と同じく、外接矩形を
+    入力のアスペクト比（3:4）まで広げ、さらに 1.25 倍の余白を取る。
+    縦長の矩形をそのまま引き伸ばすと人物が歪み、向きを取り違える。
+    はみ出した範囲は黒で埋める（公式と同じ）。
+    """
+    import cv2
+
+    xmin, ymin, xmax, ymax = (float(v) for v in bbox)
+    cx, cy = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+    w, h = max(xmax - xmin, 1.0), max(ymax - ymin, 1.0)
+    out_h, out_w = INPUT_SIZE
+    aspect = out_w / out_h
+    if w > aspect * h:
+        h = w / aspect
+    else:
+        w = h * aspect
+    scale = out_w / (w * 1.25)
+    matrix = np.array([
+        [scale, 0.0, out_w / 2.0 - scale * cx],
+        [0.0, scale, out_h / 2.0 - scale * cy],
+    ], dtype=np.float32)
+    return cv2.warpAffine(
+        image, matrix, (out_w, out_h), flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+    )
+
+
 def _load_minimal_parthoe_class(parthoe_root: Path):
     src = parthoe_root / "tensorrt" / "nn_utils.py"
     spec = importlib.util.spec_from_file_location("parthoe_nn_utils", src)

@@ -488,6 +488,22 @@ class Settings(BaseSettings):
         "traffic_cone": "convex_hull_moa",
         "barrier": "convex_hull_moa",
     }
+    # ラベルごとの AI モデルによるボックス向きの再推定方式。None は推定しない。
+    #   part_hoe: PartHOE（人物の向き推定）
+    #   orient_anything / orient_anything_fourdir: Orient-Anything-2（未実装）
+    # 推論サーバーへリクエストで渡す（ラベル体系は webapp 側の設定のため）
+    BOX_ORIENTATION_ESTIMATIONS: dict[str, str | None] = {
+        "car": None,
+        "truck": None,
+        "bus": None,
+        "trailer": None,
+        "construction_vehicle": None,
+        "bicycle": None,
+        "motorcycle": None,
+        "pedestrian": "part_hoe",
+        "traffic_cone": None,
+        "barrier": None,
+    }
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1

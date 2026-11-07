@@ -130,3 +130,21 @@ def refilter_boxfitting(payload: dict[str, Any]) -> dict[str, Any]:
     """
     return _request("POST", "/depth-boxfitting/refilter",
                     timeout=REFILTER_TIMEOUT_SEC, json=payload)
+
+
+# ── Box Orientation Estimation ───────────────────────────────────────────────
+
+def submit_orientation(payload: dict[str, Any]) -> dict[str, Any]:
+    """ボックス向き推定ジョブを登録する."""
+    return _request("POST", "/box-orientation/jobs",
+                    timeout=SUBMIT_TIMEOUT_SEC, json=payload)
+
+
+def get_orientation_job(job_id: str, since: int = 0) -> dict[str, Any]:
+    return _request("GET", f"/box-orientation/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC, params={"since": since})
+
+
+def cancel_orientation_job(job_id: str) -> dict[str, Any]:
+    return _request("DELETE", f"/box-orientation/jobs/{job_id}",
+                    timeout=POLL_TIMEOUT_SEC)

@@ -523,9 +523,9 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: 基準ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
     - global_track点群のz座標の分位点（Top Estimationのz_percentileパラメータで指定）に基づき上面高さを決める（後で複数フレームを考慮して補正）
 - 同一フレーム同ラベル別カメラでボックスの重なりが大きいインスタンスを結合（基本は上で実施したInter-cam mergeと同様に）し、再度BoxFittingを実施（**未実装**）
-- global_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施（**未実装**。`settings.BOX_ORIENTATION_ESTIMATIONS`も未追加で、実装時に追加する。後述の疑似コードは実装方針を示すもの）
+- global_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施（**推定のみ実装済み・ボックスへの反映は未実装**。現状はパイプラインに組み込まず、保存済みのrunに対して別ジョブ（`POST /box-orientation/jobs`）で推定し、結果を`fit_metrics`に保持するだけ。後述の「ボックス角度再推定」参照）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。（**未実装**）
+    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法。webappのconfigで定義し、リクエストで渡す）に基づき、以下の角度推定を実施。（part_hoeのみ推定を実装済み。orient_anything系は未実装で`unsupported`を返す）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
         - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: Orient-Anything-2で補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
         - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。ボックスの8頂点の位置は変更せず、ただ軸方向のみを修正する
@@ -648,6 +648,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.DISTANCE_FILTER_METHODS`|dict[str, str \| None]|Distance Filterのラベルごとの方式（"long_side" / "dbscan"）。辞書に無いラベル・Noneは何もしない|bicycle: "dbscan", motorcycle / pedestrian / traffic_cone: "long_side"|bicycleは壁のすぐ手前を走るケースなどで背景の塊を落とすため|
 |`settings.DEFAULT_BOX_SIZES`|dict[str, tuple[float, float, float]]|ラベルごとの想定サイズ（length, width, height）[m]。Distance Filter（long_side）の長辺と、寸法補正（default方式）に使う|[config.py参照](../webapp/app/core/config.py)（例: car (4.63, 1.97, 1.74)）|仮の値（nuScenesの各カテゴリの平均的な寸法の目安）。統計を取って差し替える予定|
 |`settings.BOXFIT_METHODS`|dict[str, str]|ラベルごとのBox Fittingの手法。辞書に無いラベルは"convex_hull_moa"|全ラベル"convex_hull_moa"|向き推定（PartHOE / Orient Anything等）を足すときに、ラベルごとに手法を切り替える差し込み口として辞書にしている|
+|`settings.BOX_ORIENTATION_ESTIMATIONS`|dict[str, str \| None]|ラベルごとのAIモデルによるボックス向き推定の方式（"part_hoe" / "orient_anything" / "orient_anything_fourdir" / None）。向き推定ジョブのリクエストの`methods`で推論サーバーへ渡す|pedestrianのみ"part_hoe"、他はNone|現状は推定結果を保持するだけでボックスには反映しない|
 |`settings.BOX_BOTTOM_ESTIMATIONS`|dict[str, str]|ラベルごとの底面の推定方式（"percentile" / "ground" / "ego"）。辞書に無いラベルは"percentile"|全ラベル"ground"|LiDARの上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすいため|
 |`settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS`|list[str]|Ground Height Methodパラメータの選択肢|`["percentile", "least_squares"]`|-|
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|
@@ -936,9 +937,9 @@ for sample_index in range(len(samples)):
                                   ground_points=ground_points[sample_index], use_lidar=USE_LIDAR)
         fitted_rows.append((global_id, label, fitted_box, origin_xy))
 
-###### Box orientation re-estimation（未実装。実装方針） ######
+###### Box orientation re-estimation（推定は別ジョブで実装済み。パイプラインへの組み込みは未実装） ######
 for global_id, rows in group_by(fitted_rows, key=global_id).items():
-    method = BOX_ORIENTATION_ESTIMATIONS.get(label)   # 設定は未追加
+    method = BOX_ORIENTATION_ESTIMATIONS.get(label)
     if method is None:
         continue                                      # フィッティングした向きをそのまま使う
     for row in rows:
@@ -1069,9 +1070,20 @@ def distance_filter(points, origin_xy, *, method, quantile, margin, long_side,
         return labels == kept
 ```
 
-#### ボックス角度再推定（未実装）
+#### ボックス角度再推定（推定のみ実装済み）
 
-実装時の方針を示す疑似コード。`settings.BOX_ORIENTATION_ESTIMATIONS`（ラベル → "part_hoe" / "orient_anything_2" / None）は未追加で、実装時に追加する。グローバルトラックの全フレームを考慮した向きの補正（`settings.BOX_ORIENTATION_CORRECTIONS`）も同じく未実装
+現状はBox Fittingのパイプラインに組み込まず、保存済みのrunに対して別ジョブで推定し、結果を保持するだけ（ボックスには反映しない）。グローバルトラックの全フレームを考慮した向きの補正（`settings.BOX_ORIENTATION_CORRECTIONS`）は未実装
+
+- エンドポイント: `POST /box-orientation/jobs`（他ステップと同じジョブ方式。`webapp/inference/app/routers/box_orientation.py`、スキーマは`app/schemas/box_orientation.py`）
+- リクエスト: webappがrunのうちglobal_track_idを持つ全行（カメラごと）を候補として渡す（トラッキングの外接矩形、深度+LiDARの実点数、代表行のボックス中心、カメラのcalibrated_sensor・ego_pose、sampleの基準ego_pose）。ラベルごとの方式は`methods`（webappの`settings.BOX_ORIENTATION_ESTIMATIONS`）で渡す
+- 推論サーバー側の処理（`app/services/box_orientation.py`）
+    - global_track_id × sampleでまとめ、点数（`num_points_depth + num_points_lidar`。深度を使わなかったカメラも深度の点数を数える）が最大のカメラを選ぶ
+    - PartHOE: 外接矩形を入力のアスペクト比（3:4）まで広げて1.25倍の余白を取って切り出し（公式の学習時と同じ。`part_hoe.crop_person`）、72ビンのargmax×5度を角度とする
+    - 角度はカメラから物体への**視線**基準（0度=視線と同じ向き＝背を向ける、90度=画像の左向き、180度=カメラの方を向く、270度=画像の右向き）。カメラ位置（基準ego座標）からボックス中心への視線を基準に、基準ego座標のyawへ変換する（`camera_relative_to_yaw`）。この定義はnuScenesのGT歩行者との比較で確認済み（scene-0061、162件で誤差の中央値9.3度、30度以内87%）
+    - レスポンス（グループごと）: `box_fitting_id`（代表行）、`method`、`status`（estimated / no_box / unsupported / failed）、`source_box_fitting_id`・`channel`・`bbox`（使ったカメラ）、`angle_deg`、`confidence`（argmaxビンの確率）、`yaw_ego`
+- 保存: webappが代表行の`box_fittings.fit_metrics["orientation_estimation"]`へ書く（再実行時はrun全体を置き換える。`app/services/box_orientation_service.py`）
+
+パイプラインへ組み込むときの方針を示す疑似コード
 
 ```python
 def reestimate_orientation(fitted_rows, members_by_row, method_by_label):

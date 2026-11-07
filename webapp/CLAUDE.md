@@ -81,6 +81,7 @@ project-root/
     │       │   ├── instance_tracking_service.py # Instance Tracking run の保存と読み出し
     │       │   ├── depth_boxfitting_service.py  # 深度推定＋Box Fitting run の保存と読み出し（Instance/SampleAnnotation の prev/next チェーン構築を含む）
     │       │   ├── manual_merge.py          # 再実行時に手修正ボックスを引き継ぐ
+    │       │   ├── box_orientation_service.py   # ボックス向き推定ジョブの実行と結果の保存（fit_metrics）
     │       │   ├── nuscenes_export_service.py   # nuScenes 形式エクスポート（出力対象のみで prev/next を張り直す）
     │       │   ├── label_service.py         # ラベル体系の変換
     │       │   ├── sweep_service.py         # トラッキング入力フレーム（sweep）の選択
@@ -136,11 +137,13 @@ project-root/
             ├── routers/                     # 各ステップの /jobs エンドポイント（depth_boxfitting は同期の /refilter も持つ）
             │   ├── det2d.py
             │   ├── instance_tracking.py
-            │   └── depth_boxfitting.py
+            │   ├── depth_boxfitting.py
+            │   └── box_orientation.py       # 保存済み run のボックス向き推定（結果は fit_metrics に保持）
             ├── schemas/                     # リクエスト／レスポンススキーマ
             │   ├── det2d.py
             │   ├── instance_tracking.py
-            │   └── depth_boxfitting.py
+            │   ├── depth_boxfitting.py
+            │   └── box_orientation.py
             ├── models_impl/                 # モデルのラッパー。*_stub.py は USE_STUB_MODELS=true 時の GPU 不要スタブ
             │   ├── grounding_dino.py, groundingdino_predict.py, prompt.py   # Grounding DINO（Transformers 版）
             │   ├── siglip2_classifier.py    # SigLIP2 zero-shot 分類（ラベル再判定）
@@ -148,6 +151,7 @@ project-root/
             │   ├── da3_depth.py             # Depth-Anything-3（公式リポジトリ版）
             │   ├── map_anything_depth.py    # MapAnything（公式リポジトリ版）
             │   ├── part_hoe.py              # PartHOE（歩行者の向き推定。公式リポジトリ版、重みは checkpoints/ へ自動ダウンロード）
+            │   ├── part_hoe_stub.py         # PartHOE のスタブ
             │   └── boxfitting_pipeline.py   # Depth Estimation & Box Fitting の本体
             └── services/                    # 推論の前後処理（モデル非依存）
                 ├── postprocess.py, reclassify.py, whole_image.py, crop.py  # Detection2D: IoS結合・再判定・全画面救済
@@ -156,6 +160,7 @@ project-root/
                 ├── depth_ops.py, depth_correction.py, lidar_ops.py         # 深度→点群、LiDAR 基準の深度補正、LiDAR 読込・地面除去
                 ├── distance_filter.py, lshape_filter.py, refilter.py       # 点群ノイズ除去・保存済み深度からの再フィルタ
                 ├── inter_cam_merge.py       # カメラ間の同一インスタンス結合（global_track_id）
+                ├── box_orientation.py       # AI モデルによるボックス向き推定の前後処理（カメラ選択・yaw 変換）
                 └── box_fitting.py, box_fitting_moa.py, box_bottom.py, box_size.py  # 3D ボックス当てはめと補正
 ```
 

@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, desc, func, insert, select, update
+from sqlalchemy import bindparam, delete, desc, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from app.models.ann_intermediate import (
@@ -436,6 +436,57 @@ class DepthBoxFittingRepository:
             item = dict(r)
             result.setdefault(item["sample_data_token"], []).append(item)
         return result
+
+    def list_orientation_candidates(self, params_id: str) -> list[dict[str, Any]]:
+        """向き推定の候補（global_track_id を持つ行）と、トラッキングの外接矩形を返す."""
+        stmt = select(
+            BoxFitting3D.id, BoxFitting3D.sample_data_token,
+            BoxFitting3D.global_track_id, BoxFitting3D.label,
+            BoxFitting3D.is_primary, BoxFitting3D.status, BoxFitting3D.center_ego,
+            BoxFitting3D.num_points_depth, BoxFitting3D.num_points_lidar,
+            InstanceTracking2D.xmin, InstanceTracking2D.ymin,
+            InstanceTracking2D.xmax, InstanceTracking2D.ymax,
+        ).join(
+            InstanceTracking2D,
+            InstanceTracking2D.id == BoxFitting3D.instance_tracking_2d_id,
+        ).where(
+            BoxFitting3D.depth_estimation_params_id == params_id,
+            BoxFitting3D.global_track_id.is_not(None),
+        )
+        return [dict(r) for r in self.session.execute(stmt).mappings()]
+
+    def replace_fit_metrics_entry(
+        self, params_id: str, key: str, values: dict[str, Any]
+    ) -> int:
+        """run の全行の ``fit_metrics[key]`` を ``values``（{box_fitting_id: 値}）で置き換える.
+
+        values に無い行からはキーを消す（前回の結果を残さない）。
+        JSON 列は中身の変更を検知しないので、新しい dict を書き込む。
+        """
+        rows = self.session.execute(
+            select(BoxFitting3D.id, BoxFitting3D.fit_metrics)
+            .where(BoxFitting3D.depth_estimation_params_id == params_id)
+        ).all()
+        updates = []
+        for row_id, metrics in rows:
+            metrics = dict(metrics or {})
+            had = key in metrics
+            if row_id in values:
+                metrics[key] = values[row_id]
+            elif had:
+                metrics.pop(key)
+            else:
+                continue
+            updates.append({"b_id": row_id, "b_metrics": metrics})
+        if updates:
+            table = BoxFitting3D.__table__
+            self.session.execute(
+                update(table)
+                .where(table.c.id == bindparam("b_id"))
+                .values(fit_metrics=bindparam("b_metrics")),
+                updates,
+            )
+        return len(updates)
 
     def list_unlinked_fittings(self, params_id: str) -> list[dict[str, Any]]:
         """まだ SampleAnnotation を作っていない成功インスタンスを返す."""

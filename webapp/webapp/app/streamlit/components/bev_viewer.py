@@ -62,6 +62,7 @@ def build_bev_figure(
     instance_groups: Sequence[dict[str, Any]] = (),
     boxes: Sequence[dict[str, Any]] = (),
     hulls: Sequence[dict[str, Any]] = (),
+    arrows: Sequence[dict[str, Any]] = (),
     title: str = "",
     max_points_per_trace: int = 20_000,
     height: int = 640,
@@ -73,6 +74,8 @@ def build_bev_figure(
         instance_groups: ``{"key", "color", "points": (N,3)}``（ego 座標）
         boxes: ``{"key", "color", "center_xy", "width", "length", "yaw"}``
         hulls: ``{"key", "color", "points": (M,2)}``
+        arrows: ``{"key", "color", "start_xy", "yaw", "length", "text"}``。
+            向き推定の結果など、ボックスとは別に描く向き（yaw [rad]）
         axis_range: ``(xmin, xmax, ymin, ymax)``。左右に並べるとき、
             両方の figure で同じ範囲にすると位置を比較できる
     """
@@ -109,6 +112,26 @@ def build_bev_figure(
         center = np.asarray(box["center_xy"], dtype=float)[:2]
         _add_polygon(fig, np.vstack([center, front]),
                      name=box["key"], color=box["color"], width=1)
+
+    for arrow in arrows:
+        start = np.asarray(arrow["start_xy"], dtype=float)[:2]
+        end = start + arrow["length"] * np.array(
+            [math.cos(arrow["yaw"]), math.sin(arrow["yaw"])]
+        )
+        # 矢じりは annotation で描く（データ座標で始点と終点を指定する）
+        fig.add_annotation(
+            x=end[0], y=end[1], ax=start[0], ay=start[1],
+            xref="x", yref="y", axref="x", ayref="y",
+            text="", showarrow=True, arrowhead=2, arrowsize=1.2,
+            arrowwidth=2.5, arrowcolor=arrow["color"],
+        )
+        # annotation はホバーできないので、先端に点を置いて情報を出す
+        fig.add_trace(go.Scatter(
+            x=[end[0]], y=[end[1]], mode="markers", name=arrow["key"],
+            marker=dict(size=6, color=arrow["color"]),
+            hovertext=arrow.get("text") or arrow["key"], hoverinfo="text",
+            showlegend=False,
+        ))
 
     # 自車位置
     fig.add_trace(go.Scatter(

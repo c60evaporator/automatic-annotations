@@ -27,6 +27,11 @@ from app.services.depth_boxfitting_service import (
     resolve_display_run,
 )
 from app.services.depth_pointcloud import depth_to_ego_points
+from app.services.box_orientation_service import (
+    ORIENTATION_METRICS_KEY,
+    ORIENTATION_STATUS_ESTIMATED,
+    run_orientation_estimation,
+)
 from app.services.gt_bev import gt_boxes_in_ego
 from app.services.label_service import all_labels
 from app.services.derived_file_service import load_depth_map, load_lidar_pointcloud
@@ -388,6 +393,24 @@ FITTED_BOX_HELP = (
     "Local Corrected: 1 フレーム単位の補正（底面の高さ・角度）後。"
     "Final Box: 複数フレームを考慮した補正（角度・高さ・幅・長さ）後の最終的なボックス"
 )
+
+
+W_BF_ORIENTATION = "_w_bf_orientation"
+# 向き推定の矢印の長さ = ボックス長の半分 + これ [m]（ボックスの外まで伸ばす）
+ORIENTATION_ARROW_EXTRA = 1.0
+ORIENTATION_HELP = (
+    "AI モデル（PartHOE / Orient-Anything-2）で推定したボックスの向きを、"
+    "ボックス中心から伸びる矢印で描く。ボックスには反映していない。"
+    "推定するラベルと方式は config の BOX_ORIENTATION_ESTIMATIONS"
+)
+
+
+def orientation_estimation_of(item: dict) -> dict | None:
+    """推定済みの向き（fit_metrics に保存したもの）を返す. 無ければ None."""
+    result = (item.get("fit_metrics") or {}).get(ORIENTATION_METRICS_KEY)
+    if not result or result.get("status") != ORIENTATION_STATUS_ESTIMATED:
+        return None
+    return result
 
 
 def fitted_box_at(item: dict, stage: str) -> dict | None:
@@ -1137,6 +1160,48 @@ def _save_completed_job(job: dict) -> None:
     clear_caches()
     if created:
         st.toast(f"3D ボックスを {created} 件生成しました")
+
+
+def render_orientation_status(
+    params_id: str, num_arrows: int, *, run_has_orientation: bool
+) -> None:
+    """向き推定の件数表示と、実行ボタン（表示中の run に対して推定する）."""
+    info_col, button_col = st.columns([4, 1])
+    with info_col:
+        if run_has_orientation:
+            st.caption(f"Orientation Estimation: このサンプルで {num_arrows} 件")
+        else:
+            st.caption("この run は向き推定を実行していません。"
+                       "右のボタンで推定できます（ボックスには反映しません）")
+    with button_col:
+        label = ("Re-run Orientation Estimation" if run_has_orientation
+                 else "Run Orientation Estimation")
+        if not st.button(label, key="_w_bf_orientation_run"):
+            return
+    if not is_available():
+        st.error("推論サーバーに接続できません。")
+        return
+    progress = st.progress(0.0, text="向き推定を開始しています...")
+
+    def _on_progress(job: dict) -> None:
+        progress.progress(
+            min(job["progress"], 1.0),
+            text=f"{job['processed']}/{job['total']}  {job['message']}",
+        )
+
+    try:
+        result = run_orientation_estimation(
+            scene_token, params_id, dataset["dataroot"], on_progress=_on_progress,
+        )
+    except InferenceServerError as exc:
+        st.error(str(exc))
+        return
+    if result["status"] != "succeeded":
+        st.error(result.get("error") or f"向き推定が {result['status']} で終了しました")
+        return
+    clear_caches()
+    st.toast(f"向きを {result['num_estimated']}/{result['num_groups']} 件推定しました")
+    st.rerun()
 
 
 with param_col:
@@ -2219,6 +2284,10 @@ with fitting_tab_view:
             on_change=S.sync_sticky, args=(W_BF_FITTED, OPT_BF_FITTED),
             help="表示するボックスの補正段階。" + FITTED_BOX_HELP,
         )
+        show_orientation = st.checkbox(
+            "Orientation Estimation", value=False, key=W_BF_ORIENTATION,
+            help=ORIENTATION_HELP,
+        )
 
         S.init_sticky(W_BF_COLOR, OPT_BF_COLOR, COLOR_MODE_LABEL)
         bf_color_mode = st.radio(
@@ -2260,10 +2329,28 @@ with fitting_tab_view:
         # 推定ボックス（当てはめできたものだけ）。Fitted Boxes で選んだ補正段階で描く
         est_boxes = []
         bf_boxes_missing = 0
+        # 向き推定の矢印。表示中の補正段階のボックス中心から伸ばす
+        orientation_arrows = []
         for fit in bf_flat:
             if not has_box(fit):
                 continue
             box = fitted_box_at(fit, bf_fitted_stage)
+            orientation = orientation_estimation_of(fit) if show_orientation else None
+            if orientation is not None:
+                arrow_box = box or fit
+                orientation_arrows.append({
+                    "key": f"{fit['label']}#{fit['track_id']}",
+                    "color": _bf_color(fit),
+                    "start_xy": arrow_box["center_ego"][:2],
+                    "yaw": orientation["yaw_ego"],
+                    "length": arrow_box["size_wlh"][1] / 2.0 + ORIENTATION_ARROW_EXTRA,
+                    "text": (
+                        f"{fit['label']}#{fit['track_id']} {orientation['method']}<br>"
+                        f"angle={orientation['angle_deg']:.0f}° "
+                        f"conf={orientation['confidence']:.2f} "
+                        f"cam={orientation['channel']}"
+                    ),
+                })
             if box is None:
                 bf_boxes_missing += 1
                 continue
@@ -2345,6 +2432,15 @@ with fitting_tab_view:
                            f"ボックス {bf_boxes_missing} 件を表示していません"
                            "（Final Box なら表示できます）")
             render_merge_diagnostics(run_info)
+            if show_orientation:
+                render_orientation_status(
+                    view_run_id, len(orientation_arrows),
+                    run_has_orientation=any(
+                        ORIENTATION_METRICS_KEY in (fit.get("fit_metrics") or {})
+                        for items_ in load_box_fittings(view_run_id).values()
+                        for fit in items_
+                    ),
+                )
             common = dict(
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,
                 axis_range=axis_range,
@@ -2357,11 +2453,11 @@ with fitting_tab_view:
                 with est_col:
                     render_bev(build_bev_figure(
                         instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
-                        title="Fitted", **common))
+                        arrows=orientation_arrows, title="Fitted", **common))
             else:
                 render_bev(build_bev_figure(
                     instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
-                    **common))
+                    arrows=orientation_arrows, **common))
 
 # ------------------------------------------------------------------
 # Box on Cam タブ（3D ボックスをカメラ画像へ投影）
