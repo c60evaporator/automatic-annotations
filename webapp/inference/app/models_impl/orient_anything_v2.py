@@ -1,5 +1,10 @@
 """Orient-Anything-V2（物体の向き推定）のラッパー（公式リポジトリ版）.
 
+**現在は使用していない。** 向き推定は軽量な Orient-Anything V1 Large
+（`orient_anything_v1.py`）に切り替えた（nuScenes の GT 比較で精度はほぼ同じ、
+推論は約 8 倍速く重みは約 1/4）。Docker イメージにも公式リポジトリを入れていないため、
+使う場合は Orient-Anything-V2 を clone し直す必要がある。参考実装として残す。
+
 公式リポジトリ（https://github.com/SpatialVision/Orient-Anything-V2）は
 パッケージになっておらず、ルート直下の `vision_tower` / `vggt` / `utils` を
 直接 import する作り。`utils` / `vggt` は一般的な名前なので PYTHONPATH には入れず、

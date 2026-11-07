@@ -1,6 +1,6 @@
 """Box Orientation Estimation のエンドポイント.
 
-保存済みの Box Fitting run に対して、AI モデル（PartHOE / Orient-Anything-V2）で
+保存済みの Box Fitting run に対して、AI モデル（PartHOE / Orient-Anything V1 Large）で
 ボックスの向きを推定する。
 **ボックスには反映せず、推定結果を返すだけ**（webapp が run に保存する）。
 他ステップと同じジョブ方式。
@@ -23,7 +23,7 @@ from app.schemas.box_orientation import OrientationRequest
 from app.schemas.depth_boxfitting import JobResponse
 from app.services.box_orientation import (
     MODEL_FOR_METHOD,
-    ORIENTATION_METHOD_PART_HOE,
+    MODEL_PART_HOE,
     ORIENTATION_STATUS_ESTIMATED,
     ORIENTATION_STATUS_FAILED,
     ORIENTATION_STATUS_NO_BOX,
@@ -54,13 +54,13 @@ def _result_base(group: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _crop(method: str, image: np.ndarray, source: dict[str, Any]) -> np.ndarray:
-    """方式ごとの切り出し."""
-    if method == ORIENTATION_METHOD_PART_HOE:
+def _crop(model: str, image: np.ndarray, source: dict[str, Any]) -> np.ndarray:
+    """モデルごとの切り出し."""
+    if model == MODEL_PART_HOE:
         from app.models_impl.part_hoe import crop_person
 
         return crop_person(image, source["bbox"])
-    from app.models_impl.orient_anything_v2 import crop_object_on_white
+    from app.models_impl.orient_anything_v1 import crop_object_on_white
     from common.mask_rle import decode_rle, resize_mask_nearest
 
     mask = None
@@ -71,9 +71,9 @@ def _crop(method: str, image: np.ndarray, source: dict[str, Any]) -> np.ndarray:
     return crop_object_on_white(image, source["bbox"], mask)
 
 
-def _predict(method: str, estimator: Any, crops: list[np.ndarray]) -> list[dict[str, Any]]:
-    """方式ごとの推論. angle_deg はモデルの出力、view_deg は視線基準の角度."""
-    if method == ORIENTATION_METHOD_PART_HOE:
+def _predict(model: str, estimator: Any, crops: list[np.ndarray]) -> list[dict[str, Any]]:
+    """モデルごとの推論. angle_deg はモデルの出力、view_deg は視線基準の角度."""
+    if model == MODEL_PART_HOE:
         probs = estimator.predict(crops)
         return [
             {"angle_deg": float(angle), "view_deg": float(angle),
@@ -83,22 +83,21 @@ def _predict(method: str, estimator: Any, crops: list[np.ndarray]) -> list[dict[
     out = estimator.predict(crops)
     return [
         {"angle_deg": float(az), "view_deg": orient_anything_to_view_angle(float(az)),
-         "confidence": float(conf), "alpha": float(alpha)}
-        for az, conf, alpha in zip(
-            out["azimuth_deg"], out["confidence"], out["alpha"], strict=True)
+         "confidence": float(conf)}
+        for az, conf in zip(out["azimuth_deg"], out["confidence"], strict=True)
     ]
 
 
 def _estimate(
-    method: str, groups: list[dict[str, Any]], dataroot: Path, job: Job,
+    model: str, groups: list[dict[str, Any]], dataroot: Path, job: Job,
     done: int, emit,
 ) -> int:
-    """1 つの方式でまとめて推定する. 画像はフレームごとに 1 回だけ読む."""
+    """1 つのモデルでまとめて推定する. 画像はフレームごとに 1 回だけ読む."""
     from app.services.lshape_filter import sensor_origin_xy
 
     # 同じフレームのグループを続けて処理し、画像を使い回す
     groups = sorted(groups, key=lambda g: g["source"]["sample_data_token"])
-    with model_registry.use_gpu(MODEL_FOR_METHOD[method]) as estimator:
+    with model_registry.use_gpu(model) as estimator:
         image_cache: dict[str, np.ndarray] = {}
         for start in range(0, len(groups), BATCH_SIZE):
             if job.cancel_requested():
@@ -113,14 +112,14 @@ def _estimate(
                         image_cache.clear()  # 直前のフレームだけ持つ
                         with Image.open(dataroot / path) as img:
                             image_cache[path] = np.asarray(img.convert("RGB"))
-                    crops.append(_crop(method, image_cache[path], source))
+                    crops.append(_crop(model, image_cache[path], source))
                     valid.append(group)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("crop failed for %s: %s", source["box_fitting_id"], exc)
                     emit({**_result_base(group), "status": ORIENTATION_STATUS_FAILED,
                           "error": f"{type(exc).__name__}: {exc}"})
             if crops:
-                for group, pred in zip(valid, _predict(method, estimator, crops), strict=True):
+                for group, pred in zip(valid, _predict(model, estimator, crops), strict=True):
                     source, primary = group["source"], group["primary"]
                     camera_xy = sensor_origin_xy(
                         source["calibrated_sensor"], source["ego_pose"],
@@ -140,7 +139,7 @@ def _estimate(
                         ),
                     })
             done += len(batch)
-            job.set_progress(done, message=method)
+            job.set_progress(done, message=model)
     return done
 
 
@@ -160,7 +159,7 @@ def _run_orientation(req: OrientationRequest, job: Job) -> dict:
         job.append_partial({"kind": "orientation", "data": result})
 
     done = 0
-    by_method: dict[str, list[dict[str, Any]]] = {}
+    by_model: dict[str, list[dict[str, Any]]] = {}
     for group in groups:
         if group["method"] not in SUPPORTED_ORIENTATION_METHODS:
             emit({**_result_base(group), "status": ORIENTATION_STATUS_UNSUPPORTED})
@@ -170,14 +169,14 @@ def _run_orientation(req: OrientationRequest, job: Job) -> dict:
             emit({**_result_base(group), "status": ORIENTATION_STATUS_NO_BOX})
             done += 1
         else:
-            by_method.setdefault(group["method"], []).append(group)
+            by_model.setdefault(MODEL_FOR_METHOD[group["method"]], []).append(group)
     job.set_progress(done)
 
-    # 方式ごとにモデルを載せ替える（MAX_RESIDENT_MODELS=1 でも 1 回ずつで済む）
-    for method, method_groups in by_method.items():
+    # モデルごとに載せ替える（MAX_RESIDENT_MODELS=1 でも 1 回ずつで済む）
+    for model, model_groups in by_model.items():
         if job.cancel_requested():
             break
-        done = _estimate(method, method_groups, dataroot, job, done, emit)
+        done = _estimate(model, model_groups, dataroot, job, done, emit)
 
     return {
         "num_groups": len(groups),

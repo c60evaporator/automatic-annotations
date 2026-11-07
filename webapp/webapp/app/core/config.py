@@ -490,8 +490,9 @@ class Settings(BaseSettings):
     }
     # ラベルごとの AI モデルによるボックス向きの再推定方式。None は推定しない。
     #   part_hoe: PartHOE（人物の向き推定）
-    #   orient_anything: Orient-Anything-V2（物体の向き推定。背景はトラッキングのマスクで落とす）
-    #   orient_anything_fourdir: Orient-Anything-V2 で、ボックスの 4 方向から選ぶ（未実装）
+    #   orient_anything: Orient-Anything V1 Large（物体の向き推定。背景はトラッキングのマスクで落とす）
+    #   orient_anything_combined: 推定は orient_anything と同じ。長辺が十分長いボックスは
+    #     元のボックスの前後どちらかを選ぶ（ボックスへの反映は未実装）
     # 推論サーバーへリクエストで渡す（ラベル体系は webapp 側の設定のため）
     BOX_ORIENTATION_ESTIMATIONS: dict[str, str | None] = {
         "car": "orient_anything",

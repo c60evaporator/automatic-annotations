@@ -64,10 +64,9 @@ class OrientationResult(BaseModel):
     bbox: list[float] | None = None
     # モデルの出力角度 [deg]（モデル固有の定義。PartHOE はカメラから見た向き）
     angle_deg: float | None = None
-    # argmax のビンの確率
+    # 推定の確からしさ。PartHOE は argmax のビンの確率、
+    # Orient-Anything は向きを持つ物体である確率（公式の confidence）
     confidence: float | None = None
-    # 対称性（Orient-Anything のみ。0: 向きが定まらない、1: 一意、2: 前後対称、4: 4 方向対称）
-    alpha: float | None = None
     # 推定した向き（基準 ego 座標の yaw [rad]）
     yaw_ego: float | None = None
     error: str | None = None

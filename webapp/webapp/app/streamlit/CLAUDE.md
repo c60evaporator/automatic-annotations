@@ -298,7 +298,7 @@
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
             - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
-        - Orientation Estimationチェックボックス: チェックすると、AIモデル（PartHOEまたはOrient-Anything-2）で推定したボックスの向きを、Fitted Boxesで選んだボックスの中心から伸びる矢印（長さはボックス長の半分+1m、色はInstance Colorに従う）で描画する（デフォルトはオフ。ボックス自体には反映しない）。矢印の先端にホバーすると方式・推定角度・確率・使ったカメラ（Orient-Anythingでは対称性alphaも）を表示する。view_colに、このサンプルの推定件数のキャプションと「Run Orientation Estimation」ボタン（推定済みのrunでは「Re-run Orientation Estimation」）を表示し、押すと表示中のrunに対して推論サーバーの向き推定ジョブを実行して、完了まで進捗バーを表示したうえで結果を保存する（推定対象のラベルと方式はconfigの`settings.BOX_ORIENTATION_ESTIMATIONS`）
+        - Orientation Estimationチェックボックス: チェックすると、AIモデル（PartHOEまたはOrient-Anything V1 Large）で推定したボックスの向きを、Fitted Boxesで選んだボックスの中心から伸びる矢印（長さはボックス長の半分+1m、色はInstance Colorに従う）で描画する（デフォルトはオフ。ボックス自体には反映しない）。矢印の先端にホバーすると方式・推定角度・確率・使ったカメラを表示する（Orient-Anything-V2で推定した古い結果では対称性alphaも）。view_colに、このサンプルの推定件数のキャプションと「Run Orientation Estimation」ボタン（推定済みのrunでは「Re-run Orientation Estimation」）を表示し、押すと表示中のrunに対して推論サーバーの向き推定ジョブを実行して、完了まで進捗バーを表示したうえで結果を保存する（推定対象のラベルと方式はconfigの`settings.BOX_ORIENTATION_ESTIMATIONS`）
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け

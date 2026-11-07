@@ -14,25 +14,32 @@ from typing import Any
 
 ORIENTATION_METHOD_PART_HOE = "part_hoe"
 ORIENTATION_METHOD_ORIENT_ANYTHING = "orient_anything"
-ORIENTATION_METHOD_ORIENT_ANYTHING_FOURDIR = "orient_anything_fourdir"
+# 推定は orient_anything と同じ。ボックスへの反映方法だけが異なる
+# （長辺が十分長ければ元のボックスの前後どちらかを選ぶ。反映は未実装）
+ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED = "orient_anything_combined"
 # 実装済みの方式
 SUPPORTED_ORIENTATION_METHODS = (
-    ORIENTATION_METHOD_PART_HOE, ORIENTATION_METHOD_ORIENT_ANYTHING,
+    ORIENTATION_METHOD_PART_HOE,
+    ORIENTATION_METHOD_ORIENT_ANYTHING,
+    ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED,
 )
-# 方式ごとに使うモデル（model_registry の名前）
+# 方式ごとに使うモデル（model_registry の名前）。同じモデルの方式はまとめて推定する
+MODEL_PART_HOE = "part_hoe"
+MODEL_ORIENT_ANYTHING = "orient_anything"
 MODEL_FOR_METHOD = {
-    ORIENTATION_METHOD_PART_HOE: "part_hoe",
-    ORIENTATION_METHOD_ORIENT_ANYTHING: "orient_anything_v2",
+    ORIENTATION_METHOD_PART_HOE: MODEL_PART_HOE,
+    ORIENTATION_METHOD_ORIENT_ANYTHING: MODEL_ORIENT_ANYTHING,
+    ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED: MODEL_ORIENT_ANYTHING,
 }
 # 背景をマスクで落とす（白にする）方式。webapp はこの方式のラベルだけマスクを送る
 METHODS_NEEDING_MASK = (
-    ORIENTATION_METHOD_ORIENT_ANYTHING, ORIENTATION_METHOD_ORIENT_ANYTHING_FOURDIR,
+    ORIENTATION_METHOD_ORIENT_ANYTHING, ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED,
 )
 
-# Orient-Anything-V2 の方位角を、PartHOE と同じ視線基準の角度
+# Orient-Anything（V1）の方位角を、PartHOE と同じ視線基準の角度
 # （camera_relative_to_yaw の angle_deg）へ直す: view = SIGN * azimuth + OFFSET。
 # 方位角は 0 度でカメラの方を向き、PartHOE とは逆回りに増える
-# （nuScenes の GT 車両との比較で決めた。0 度 = 視線基準の 180 度）
+# （nuScenes の GT 車両との比較で決めた。0 度 = 視線基準の 180 度。V2 も同じ定義）
 ORIENT_ANYTHING_AZIMUTH_SIGN = -1
 ORIENT_ANYTHING_AZIMUTH_OFFSET_DEG = 180.0
 
@@ -78,7 +85,7 @@ def group_candidates(
 
 
 def orient_anything_to_view_angle(azimuth_deg: float) -> float:
-    """Orient-Anything-V2 の方位角 [deg] を視線基準の角度 [deg] にする."""
+    """Orient-Anything の方位角 [deg] を視線基準の角度 [deg] にする."""
     return (ORIENT_ANYTHING_AZIMUTH_SIGN * azimuth_deg
             + ORIENT_ANYTHING_AZIMUTH_OFFSET_DEG) % 360.0
 

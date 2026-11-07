@@ -64,7 +64,6 @@ export DATA_ROOT="$(resolve_path "${HOST_DATA_ROOT}")"
 export DERIVED_ROOT="${HOST_DERIVED_ROOT}"
 export CHECKPOINT_DIR="${HOST_CHECKPOINT_DIR}"
 export PARTHOE_ROOT="${MAC_DIR}/third_party/Part_HOE"
-export ORIENT_ANYTHING_V2_ROOT="${MAC_DIR}/third_party/Orient-Anything-V2"
 export PYTHONPATH="${INFERENCE_DIR}:${SHARED_DIR}"
 export PYTHONUNBUFFERED=1
 # Fall back to CPU for operators not implemented on MPS

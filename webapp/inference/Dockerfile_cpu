@@ -12,9 +12,8 @@ FROM jidohub/base-cpu-devel-ubuntu22.04:latest
 ARG DA3_COMMIT=3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
 ARG MAPANYTHING_VERSION=v1.1.3
 ARG PARTHOE_COMMIT=6848ad2477dad39c2c1caf3d1fc3d7a5f1970363
-ARG ORIENT_ANYTHING_V2_COMMIT=73b11c9dc83e84daeb563d0c766831f2c66b0a18
 
-# Folder for cloning Depth-Anything-3/MapAnything/Part_HOE/Orient-Anything-V2 (/workspace is hidden by the bind mount)
+# Folder for cloning Depth-Anything-3/MapAnything/Part_HOE (/workspace is hidden by the bind mount)
 ENV THIRD_PARTY_ROOT=/opt/third_party
 RUN mkdir -p ${THIRD_PARTY_ROOT}
 
@@ -90,13 +89,9 @@ RUN git clone https://github.com/zhaojieting/Part_HOE.git \
 ENV PARTHOE_ROOT=${THIRD_PARTY_ROOT}/Part_HOE
 
 ############################
-# Orient-Anything-V2
+# Orient-Anything V1 Large
 ############################
-# Not a package: imported from the repository root at runtime (no extra dependencies; rembg is stubbed)
-WORKDIR ${THIRD_PARTY_ROOT}
-RUN git clone https://github.com/SpatialVision/Orient-Anything-V2.git \
-    && git -C Orient-Anything-V2 checkout ${ORIENT_ANYTHING_V2_COMMIT}
-ENV ORIENT_ANYTHING_V2_ROOT=${THIRD_PARTY_ROOT}/Orient-Anything-V2
+# No clone needed: built with transformers' Dinov2Model, weights fetched from Hugging Face at runtime
 
 ############################
 # Other dependencies
@@ -132,8 +127,7 @@ import open3d, pypatchworkpp, cv2, fastapi, shapely; \
 import importlib.util, os; \
 spec = importlib.util.spec_from_file_location('parthoe_nn_utils', os.path.join(os.environ['PARTHOE_ROOT'], 'tensorrt/nn_utils.py')); \
 spec.loader.exec_module(importlib.util.module_from_spec(spec)); \
-import sys, types; sys.modules['rembg'] = types.ModuleType('rembg'); sys.path.insert(0, os.environ['ORIENT_ANYTHING_V2_ROOT']); \
-import vision_tower, utils.app_utils; \
+from transformers import Dinov2Config, Dinov2Model, AutoImageProcessor; \
 print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
 
 ############################

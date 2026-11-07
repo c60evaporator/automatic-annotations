@@ -53,13 +53,15 @@ class Settings(BaseSettings):
         "?id=1_u9kN9C-bBPSYjsMDxpdzc7Q-lfCdR0J&export=download&confirm=t"
     )
 
-    # --- Orient-Anything-V2（物体の向き推定。公式リポジトリ版）------------
-    # 重みは初回ロード時に Hugging Face から HF_HOME へダウンロードされる（約 5GB）。
+    # --- Orient-Anything V1 Large（物体の向き推定）------------------------
+    # 重みは初回ロード時に Hugging Face から HF_HOME へダウンロードされる（約 1.2GB）。
+    # バックボーン（DINOv2-Large）は構成と前処理の設定だけ読む（重みはチェックポイントに含まれる）。
     # リビジョンを固定して、重みの差し替えで結果が変わらないようにする
-    ORIENT_ANYTHING_V2_ROOT: Path = Path("/opt/third_party/Orient-Anything-V2")
-    ORIENT_ANYTHING_V2_REPO: str = "Viglong/OriAnyV2_ckpt"
-    ORIENT_ANYTHING_V2_CHECKPOINT: str = "demo_ckpts/rotmod_realrotaug_best.pt"
-    ORIENT_ANYTHING_V2_REVISION: str = "34fe2ecbdb987a0fb98437af00600f22a0fdfb99"
+    ORIENT_ANYTHING_REPO: str = "Viglong/Orient-Anything"
+    ORIENT_ANYTHING_CHECKPOINT: str = "croplargeEX2/dino_weight.pt"
+    ORIENT_ANYTHING_REVISION: str = "ecfa089828d9fab521d47133bedbdbfdef151cd4"
+    ORIENT_ANYTHING_BACKBONE: str = "facebook/dinov2-large"
+    ORIENT_ANYTHING_BACKBONE_REVISION: str = "47b73eefe95e8d44ec3623f8890bd894b6ea2d6c"
 
     # GPU や重みが無い環境で UI を動かすためのスタブ切り替え
     USE_STUB_MODELS: bool = False

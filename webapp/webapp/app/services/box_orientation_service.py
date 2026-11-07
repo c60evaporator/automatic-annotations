@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 ORIENTATION_METRICS_KEY = "orientation_estimation"
 ORIENTATION_STATUS_ESTIMATED = "estimated"
 # 背景をトラッキングのマスクで落とす方式（推論サーバーの METHODS_NEEDING_MASK と同じ）
-METHODS_NEEDING_MASK = ("orient_anything", "orient_anything_fourdir")
+METHODS_NEEDING_MASK = ("orient_anything", "orient_anything_combined")
 POLL_INTERVAL_SEC = 0.5
 
 

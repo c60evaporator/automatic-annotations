@@ -525,14 +525,12 @@ Depth Boxfittingは、以下のフローで行われます
 - 同一フレーム同ラベル別カメラでボックスの重なりが大きいインスタンスを結合（基本は上で実施したInter-cam mergeと同様に）し、再度BoxFittingを実施（**未実装**）
 - global_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施（**推定のみ実装済み・ボックスへの反映は未実装**。現状はパイプラインに組み込まず、保存済みのrunに対して別ジョブ（`POST /box-orientation/jobs`）で推定し、結果を`fit_metrics`に保持するだけ。後述の「ボックス角度再推定」参照）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法。webappのconfigで定義し、リクエストで渡す）に基づき、以下の角度推定を実施。（part_hoe・orient_anythingは推定を実装済み。orient_anything_fourdirは未実装で`unsupported`を返す）
+    - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法。webappのconfigで定義し、リクエストで渡す）に基づき、以下の角度推定を実施。（3方式とも推定は実装済み。orient_anything_combinedの推定はorient_anythingと同じで、ボックスへの反映方法だけが異なる）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: ボックスの長辺の長さに応じて、以下のように補正を実施
-            - ボックス長辺が短辺の標準値（`settings.DEFAULT_BOX_SIZES`から取得）×`settings.ORIENT_ANYTHING_AVAILABLE_LENGTH_RATIO`以上のとき: 補正しない
-            - 未満のとき: Orient-Anything-2で補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: ボックスの長辺の長さに応じて、以下のように補正を実施
-            - ボックス長辺が短辺の標準値（`settings.DEFAULT_BOX_SIZES`から取得）×`settings.ORIENT_ANYTHING_AVAILABLE_LENGTH_RATIO`以上のとき: 補正しない
-            - 未満のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。ボックスの8頂点の位置は変更せず、ただ軸方向のみを修正する
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: Orient-Anything V1 Largeで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のとき: ボックスの長辺の長さに応じて、以下のように補正を実施
+            - ボックス長辺が短辺の標準値（`settings.DEFAULT_BOX_SIZES`から取得）×`settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO`以上のとき: 元々のボックスの前後方向のうち、Orient-Anything V1 Largeで推定した角度に最も近いものを新たなX軸として採用。ボックスの8頂点の位置は変更せず、ただ軸方向のみを修正する
+            - 未満のとき: Orient-Anything V1 Largeで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
 - 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（**未実装**）
@@ -543,7 +541,7 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う。ボックス角度推定で`settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のときと同じ判定方法）
+    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）
         - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
         - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
         - 以下のように面が見えているかを判定する
@@ -652,7 +650,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.DISTANCE_FILTER_METHODS`|dict[str, str \| None]|Distance Filterのラベルごとの方式（"long_side" / "dbscan"）。辞書に無いラベル・Noneは何もしない|bicycle: "dbscan", motorcycle / pedestrian / traffic_cone: "long_side"|bicycleは壁のすぐ手前を走るケースなどで背景の塊を落とすため|
 |`settings.DEFAULT_BOX_SIZES`|dict[str, tuple[float, float, float]]|ラベルごとの想定サイズ（length, width, height）[m]。Distance Filter（long_side）の長辺と、寸法補正（default方式）に使う|[config.py参照](../webapp/app/core/config.py)（例: car (4.63, 1.97, 1.74)）|仮の値（nuScenesの各カテゴリの平均的な寸法の目安）。統計を取って差し替える予定|
 |`settings.BOXFIT_METHODS`|dict[str, str]|ラベルごとのBox Fittingの手法。辞書に無いラベルは"convex_hull_moa"|全ラベル"convex_hull_moa"|向き推定（PartHOE / Orient Anything等）を足すときに、ラベルごとに手法を切り替える差し込み口として辞書にしている|
-|`settings.BOX_ORIENTATION_ESTIMATIONS`|dict[str, str \| None]|ラベルごとのAIモデルによるボックス向き推定の方式（"part_hoe" / "orient_anything" / "orient_anything_fourdir" / None）。向き推定ジョブのリクエストの`methods`で推論サーバーへ渡す|pedestrianは"part_hoe"、car・truckは"orient_anything"、他はNone|現状は推定結果を保持するだけでボックスには反映しない|
+|`settings.BOX_ORIENTATION_ESTIMATIONS`|dict[str, str \| None]|ラベルごとのAIモデルによるボックス向き推定の方式（"part_hoe" / "orient_anything" / "orient_anything_combined" / None）。向き推定ジョブのリクエストの`methods`で推論サーバーへ渡す|pedestrianは"part_hoe"、car・truckは"orient_anything"、他はNone|現状は推定結果を保持するだけでボックスには反映しない|
 |`settings.BOX_BOTTOM_ESTIMATIONS`|dict[str, str]|ラベルごとの底面の推定方式（"percentile" / "ground" / "ego"）。辞書に無いラベルは"percentile"|全ラベル"ground"|LiDARの上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすいため|
 |`settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS`|list[str]|Ground Height Methodパラメータの選択肢|`["percentile", "least_squares"]`|-|
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|
@@ -696,7 +694,7 @@ Depth Boxfittingは、以下の段階ごとに実施する（進捗のtotalは3�
 
 ボックス角度の再推定に使うPartHOE（歩行者の向き推定）は、GitHubの公式リポジトリ（https://github.com/zhaojieting/Part_HOE 、コミット固定）を`/opt/third_party/Part_HOE`（`settings.PARTHOE_ROOT`）にcloneし、torchのみで動く`tensorrt/nn_utils.py`の`MinimalPartHOE`をファイルパスからロードして使う（`lib/`側はtimm等の追加依存が必要なため使わない）。重みはHuggingFaceに無いため、初回ロード時にGoogle Drive（`settings.PARTHOE_CHECKPOINT_URL`）から`settings.CHECKPOINT_DIR / settings.PARTHOE_CHECKPOINT`（既定`/opt/checkpoints/part_hoe/parthoe_s.pth`。composeでホストの`webapp/checkpoints`をマウント）へ自動ダウンロードする。入力は人物クロップ（RGB、256×192にリサイズしImageNetの平均・標準偏差で正規化）、出力は72ビン（5度刻み）の向きの確率。実装は`webapp/inference/app/models_impl/part_hoe.py`を参照。
 
-Orient-Anything-V2（物体の向き推定）は、GitHubの公式リポジトリ（https://github.com/SpatialVision/Orient-Anything-V2 、コミット固定）を`/opt/third_party/Orient-Anything-V2`（`settings.ORIENT_ANYTHING_V2_ROOT`）にcloneして使う。パッケージになっておらずルート直下の`vision_tower`・`vggt`・`utils`を直接importする作りのため、PYTHONPATHには入れず、ロード時にだけsys.pathへ追加する。公式の`requirements.txt`のうちgradio・bpy・rembg等はデモ・可視化・背景除去用で推論には不要なため入れない（`utils/app_utils.py`が先頭でimportするrembgは空のモジュールを差し込んで回避する。背景はトラッキングのマスクで落とす想定）。重みはHuggingFace（`settings.ORIENT_ANYTHING_V2_REPO`の`settings.ORIENT_ANYTHING_V2_CHECKPOINT`、`settings.ORIENT_ANYTHING_V2_REVISION`でリビジョン固定、約5GB）からHF_HOMEへ自動ダウンロードする。モデルは約12.6億パラメータで、推論に使わないVGGTのヘッド（camera/point/depth/track、約3.5億）は読み込み後に外す。入力は公式と同じく最大辺518pxにリサイズして白で518×518へ埋め（pad）、出力は方位角（360ビン）・仰角（180ビン）・回転（360ビン）と対称性alpha（0/1/2/4）。実装は`webapp/inference/app/models_impl/orient_anything_v2.py`を参照。
+Orient-Anything V1 Large（物体の向き推定）は、公式リポジトリ（https://github.com/SpatialVision/Orient-Anything ）のモデル（DINOv2のCLSトークンに2層のMLPを付けた`DINOv2_MLP`）と同じ構造をtransformersの`Dinov2Model`で組んで使う（公式のコードはデモ用の依存（rembg・描画）をimportするため使わず、cloneもしない）。重みはHuggingFace（`settings.ORIENT_ANYTHING_REPO`の`settings.ORIENT_ANYTHING_CHECKPOINT`、既定`Viglong/Orient-Anything`の`croplargeEX2/dino_weight.pt`、約3億パラメータ・1.2GB。バックボーンの重みも含む）からHF_HOMEへ自動ダウンロードする。バックボーンの構成と前処理の設定は`settings.ORIENT_ANYTHING_BACKBONE`（`facebook/dinov2-large`）から読む（重みは落とさない）。いずれも`*_REVISION`でリビジョンを固定する。新しいtransformersでは注意層の名前が変わっているため（`attention.attention.query`→`attention.q_proj`等）、読み込み時に名前を付け替える。入力は公式と同じく短辺256pxにリサイズして中央224pxを切り出し、出力は方位角（360ビン）・仰角（180ビン）・回転と、向きを持つ物体である確率（confidence）。実装は`webapp/inference/app/models_impl/orient_anything_v1.py`を参照。以前使っていたOrient-Anything-V2（`orient_anything_v2.py`）は、GT比較で精度がほぼ同じでV1 Largeの方が推論が約8倍速く重みも約1/4だったため使っていない（ファイルのみ参考に残している）
 
 Depth-Anything-3のモデルインスタンスは以下のように作成する
 
@@ -1085,9 +1083,9 @@ def distance_filter(points, origin_xy, *, method, quantile, margin, long_side,
 - 推論サーバー側の処理（`app/services/box_orientation.py`）
     - global_track_id × sampleでまとめ、点数（`num_points_depth + num_points_lidar`。深度を使わなかったカメラも深度の点数を数える）が最大のカメラを選ぶ
     - PartHOE: 外接矩形を入力のアスペクト比（3:4）まで広げて1.25倍の余白を取って切り出し（公式の学習時と同じ。`part_hoe.crop_person`）、72ビンのargmax×5度を角度とする
-    - Orient-Anything-V2: 外接矩形で切り出し、トラッキングのマスク外を白にして（公式はrembgで背景を除去する）、物体が長辺の85%を占めるよう白で正方形に埋める（公式の`resize_foreground(0.85)`と同じ。`orient_anything_v2.crop_object_on_white`）。マスクはwebappが`METHODS_NEEDING_MASK`の方式のラベルだけ送る。方位角（360ビンのargmax）を角度とし、対称性alpha（0: 向きが定まらない、1: 一意、2: 前後対称、4: 4方向対称）も返す
-    - 角度はカメラから物体への**視線**基準（0度=視線と同じ向き＝背を向ける、90度=画像の左向き、180度=カメラの方を向く、270度=画像の右向き）。カメラ位置（基準ego座標）からボックス中心への視線を基準に、基準ego座標のyawへ変換する（`camera_relative_to_yaw`）。この定義はnuScenesのGT歩行者との比較で確認済み（scene-0061、162件で誤差の中央値9.3度、30度以内87%）。Orient-Anything-V2の方位角は0度でカメラの方を向き、PartHOEとは逆回りに増えるため、視線基準の角度 = 180 − 方位角 に直す（`orient_anything_to_view_angle`。符号と0度の位置はGTとの比較で決めた。scene-0061の車281件で誤差の中央値7.9度・30度以内82%、トラック18件で16.9度・94%。車はalpha=1で30度以内98%、alpha=4は中央値113度と外れやすい）
-    - レスポンス（グループごと）: `box_fitting_id`（代表行）、`method`、`status`（estimated / no_box / unsupported / failed）、`source_box_fitting_id`・`channel`・`bbox`（使ったカメラ）、`angle_deg`、`confidence`（argmaxビンの確率）、`alpha`（Orient-Anythingのみ）、`yaw_ego`
+    - Orient-Anything V1 Large（orient_anything / orient_anything_combined）: 外接矩形で切り出し、トラッキングのマスク外を白にして（公式はrembgで背景を除去する）、物体が長辺の85%を占めるよう白で正方形に埋める（公式の`resize_foreground(0.85)`と同じ。`orient_anything_v1.crop_object_on_white`）。マスクはwebappが`METHODS_NEEDING_MASK`の方式のラベルだけ送る。方位角（360ビンのargmax）を角度とする。同じモデルを使う方式はまとめて1回のモデルロードで推定する
+    - 角度はカメラから物体への**視線**基準（0度=視線と同じ向き＝背を向ける、90度=画像の左向き、180度=カメラの方を向く、270度=画像の右向き）。カメラ位置（基準ego座標）からボックス中心への視線を基準に、基準ego座標のyawへ変換する（`camera_relative_to_yaw`）。この定義はnuScenesのGT歩行者との比較で確認済み（scene-0061、162件で誤差の中央値9.3度、30度以内87%）。Orient-Anythingの方位角は0度でカメラの方を向き、PartHOEとは逆回りに増えるため、視線基準の角度 = 180 − 方位角 に直す（`orient_anything_to_view_angle`。符号と0度の位置はGTとの比較で決めた。V1・V2とも同じ定義。V1 Largeはscene-0001/0002のcar・truck446件で誤差の中央値6.3度。長辺が標準の幅の1.5倍以上のcarでは、元のボックスの前後どちらかを選ぶと30度以内が92〜96%）
+    - レスポンス（グループごと）: `box_fitting_id`（代表行）、`method`、`status`（estimated / no_box / unsupported / failed）、`source_box_fitting_id`・`channel`・`bbox`（使ったカメラ）、`angle_deg`、`confidence`（PartHOEはargmaxビンの確率、Orient-Anythingは向きを持つ物体である確率）、`yaw_ego`
 - 保存: webappが代表行の`box_fittings.fit_metrics["orientation_estimation"]`へ書く（再実行時はrun全体を置き換える。`app/services/box_orientation_service.py`）
 
 パイプラインへ組み込むときの方針を示す疑似コード
@@ -1105,8 +1103,8 @@ def reestimate_orientation(fitted_rows, members_by_row, method_by_label):
         crop = crop_box(image_of(member), member.box_2d, margin=...)
         if method == "part_hoe":
             yaw_cam = part_hoe_predict(crop)
-        elif method == "orient_anything_2":
-            yaw_cam = orient_anything_2_predict(crop)
+        elif method in ("orient_anything", "orient_anything_combined"):
+            yaw_cam = orient_anything_predict(crop)   # Orient-Anything V1 Large
         # カメラ座標系の向きを基準ego座標系のyawへ変換し、XY中心を固定してyawのみ差し替える
         box["yaw_ego"] = camera_yaw_to_ego(yaw_cam, member.camera_calib, member.ego_pose, reference_ego_pose)
         # 長さ・幅は新しい向きの軸に合わせて点群から測り直す（向きが90°変わると長辺と短辺が入れ替わるため）
