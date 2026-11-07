@@ -1,6 +1,7 @@
 """Box Orientation Estimation のエンドポイント.
 
-保存済みの Box Fitting run に対して、AI モデルでボックスの向きを推定する。
+保存済みの Box Fitting run に対して、AI モデル（PartHOE / Orient-Anything-V2）で
+ボックスの向きを推定する。
 **ボックスには反映せず、推定結果を返すだけ**（webapp が run に保存する）。
 他ステップと同じジョブ方式。
 """
@@ -21,6 +22,7 @@ from app.core.logging import get_logger
 from app.schemas.box_orientation import OrientationRequest
 from app.schemas.depth_boxfitting import JobResponse
 from app.services.box_orientation import (
+    MODEL_FOR_METHOD,
     ORIENTATION_METHOD_PART_HOE,
     ORIENTATION_STATUS_ESTIMATED,
     ORIENTATION_STATUS_FAILED,
@@ -29,6 +31,7 @@ from app.services.box_orientation import (
     SUPPORTED_ORIENTATION_METHODS,
     camera_relative_to_yaw,
     group_candidates,
+    orient_anything_to_view_angle,
 )
 
 logger = get_logger(__name__)
@@ -36,7 +39,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/box-orientation", tags=["Box Orientation Estimation"])
 
 KIND = "box_orientation"
-# 1 回にモデルへ渡すクロップ数
+# 1 回にまとめて切り出すクロップ数（モデルへの入力は各モデルの batch_size で分ける）
 BATCH_SIZE = 32
 
 
@@ -51,17 +54,51 @@ def _result_base(group: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _estimate_part_hoe(
-    groups: list[dict[str, Any]], dataroot: Path, job: Job,
+def _crop(method: str, image: np.ndarray, source: dict[str, Any]) -> np.ndarray:
+    """方式ごとの切り出し."""
+    if method == ORIENTATION_METHOD_PART_HOE:
+        from app.models_impl.part_hoe import crop_person
+
+        return crop_person(image, source["bbox"])
+    from app.models_impl.orient_anything_v2 import crop_object_on_white
+    from common.mask_rle import decode_rle, resize_mask_nearest
+
+    mask = None
+    if source.get("mask_rle"):
+        mask = decode_rle(source["mask_rle"])
+        if mask.shape != image.shape[:2]:
+            mask = resize_mask_nearest(mask, *image.shape[:2])
+    return crop_object_on_white(image, source["bbox"], mask)
+
+
+def _predict(method: str, estimator: Any, crops: list[np.ndarray]) -> list[dict[str, Any]]:
+    """方式ごとの推論. angle_deg はモデルの出力、view_deg は視線基準の角度."""
+    if method == ORIENTATION_METHOD_PART_HOE:
+        probs = estimator.predict(crops)
+        return [
+            {"angle_deg": float(angle), "view_deg": float(angle),
+             "confidence": float(prob.max())}
+            for prob, angle in zip(probs, estimator.to_degrees(probs), strict=True)
+        ]
+    out = estimator.predict(crops)
+    return [
+        {"angle_deg": float(az), "view_deg": orient_anything_to_view_angle(float(az)),
+         "confidence": float(conf), "alpha": float(alpha)}
+        for az, conf, alpha in zip(
+            out["azimuth_deg"], out["confidence"], out["alpha"], strict=True)
+    ]
+
+
+def _estimate(
+    method: str, groups: list[dict[str, Any]], dataroot: Path, job: Job,
     done: int, emit,
 ) -> int:
-    """PartHOE で推定する. 画像はフレームごとに 1 回だけ読む."""
-    from app.models_impl.part_hoe import crop_person
+    """1 つの方式でまとめて推定する. 画像はフレームごとに 1 回だけ読む."""
     from app.services.lshape_filter import sensor_origin_xy
 
     # 同じフレームのグループを続けて処理し、画像を使い回す
     groups = sorted(groups, key=lambda g: g["source"]["sample_data_token"])
-    with model_registry.use_gpu("part_hoe") as estimator:
+    with model_registry.use_gpu(MODEL_FOR_METHOD[method]) as estimator:
         image_cache: dict[str, np.ndarray] = {}
         for start in range(0, len(groups), BATCH_SIZE):
             if job.cancel_requested():
@@ -76,36 +113,34 @@ def _estimate_part_hoe(
                         image_cache.clear()  # 直前のフレームだけ持つ
                         with Image.open(dataroot / path) as img:
                             image_cache[path] = np.asarray(img.convert("RGB"))
-                    crops.append(crop_person(image_cache[path], source["bbox"]))
+                    crops.append(_crop(method, image_cache[path], source))
                     valid.append(group)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("crop failed for %s: %s", source["box_fitting_id"], exc)
                     emit({**_result_base(group), "status": ORIENTATION_STATUS_FAILED,
                           "error": f"{type(exc).__name__}: {exc}"})
             if crops:
-                probs = estimator.predict(crops)
-                angles = estimator.to_degrees(probs)
-                for group, prob, angle in zip(valid, probs, angles, strict=True):
+                for group, pred in zip(valid, _predict(method, estimator, crops), strict=True):
                     source, primary = group["source"], group["primary"]
                     camera_xy = sensor_origin_xy(
                         source["calibrated_sensor"], source["ego_pose"],
                         source.get("reference_ego_pose"),
                     )
                     center = primary["center_ego"]
+                    view_deg = pred.pop("view_deg")
                     emit({
                         **_result_base(group),
+                        **pred,
                         "status": ORIENTATION_STATUS_ESTIMATED,
                         "source_box_fitting_id": source["box_fitting_id"],
                         "channel": source["channel"],
                         "bbox": list(source["bbox"]),
-                        "angle_deg": float(angle),
-                        "confidence": float(prob.max()),
                         "yaw_ego": camera_relative_to_yaw(
-                            float(angle), camera_xy, (center[0], center[1])
+                            view_deg, camera_xy, (center[0], center[1])
                         ),
                     })
             done += len(batch)
-            job.set_progress(done, message="PartHOE")
+            job.set_progress(done, message=method)
     return done
 
 
@@ -138,9 +173,11 @@ def _run_orientation(req: OrientationRequest, job: Job) -> dict:
             by_method.setdefault(group["method"], []).append(group)
     job.set_progress(done)
 
-    part_hoe_groups = by_method.get(ORIENTATION_METHOD_PART_HOE, [])
-    if part_hoe_groups:
-        done = _estimate_part_hoe(part_hoe_groups, dataroot, job, done, emit)
+    # 方式ごとにモデルを載せ替える（MAX_RESIDENT_MODELS=1 でも 1 回ずつで済む）
+    for method, method_groups in by_method.items():
+        if job.cancel_requested():
+            break
+        done = _estimate(method, method_groups, dataroot, job, done, emit)
 
     return {
         "num_groups": len(groups),

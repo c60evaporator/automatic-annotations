@@ -26,6 +26,8 @@ class OrientationCandidate(BaseModel):
     filename: str
     # トラッキングの外接矩形 [xmin, ymin, xmax, ymax]（画素、xmax/ymax は排他）
     bbox: list[float]
+    # トラッキングのマスク（COCO 非圧縮 RLE）。背景を落とす方式のラベルだけ入る
+    mask_rle: dict[str, Any] | None = None
     # 当てはめに使った点群の実点数（深度 + LiDAR。深度を使わなかった場合も数える）
     num_points: int = 0
     # グループの代表行（ボックスを持つ行）か
@@ -64,6 +66,8 @@ class OrientationResult(BaseModel):
     angle_deg: float | None = None
     # argmax のビンの確率
     confidence: float | None = None
+    # 対称性（Orient-Anything のみ。0: 向きが定まらない、1: 一意、2: 前後対称、4: 4 方向対称）
+    alpha: float | None = None
     # 推定した向き（基準 ego 座標の yaw [rad]）
     yaw_ego: float | None = None
     error: str | None = None

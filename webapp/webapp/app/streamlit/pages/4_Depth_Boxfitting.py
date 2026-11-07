@@ -405,6 +405,20 @@ ORIENTATION_HELP = (
 )
 
 
+# Orient-Anything-V2 の対称性（alpha）の意味
+ORIENTATION_ALPHA_LABELS = {
+    0: "向きが定まらない", 1: "向きが一意", 2: "前後対称", 4: "4方向対称",
+}
+
+
+def orientation_alpha_text(orientation: dict) -> str:
+    """ホバー表示用の対称性の説明（Orient-Anything のみ）."""
+    alpha = orientation.get("alpha")
+    if alpha is None:
+        return ""
+    return f"<br>alpha={alpha:.0f}（{ORIENTATION_ALPHA_LABELS.get(int(alpha), '?')}）"
+
+
 def orientation_estimation_of(item: dict) -> dict | None:
     """推定済みの向き（fit_metrics に保存したもの）を返す. 無ければ None."""
     result = (item.get("fit_metrics") or {}).get(ORIENTATION_METRICS_KEY)
@@ -2349,6 +2363,7 @@ with fitting_tab_view:
                         f"angle={orientation['angle_deg']:.0f}° "
                         f"conf={orientation['confidence']:.2f} "
                         f"cam={orientation['channel']}"
+                        + orientation_alpha_text(orientation)
                     ),
                 })
             if box is None:

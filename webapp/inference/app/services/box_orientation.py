@@ -16,7 +16,25 @@ ORIENTATION_METHOD_PART_HOE = "part_hoe"
 ORIENTATION_METHOD_ORIENT_ANYTHING = "orient_anything"
 ORIENTATION_METHOD_ORIENT_ANYTHING_FOURDIR = "orient_anything_fourdir"
 # 実装済みの方式
-SUPPORTED_ORIENTATION_METHODS = (ORIENTATION_METHOD_PART_HOE,)
+SUPPORTED_ORIENTATION_METHODS = (
+    ORIENTATION_METHOD_PART_HOE, ORIENTATION_METHOD_ORIENT_ANYTHING,
+)
+# 方式ごとに使うモデル（model_registry の名前）
+MODEL_FOR_METHOD = {
+    ORIENTATION_METHOD_PART_HOE: "part_hoe",
+    ORIENTATION_METHOD_ORIENT_ANYTHING: "orient_anything_v2",
+}
+# 背景をマスクで落とす（白にする）方式。webapp はこの方式のラベルだけマスクを送る
+METHODS_NEEDING_MASK = (
+    ORIENTATION_METHOD_ORIENT_ANYTHING, ORIENTATION_METHOD_ORIENT_ANYTHING_FOURDIR,
+)
+
+# Orient-Anything-V2 の方位角を、PartHOE と同じ視線基準の角度
+# （camera_relative_to_yaw の angle_deg）へ直す: view = SIGN * azimuth + OFFSET。
+# 方位角は 0 度でカメラの方を向き、PartHOE とは逆回りに増える
+# （nuScenes の GT 車両との比較で決めた。0 度 = 視線基準の 180 度）
+ORIENT_ANYTHING_AZIMUTH_SIGN = -1
+ORIENT_ANYTHING_AZIMUTH_OFFSET_DEG = 180.0
 
 ORIENTATION_STATUS_ESTIMATED = "estimated"
 ORIENTATION_STATUS_NO_BOX = "no_box"
@@ -57,6 +75,12 @@ def group_candidates(
             "primary": primary, "source": source,
         })
     return result
+
+
+def orient_anything_to_view_angle(azimuth_deg: float) -> float:
+    """Orient-Anything-V2 の方位角 [deg] を視線基準の角度 [deg] にする."""
+    return (ORIENT_ANYTHING_AZIMUTH_SIGN * azimuth_deg
+            + ORIENT_ANYTHING_AZIMUTH_OFFSET_DEG) % 360.0
 
 
 def camera_relative_to_yaw(

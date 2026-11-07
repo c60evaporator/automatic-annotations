@@ -437,8 +437,15 @@ class DepthBoxFittingRepository:
             result.setdefault(item["sample_data_token"], []).append(item)
         return result
 
-    def list_orientation_candidates(self, params_id: str) -> list[dict[str, Any]]:
-        """向き推定の候補（global_track_id を持つ行）と、トラッキングの外接矩形を返す."""
+    def list_orientation_candidates(
+        self, params_id: str, *, mask_labels: set[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """向き推定の候補（global_track_id を持つ行）と、トラッキングの外接矩形を返す.
+
+        Args:
+            mask_labels: トラッキングのマスクも返すラベル（背景を落とす方式のもの）。
+                マスクは 1 件で数千要素になるため、要るラベルだけに絞る
+        """
         stmt = select(
             BoxFitting3D.id, BoxFitting3D.sample_data_token,
             BoxFitting3D.global_track_id, BoxFitting3D.label,
@@ -453,7 +460,20 @@ class DepthBoxFittingRepository:
             BoxFitting3D.depth_estimation_params_id == params_id,
             BoxFitting3D.global_track_id.is_not(None),
         )
-        return [dict(r) for r in self.session.execute(stmt).mappings()]
+        rows = [dict(r) for r in self.session.execute(stmt).mappings()]
+        if mask_labels:
+            targets = [r["id"] for r in rows if r["label"] in mask_labels]
+            masks: dict[str, Any] = {}
+            for start in range(0, len(targets), CHUNK_SIZE):
+                masks.update(self.session.execute(
+                    select(BoxFitting3D.id, InstanceTracking2D.mask_rle)
+                    .join(InstanceTracking2D,
+                          InstanceTracking2D.id == BoxFitting3D.instance_tracking_2d_id)
+                    .where(BoxFitting3D.id.in_(targets[start:start + CHUNK_SIZE]))
+                ).all())
+            for row in rows:
+                row["mask_rle"] = masks.get(row["id"])
+        return rows
 
     def replace_fit_metrics_entry(
         self, params_id: str, key: str, values: dict[str, Any]

@@ -46,6 +46,40 @@ def _import_official(root: Path):
     return VGGT_OriAny_Ref, preprocess_images, val_fit_alpha
 
 
+def crop_object_on_white(
+    image: np.ndarray,
+    bbox: list[float],
+    mask: np.ndarray | None = None,
+    *,
+    foreground_ratio: float = 0.85,
+) -> np.ndarray:
+    """物体を白背景の正方形に切り出す（公式の前処理に合わせる）.
+
+    公式は rembg で背景を消し、物体が長辺の 85% を占めるよう白で余白を足す
+    （background_preprocess → resize_foreground(0.85)）。学習データも白背景の
+    レンダリングなので、背景を残すと向きが崩れる。rembg の代わりに
+    トラッキングのマスクで背景を白にする。
+
+    Args:
+        mask: 画像と同じ解像度の bool マスク。None なら背景を残す
+    """
+    height, width = image.shape[:2]
+    x0, y0, x1, y1 = (int(round(v)) for v in bbox)
+    x0, y0 = max(x0, 0), max(y0, 0)
+    x1, y1 = min(x1, width), min(y1, height)
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError(f"空の外接矩形です: {bbox}")
+    crop = image[y0:y1, x0:x1].copy()
+    if mask is not None:
+        crop[~mask[y0:y1, x0:x1]] = 255
+    side = int(np.ceil(max(crop.shape[:2]) / foreground_ratio))
+    canvas = np.full((side, side, 3), 255, dtype=np.uint8)
+    top = (side - crop.shape[0]) // 2
+    left = (side - crop.shape[1]) // 2
+    canvas[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
+    return canvas
+
+
 def download_checkpoint(repo_id: str, filename: str, revision: str | None) -> Path:
     """重みを HF_HOME へダウンロードする（済んでいればキャッシュのパスを返す）."""
     from huggingface_hub import hf_hub_download

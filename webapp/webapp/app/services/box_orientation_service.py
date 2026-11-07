@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 # 結果の保存先（BoxFitting3D.fit_metrics のキー）
 ORIENTATION_METRICS_KEY = "orientation_estimation"
 ORIENTATION_STATUS_ESTIMATED = "estimated"
+# 背景をトラッキングのマスクで落とす方式（推論サーバーの METHODS_NEEDING_MASK と同じ）
+METHODS_NEEDING_MASK = ("orient_anything", "orient_anything_fourdir")
 POLL_INTERVAL_SEC = 0.5
 
 
@@ -37,8 +39,13 @@ def build_orientation_payload(
     どのカメラで推定するかは推論サーバーがグループごとに選ぶ。
     """
     settings = get_settings()
+    methods = dict(settings.BOX_ORIENTATION_ESTIMATIONS)
+    mask_labels = {label for label, method in methods.items()
+                   if method in METHODS_NEEDING_MASK}
     with read_only_session() as session:
-        rows = DepthBoxFittingRepository(session).list_orientation_candidates(params_id)
+        rows = DepthBoxFittingRepository(session).list_orientation_candidates(
+            params_id, mask_labels=mask_labels
+        )
         frames = SensorRepository(session).list_frames_by_scene(
             scene_token, keyframe_only=True
         )
@@ -64,6 +71,7 @@ def build_orientation_payload(
             "channel": frame["channel"],
             "filename": frame["filename"],
             "bbox": [row["xmin"], row["ymin"], row["xmax"], row["ymax"]],
+            "mask_rle": row.get("mask_rle"),
             # 深度を使わなかったカメラも、深度の点数を数える
             "num_points": int(row["num_points_depth"] or 0)
             + int(row["num_points_lidar"] or 0),
@@ -76,7 +84,7 @@ def build_orientation_payload(
 
     return {
         "dataroot": dataroot,
-        "methods": dict(settings.BOX_ORIENTATION_ESTIMATIONS),
+        "methods": methods,
         "candidates": candidates,
     }
 
@@ -88,7 +96,7 @@ def save_orientation_results(params_id: str, results: list[dict[str, Any]]) -> i
         values[result["box_fitting_id"]] = {
             key: result.get(key)
             for key in ("method", "status", "source_box_fitting_id", "channel",
-                        "bbox", "angle_deg", "confidence", "yaw_ego", "error")
+                        "bbox", "angle_deg", "confidence", "alpha", "yaw_ego", "error")
         }
     with session_scope() as session:
         DepthBoxFittingRepository(session).replace_fit_metrics_entry(
