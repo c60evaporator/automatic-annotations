@@ -44,19 +44,7 @@ HOST_DATA_ROOT/<dataroot>/
             └── boston-seaport.json
 ```
 
-### 3. 重みダウンロード
-
-GroundingDINOとSAM2の重みを、`checkpoints`フォルダにダウンロードします（DA3の重みはHuggingFaceから自動ダウンロードされるので手動でのダウンロードは不要です）
-
-PartHOEの重みは、初回使用時にGoogle Driveから`checkpoints/part_hoe/parthoe_s.pth`へ自動ダウンロードされます（ネットワークの制限で失敗する場合は、[こちら](https://drive.google.com/file/d/1_u9kN9C-bBPSYjsMDxpdzc7Q-lfCdR0J/view)から手動でダウンロードして同じパスに置いてください）
-
-```bash
-cd checkpoints
-wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth
-wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
-```
-
-### 4. コンテナビルド
+### 3. コンテナビルド
 
 #### Linuxの場合（CUDA）
 
@@ -92,7 +80,7 @@ docker compose -f docker-compose.mac.yml build
 cd ../docker && bash cpu_devel_ubuntu2204.sh
 ```
 
-### 5. データインポート
+### 4. データインポート
 
 以下コマンドでJSON形式のメタデータをDBにインポートします。`<dataroot>`は先ほど指定したデータセット全体が格納されたフォルダ名、`<version>`はその下層のjsonファイルが格納されたフォルダ名（例: `v1.0-mini`）
 
@@ -147,10 +135,11 @@ Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカ�
 |ページ名|役割|
 |---|---|
 |main|データセットを選択する|
-|Select Scene|アノテーション対象のシーンを選択する|
-|Detect BBoxes|Grounding DINOで各物体のバウンディングボックスとラベルを推定する|
-|Track Instances|SAM2で各物体のインスタンスマスクとトラッキングIDを推定する|
-|Estimate Depth|Depth-Anything-3で単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングする|
+|Scene Selection|アノテーション対象のシーンを選択する|
+|Detection2D|Grounding DINOで各物体のバウンディングボックスとラベルを推定する|
+|Instance Tracking|SAM2で各物体のインスタンスマスクとトラッキングIDを推定する|
+|SAM3 Vocab Tracking|SAM3で画像から直接インスタンスマスクとトラッキングIDを得る（未実装）|
+|Depth Bixfitting|Depth-Anything-3で単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングする|
 |Export|アノテーション結果を含むメタデータをJSON形式でエクスポートする|
 
 ### mainページ

@@ -152,6 +152,7 @@ project-root/
             │   ├── map_anything_depth.py    # MapAnything（公式リポジトリ版）
             │   ├── part_hoe.py              # PartHOE（歩行者の向き推定。公式リポジトリ版、重みは checkpoints/ へ自動ダウンロード）
             │   ├── part_hoe_stub.py         # PartHOE のスタブ
+            │   ├── orient_anything_v2.py, orient_anything_v2_stub.py  # Orient-Anything-V2（物体の向き推定。公式リポジトリ版、重みは HF_HOME へ自動ダウンロード）
             │   └── boxfitting_pipeline.py   # Depth Estimation & Box Fitting の本体
             └── services/                    # 推論の前後処理（モデル非依存）
                 ├── postprocess.py, reclassify.py, whole_image.py, crop.py  # Detection2D: IoS結合・再判定・全画面救済

@@ -96,7 +96,26 @@ def register_model_loaders() -> None:
         return PartHOEEstimator(checkpoint, settings.PARTHOE_ROOT, settings.device)
 
     model_registry.register_loader("depth_anything", load_depth_anything)
+    def load_orient_anything_v2():
+        if settings.USE_STUB_MODELS:
+            from app.models_impl.orient_anything_v2_stub import OrientAnythingV2EstimatorStub
+            return OrientAnythingV2EstimatorStub()
+
+        from app.models_impl.orient_anything_v2 import (
+            OrientAnythingV2Estimator,
+            download_checkpoint,
+        )
+        checkpoint = download_checkpoint(
+            settings.ORIENT_ANYTHING_V2_REPO,
+            settings.ORIENT_ANYTHING_V2_CHECKPOINT,
+            settings.ORIENT_ANYTHING_V2_REVISION,
+        )
+        return OrientAnythingV2Estimator(
+            checkpoint, settings.ORIENT_ANYTHING_V2_ROOT, settings.device
+        )
+
     model_registry.register_loader("part_hoe", load_part_hoe)
+    model_registry.register_loader("orient_anything_v2", load_orient_anything_v2)
 
 
 @asynccontextmanager

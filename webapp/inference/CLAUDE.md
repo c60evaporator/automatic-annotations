@@ -692,6 +692,8 @@ Depth Boxfittingは、以下の段階ごとに実施する（進捗のtotalは3�
 
 ボックス角度の再推定に使うPartHOE（歩行者の向き推定）は、GitHubの公式リポジトリ（https://github.com/zhaojieting/Part_HOE 、コミット固定）を`/opt/third_party/Part_HOE`（`settings.PARTHOE_ROOT`）にcloneし、torchのみで動く`tensorrt/nn_utils.py`の`MinimalPartHOE`をファイルパスからロードして使う（`lib/`側はtimm等の追加依存が必要なため使わない）。重みはHuggingFaceに無いため、初回ロード時にGoogle Drive（`settings.PARTHOE_CHECKPOINT_URL`）から`settings.CHECKPOINT_DIR / settings.PARTHOE_CHECKPOINT`（既定`/opt/checkpoints/part_hoe/parthoe_s.pth`。composeでホストの`webapp/checkpoints`をマウント）へ自動ダウンロードする。入力は人物クロップ（RGB、256×192にリサイズしImageNetの平均・標準偏差で正規化）、出力は72ビン（5度刻み）の向きの確率。実装は`webapp/inference/app/models_impl/part_hoe.py`を参照。
 
+Orient-Anything-V2（物体の向き推定）は、GitHubの公式リポジトリ（https://github.com/SpatialVision/Orient-Anything-V2 、コミット固定）を`/opt/third_party/Orient-Anything-V2`（`settings.ORIENT_ANYTHING_V2_ROOT`）にcloneして使う。パッケージになっておらずルート直下の`vision_tower`・`vggt`・`utils`を直接importする作りのため、PYTHONPATHには入れず、ロード時にだけsys.pathへ追加する。公式の`requirements.txt`のうちgradio・bpy・rembg等はデモ・可視化・背景除去用で推論には不要なため入れない（`utils/app_utils.py`が先頭でimportするrembgは空のモジュールを差し込んで回避する。背景はトラッキングのマスクで落とす想定）。重みはHuggingFace（`settings.ORIENT_ANYTHING_V2_REPO`の`settings.ORIENT_ANYTHING_V2_CHECKPOINT`、`settings.ORIENT_ANYTHING_V2_REVISION`でリビジョン固定、約5GB）からHF_HOMEへ自動ダウンロードする。モデルは約12.6億パラメータで、推論に使わないVGGTのヘッド（camera/point/depth/track、約3.5億）は読み込み後に外す。入力は公式と同じく最大辺518pxにリサイズして白で518×518へ埋め（pad）、出力は方位角（360ビン）・仰角（180ビン）・回転（360ビン）と対称性alpha（0/1/2/4）。実装は`webapp/inference/app/models_impl/orient_anything_v2.py`を参照。
+
 Depth-Anything-3のモデルインスタンスは以下のように作成する
 
 ```python

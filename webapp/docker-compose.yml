@@ -94,7 +94,7 @@ services:
       - ./common:/opt/shared/common:ro
       - ${HOST_DATA_ROOT}:/data:ro
       - derived:/derived
-      # Weights downloaded from Hugging Face (GroundingDINO, SAM2, SigLIP2, Depth-Anything-3, MapAnything).
+      # Weights downloaded from Hugging Face (GroundingDINO, SAM2, SigLIP2, Depth-Anything-3, MapAnything, Orient-Anything-V2).
       # Mounted to HF_HOME of the image (/opt/cache/huggingface)
       - ~/.cache/huggingface:/opt/cache/huggingface
       # Weights not on Hugging Face (PartHOE; GroundingDINO and SAM2 for the GitHub version)
