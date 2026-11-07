@@ -48,6 +48,8 @@ HOST_DATA_ROOT/<dataroot>/
 
 GroundingDINOとSAM2の重みを、`checkpoints`フォルダにダウンロードします（DA3の重みはHuggingFaceから自動ダウンロードされるので手動でのダウンロードは不要です）
 
+PartHOEの重みは、初回使用時にGoogle Driveから`checkpoints/part_hoe/parthoe_s.pth`へ自動ダウンロードされます（ネットワークの制限で失敗する場合は、[こちら](https://drive.google.com/file/d/1_u9kN9C-bBPSYjsMDxpdzc7Q-lfCdR0J/view)から手動でダウンロードして同じパスに置いてください）
+
 ```bash
 cd checkpoints
 wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha2/groundingdino_swinb_cogcoor.pth

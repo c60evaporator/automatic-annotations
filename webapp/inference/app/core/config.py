@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     # 入れるとクラスタリングが引きずられる
     DEPTH_MAX_DISTANCE: float = 60.0
 
+    # --- PartHOE（歩行者の向き推定。公式リポジトリ版）---------------------
+    # Hugging Face に重みが無いため、初回ロード時に Google Drive から
+    # CHECKPOINT_DIR / PARTHOE_CHECKPOINT へダウンロードする（compose で ./checkpoints をマウント）
+    CHECKPOINT_DIR: Path = Path("/opt/checkpoints")
+    PARTHOE_ROOT: Path = Path("/opt/third_party/Part_HOE")
+    PARTHOE_CHECKPOINT: str = "part_hoe/parthoe_s.pth"
+    PARTHOE_CHECKPOINT_URL: str = (
+        "https://drive.usercontent.google.com/download"
+        "?id=1_u9kN9C-bBPSYjsMDxpdzc7Q-lfCdR0J&export=download&confirm=t"
+    )
+
     # GPU や重みが無い環境で UI を動かすためのスタブ切り替え
     USE_STUB_MODELS: bool = False
 

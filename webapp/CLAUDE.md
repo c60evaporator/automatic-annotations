@@ -34,7 +34,7 @@ project-root/
     │   ├── mask_rle.py                      # インスタンスマスクの RLE 表現
     │   ├── point_ops.py                     # 点群の間引き
     │   └── transform3d.py                   # 3D 座標変換の最小セット
-    ├── checkpoints/                         # GroundingDINO/SAM2 の重み（GitHub 版イメージのみ使用。Transformers 版は ~/.cache/huggingface を使う）
+    ├── checkpoints/                         # Hugging Face に無い重み（PartHOE は初回ロード時に自動ダウンロード。GroundingDINO/SAM2 は GitHub 版イメージのみ使用）
     ├── webapp/                              # Streamlit＋SQLite（コンテナの /workspace）
     │   ├── Dockerfile
     │   ├── docker-entrypoint.sh             # 起動時に alembic upgrade head を実行
@@ -147,6 +147,7 @@ project-root/
             │   ├── sam2_tracker.py, sam2_video.py, sam2_masks.py           # SAM2 Video（Transformers 版）
             │   ├── da3_depth.py             # Depth-Anything-3（公式リポジトリ版）
             │   ├── map_anything_depth.py    # MapAnything（公式リポジトリ版）
+            │   ├── part_hoe.py              # PartHOE（歩行者の向き推定。公式リポジトリ版、重みは checkpoints/ へ自動ダウンロード）
             │   └── boxfitting_pipeline.py   # Depth Estimation & Box Fitting の本体
             └── services/                    # 推論の前後処理（モデル非依存）
                 ├── postprocess.py, reclassify.py, whole_image.py, crop.py  # Detection2D: IoS結合・再判定・全画面救済

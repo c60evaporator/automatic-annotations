@@ -8,6 +8,7 @@
 # パスは webapp/.env から読む（docker-compose.mac.yml と同じ値を使うため）:
 #   HOST_DATA_ROOT     データセットのルート（必須）
 #   HOST_DERIVED_ROOT  深度マップ・点群の保存先（既定: webapp/derived）
+#   HOST_CHECKPOINT_DIR  Hugging Face 以外の重み（PartHOE 等）の保存先（既定: webapp/checkpoints）
 
 set -euo pipefail
 
@@ -34,7 +35,7 @@ read_env() {
     [[ -n "${line}" ]] && export "${key}=${line}"
     return 0
 }
-for key in HOST_DATA_ROOT HOST_DERIVED_ROOT HTTP_PROXY HTTPS_PROXY NO_PROXY; do
+for key in HOST_DATA_ROOT HOST_DERIVED_ROOT HOST_CHECKPOINT_DIR HTTP_PROXY HTTPS_PROXY NO_PROXY; do
     read_env "${key}"
 done
 if [[ -n "${HTTP_PROXY:-}" ]]; then export http_proxy="${HTTP_PROXY}"; fi
@@ -50,6 +51,8 @@ resolve_path() {
 }
 HOST_DERIVED_ROOT="$(resolve_path "${HOST_DERIVED_ROOT:-./derived}")"
 mkdir -p "${HOST_DERIVED_ROOT}"
+HOST_CHECKPOINT_DIR="$(resolve_path "${HOST_CHECKPOINT_DIR:-./checkpoints}")"
+mkdir -p "${HOST_CHECKPOINT_DIR}"
 
 # The common package is mounted to /opt/shared/common in the containers.
 # Expose only webapp/common (not the whole webapp/ directory) via a symlink
@@ -59,6 +62,8 @@ ln -sfn "${WEBAPP_DIR}/common" "${SHARED_DIR}/common"
 
 export DATA_ROOT="$(resolve_path "${HOST_DATA_ROOT}")"
 export DERIVED_ROOT="${HOST_DERIVED_ROOT}"
+export CHECKPOINT_DIR="${HOST_CHECKPOINT_DIR}"
+export PARTHOE_ROOT="${MAC_DIR}/third_party/Part_HOE"
 export PYTHONPATH="${INFERENCE_DIR}:${SHARED_DIR}"
 export PYTHONUNBUFFERED=1
 # Fall back to CPU for operators not implemented on MPS

@@ -85,6 +85,8 @@ services:
       - ${HOST_DATA_ROOT}:/data:ro
       - ${HOST_DERIVED_ROOT:-./derived}:/derived
       - ~/.cache/huggingface:/opt/cache/huggingface
+      # Weights not on Hugging Face (PartHOE)
+      - ${HOST_CHECKPOINT_DIR:-./checkpoints}:/opt/checkpoints
     shm_size: "${SHM_SIZE:-8g}"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\""]

@@ -528,12 +528,7 @@ Depth Boxfittingは、以下のフローで行われます
     - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。（**未実装**）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
         - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: Orient-Anything-2で補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。元の角度から±90度回転する場合、以下手順で、元の長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）し、見えている面は動かさずに反対側の面のみを動かし、見えていない面は両側面の中心を固定して反対側の面を含めた両面を対称に動かす（車両系を想定）
-            - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
-            - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
-            - 以下のように面が見えているかを判定する
-                - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
-                - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。ボックスの8頂点の位置は変更せず、ただ軸方向のみを修正する
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
 - 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの方向、高さ、幅、長さ補正を実施する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（**未実装**）
@@ -693,6 +688,8 @@ Depth Boxfittingは、以下の段階ごとに実施する（進捗のtotalは3�
 ### 推論モデルの実装
 
 深度推定のDepth-Anything-3・MapAnythingモデルは、GitHubの公式リポジトリ版（コミットまたはタグを固定してインストール）を使用するが、重みはHuggingFaceから自動ダウンロードされる（HF_HOMEにホストの~/.cache/huggingfaceフォルダがマウントされ、ホストと共有される）。モデルはリクエストの`depth_model`（UIのWeightsパラメータ）で選択する。別のモデルが載っていれば解放してから載せる（`BoxFittingPipeline.set_depth_model`）。Pose-conditioned推論の実装は`webapp/inference/app/models_impl/da3_depth.py`と`webapp/inference/app/models_impl/map_anything_depth.py`の`predict_pose_conditioned_depth`関数を参照。
+
+ボックス角度の再推定に使うPartHOE（歩行者の向き推定）は、GitHubの公式リポジトリ（https://github.com/zhaojieting/Part_HOE 、コミット固定）を`/opt/third_party/Part_HOE`（`settings.PARTHOE_ROOT`）にcloneし、torchのみで動く`tensorrt/nn_utils.py`の`MinimalPartHOE`をファイルパスからロードして使う（`lib/`側はtimm等の追加依存が必要なため使わない）。重みはHuggingFaceに無いため、初回ロード時にGoogle Drive（`settings.PARTHOE_CHECKPOINT_URL`）から`settings.CHECKPOINT_DIR / settings.PARTHOE_CHECKPOINT`（既定`/opt/checkpoints/part_hoe/parthoe_s.pth`。composeでホストの`webapp/checkpoints`をマウント）へ自動ダウンロードする。入力は人物クロップ（RGB、256×192にリサイズしImageNetの平均・標準偏差で正規化）、出力は72ビン（5度刻み）の向きの確率。実装は`webapp/inference/app/models_impl/part_hoe.py`を参照。
 
 Depth-Anything-3のモデルインスタンスは以下のように作成する
 

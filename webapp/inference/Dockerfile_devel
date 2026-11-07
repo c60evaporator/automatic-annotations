@@ -7,8 +7,9 @@ FROM jidohub/base-cu128-devel-ubuntu22.04:latest
 # Versions of the official repositories to install
 ARG DA3_COMMIT=3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
 ARG MAPANYTHING_VERSION=v1.1.3
+ARG PARTHOE_COMMIT=6848ad2477dad39c2c1caf3d1fc3d7a5f1970363
 
-# Folder for cloning Depth-Anything-3/MapAnything (/workspace is hidden by the bind mount)
+# Folder for cloning Depth-Anything-3/MapAnything/Part_HOE (/workspace is hidden by the bind mount)
 ENV THIRD_PARTY_ROOT=/opt/third_party
 RUN mkdir -p ${THIRD_PARTY_ROOT}
 
@@ -67,6 +68,15 @@ RUN python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))
 RUN python -c "import torch; torch.hub.list('facebookresearch/dinov2', trust_repo=True)"
 
 ############################
+# PartHOE
+############################
+# Only MinimalPartHOE in tensorrt/nn_utils.py is used (torch only, no extra dependencies)
+WORKDIR ${THIRD_PARTY_ROOT}
+RUN git clone https://github.com/zhaojieting/Part_HOE.git \
+    && git -C Part_HOE checkout ${PARTHOE_COMMIT}
+ENV PARTHOE_ROOT=${THIRD_PARTY_ROOT}/Part_HOE
+
+############################
 # Other dependencies
 ############################
 # Patchwork++ (ground removal) and open3d (point cloud processing)
@@ -91,6 +101,9 @@ from transformers import GroundingDinoForObjectDetection, Sam2Model, Sam2VideoMo
 import depth_anything_3.api; \
 import mapanything.models; \
 import open3d, pypatchworkpp, cv2, fastapi, shapely; \
+import importlib.util, os; \
+spec = importlib.util.spec_from_file_location('parthoe_nn_utils', os.path.join(os.environ['PARTHOE_ROOT'], 'tensorrt/nn_utils.py')); \
+spec.loader.exec_module(importlib.util.module_from_spec(spec)); \
 print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__)"
 
 ############################

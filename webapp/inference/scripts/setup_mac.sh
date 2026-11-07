@@ -17,6 +17,7 @@ TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.24.1}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.9.1}"
 DA3_COMMIT="${DA3_COMMIT:-3d835ec1a5802d64a8b8b15f817a1ab54809bfe4}"
 MAPANYTHING_VERSION="${MAPANYTHING_VERSION:-v1.1.3}"
+PARTHOE_COMMIT="${PARTHOE_COMMIT:-6848ad2477dad39c2c1caf3d1fc3d7a5f1970363}"
 
 INFERENCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${INFERENCE_DIR}/../.." && pwd)"
@@ -113,6 +114,17 @@ pip_install -c "${CONSTRAINTS}" --no-deps -e "${MAPANYTHING_DIR}"
 "${PYTHON}" -c "import torch; torch.hub.list('facebookresearch/dinov2', trust_repo=True)"
 
 ############################
+# PartHOE
+############################
+# Only MinimalPartHOE in tensorrt/nn_utils.py is used (torch only, no extra dependencies)
+PARTHOE_DIR="${THIRD_PARTY_ROOT}/Part_HOE"
+if [[ ! -d "${PARTHOE_DIR}" ]]; then
+    git clone https://github.com/zhaojieting/Part_HOE.git "${PARTHOE_DIR}"
+fi
+git -C "${PARTHOE_DIR}" fetch --quiet origin
+git -C "${PARTHOE_DIR}" checkout --quiet "${PARTHOE_COMMIT}"
+
+############################
 # Other dependencies
 ############################
 # Patchwork++ (ground removal) and open3d (point cloud processing)
@@ -134,6 +146,9 @@ from transformers import GroundingDinoForObjectDetection, Sam2Model, Sam2VideoMo
 import depth_anything_3.api; \
 import mapanything.models; \
 import open3d, pypatchworkpp, cv2, fastapi, shapely; \
+import importlib.util; \
+spec = importlib.util.spec_from_file_location('parthoe_nn_utils', '${PARTHOE_DIR}/tensorrt/nn_utils.py'); \
+spec.loader.exec_module(importlib.util.module_from_spec(spec)); \
 assert torch.backends.mps.is_available(), 'MPS が使えません'; \
 torch.randn(256, 256) @ torch.randn(256, 256); \
 print('smoke test OK: numpy', numpy.__version__, '/ torch', torch.__version__, '/ mps available')"

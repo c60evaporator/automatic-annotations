@@ -97,7 +97,7 @@ services:
       # Weights downloaded from Hugging Face (GroundingDINO, SAM2, SigLIP2, Depth-Anything-3, MapAnything).
       # Mounted to HF_HOME of the image (/opt/cache/huggingface)
       - ~/.cache/huggingface:/opt/cache/huggingface
-      # Weights for GroundingDINO and SAM2 (GitHub version only)
+      # Weights not on Hugging Face (PartHOE; GroundingDINO and SAM2 for the GitHub version)
       - ./checkpoints:/opt/checkpoints
     shm_size: "${SHM_SIZE:-8g}"  # --shm-size
     healthcheck:
