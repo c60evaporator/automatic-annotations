@@ -359,7 +359,7 @@ class Settings(BaseSettings):
     # インスタンスの LiDAR 点がこの数以上なら、**深度点群を使わない**。
     # LiDAR だけで形が十分に取れる場合、深度推定の外れ値が混ざるほうが害になる。
     # 0 なら無効（常に深度点群も使う）
-    LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 100
+    LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT: int = 60
     LIDAR_MAX_POINTS_FOR_DEPTH_MAX: int = 500
     # 深度補正（最終の補正）で、点ごとの対応（LiDAR 点と、その周囲の残った
     # 深度点の予測深度の中央値）から係数を求めるのに必要な対応点の数。

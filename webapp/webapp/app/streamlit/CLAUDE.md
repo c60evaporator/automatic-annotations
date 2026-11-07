@@ -276,7 +276,11 @@
             - Distance Filter: さらにDistance Filterを適用した点群（対象外のラベルはL-shape Filterと同じ）
         - Depth Instanceラジオボタン: Depth点群を補正前（raw）と、LiDARを基準に補正した後（LiDAR corrected）のどちらで表示するか（デフォルトはraw）。補正できなかったインスタンスは補正前で表示し、LiDAR corrected選択時はDepth点群を使わなかった（LiDARのみで当てはめた）インスタンスのDepth点群は表示しない
         - L-shape Filterチェックボックス: L-shape Filterの途中経過を重ねて表示する（赤い×／＋が手前輪郭の点（Depth／LiDAR）、半透明の面が検出したL字。面の色はInstance Colorの指定に従う）。可視化情報の無い古いrunのインスタンスがあれば件数を表示する
-        - Fitted Boxesチェックボックス: チェックするとBox Fittingでフィッティングされた3Dバウンディングボックスを重ねて表示（色はInstance Colorの指定に従う）
+        - Fitted Boxesラジオボタン: 以下の選択肢に応じて、フィッティングされた3Dバウンディングボックスを重ねて表示（色はInstance Colorの指定に従う。First Fit・Local Correctedの記録元と古いrun・手修正ボックスの扱いはBox Fittingタブと同じ）
+            - None: ボックスを表示しない（デフォルト選択はこれにする）
+            - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
+            - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
+            - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
@@ -286,10 +290,14 @@
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: インスタンスごと点群とフィッティングした3Dバウンディングボックスを表示するキャンバスのみを設置
             - チェックしている場合: 左右にキャンバスを並べ、左側のキャンバスにはGround truthのバウンディングボックス（基準ego座標に変換し、ラベル色で表示）を、右側のキャンバスにはインスタンスごと点群とフィッティングしたバウンディングボックスを重ねて表示（左右で同じ表示範囲に揃える）
-        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Colorで指定した色で表示）。Use LiDAR=Falseのrunでは無効（デフォルトはオフ）
+        - LiDAR Instancesチェックボックス: チェックするとインスタンスごとのLiDAR点群を表示（中抜けマーカーで、Instance Colorで指定した色で表示）。Use LiDAR=Falseのrunでは無効（デフォルトはrunがUse LiDARならオン）
         - Depth Instancesチェックボックス: チェックするとインスタンスごとのDepth点群を表示（円形マーカーで、Instance Colorで指定した色で表示。デフォルトはオン）。Depth点群を使わなかったインスタンスのDepth点群は表示しない
-        - Convex-Hullチェックボックス: チェックすると当てはめに使った凸包を重ねて表示（デフォルトはオフ）
+        - Convex-Hullチェックボックス: チェックすると当てはめに使った凸包を重ねて表示（デフォルトはオン）
         - Depth Instanceラジオボタン: Depth点群を補正前（raw）と補正後（LiDAR corrected）のどちらで表示するか（デフォルトはLiDAR corrected。当てはめに使っているのが補正後の点群なので、rawだとボックスと点群がずれて見えるため）
+        - Fitted Boxesラジオボタン: 以下の選択肢に応じて、表示されるバウンディングボックスを切り替える（色はInstance Colorの指定に従う。デフォルトはFinal Box。First Fit・Local Correctedは推論サーバーが`box_fittings.fit_metrics`の`first_fit`・`local_corrected`に記録したボックスで、記録の無い古いrunでは表示せず件数をキャプションに出す。手修正したボックスはどの選択肢でも手修正後のボックスを表示する）
+            - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
+            - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
+            - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け

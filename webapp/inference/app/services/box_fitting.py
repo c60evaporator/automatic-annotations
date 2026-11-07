@@ -132,7 +132,7 @@ def fit_box(
         "theta_search": result["theta_search"],
         "corners_xy": result["corners_xy"]["points"],
     }
-    return {
+    fit = {
         "center_ego": result["center_ego"],
         "size_wlh": result["size_wlh"],
         "yaw_ego": result["yaw_ego"],
@@ -140,3 +140,22 @@ def fit_box(
         "hull_xy": result["hull_xy"],
         "fit_metrics": fit_metrics,
     }
+    return record_box_stage(fit, BOX_STAGE_FIRST_FIT)
+
+
+# 補正途中のボックスを fit_metrics に残すときのキー（UI の Fitted Boxes で表示する）
+BOX_STAGE_FIRST_FIT = "first_fit"            # 当てはめた直後
+BOX_STAGE_LOCAL_CORRECTED = "local_corrected"  # 1 フレーム単位の補正（底面・角度）の後
+
+
+def record_box_stage(fit: dict[str, Any], stage: str) -> dict[str, Any]:
+    """その時点のボックスを fit_metrics[stage] に写して残す（fit をその場で書き換える）.
+
+    最終的なボックスは center_ego / size_wlh / yaw_ego に入る。
+    """
+    fit.setdefault("fit_metrics", {})[stage] = {
+        "center_ego": list(fit["center_ego"]),
+        "size_wlh": list(fit["size_wlh"]),
+        "yaw_ego": fit["yaw_ego"],
+    }
+    return fit

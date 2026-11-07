@@ -367,6 +367,44 @@ def has_box(item: dict) -> bool:
         item.get("center_ego") and item.get("size_wlh")
         and item.get("is_primary", True)
     )
+
+
+# Fitted Boxes: どの補正段階のボックスを表示するか。
+# First Fit / Local Corrected は推論サーバーが fit_metrics に残したもの、
+# Final Box は最終的なボックス（center_ego / size_wlh / yaw_ego）
+FITTED_BOX_NONE = "None"
+FITTED_BOX_FIRST = "First Fit"
+FITTED_BOX_LOCAL = "Local Corrected"
+FITTED_BOX_FINAL = "Final Box"
+FITTED_BOX_STAGES = (FITTED_BOX_FIRST, FITTED_BOX_LOCAL, FITTED_BOX_FINAL)
+FITTED_BOX_METRICS_KEY = {
+    FITTED_BOX_FIRST: "first_fit",
+    FITTED_BOX_LOCAL: "local_corrected",
+}
+OPT_PC_FITTED, W_PC_FITTED = "boxfit_pc_fitted", "_w_boxfit_pc_fitted"
+OPT_BF_FITTED, W_BF_FITTED = "boxfit_bf_fitted", "_w_boxfit_bf_fitted"
+FITTED_BOX_HELP = (
+    "First Fit: 当てはめた直後のボックス（convex_hull_moa 等）。"
+    "Local Corrected: 1 フレーム単位の補正（底面の高さ・角度）後。"
+    "Final Box: 複数フレームを考慮した補正（角度・高さ・幅・長さ）後の最終的なボックス"
+)
+
+
+def fitted_box_at(item: dict, stage: str) -> dict | None:
+    """指定した補正段階のボックス {center_ego, size_wlh, yaw_ego} を返す.
+
+    途中段階を記録していない古い run では None。
+    手修正したボックスは手修正後の値（Final Box）しか意味を持たないので、
+    どの段階でも最終的なボックスを返す
+    """
+    key = FITTED_BOX_METRICS_KEY.get(stage)
+    if key is None or item.get("manually_modified"):
+        return {"center_ego": item["center_ego"], "size_wlh": item["size_wlh"],
+                "yaw_ego": item.get("yaw_ego") or 0.0}
+    box = (item.get("fit_metrics") or {}).get(key)
+    if not box or not box.get("center_ego") or not box.get("size_wlh"):
+        return None
+    return {**box, "yaw_ego": box.get("yaw_ego") or 0.0}
 # Box on Cam タブの表示オプション
 OPT_CAM_COLOR, W_CAM_COLOR = "boxfit_cam_color", "_w_boxfit_cam_color"
 OPT_CAM_TEXT, W_CAM_TEXT = "boxfit_cam_text", "_w_boxfit_cam_text"
@@ -1513,11 +1551,14 @@ with pointcloud_tab_view:
                   "Depth Instance=raw だと点群と少しずれて見える"),
         )
 
-        show_fitted_boxes = st.checkbox(
-            "Fitted Boxes", value=False, key="_w_pc_fitted_boxes",
+        S.init_sticky(W_PC_FITTED, OPT_PC_FITTED, FITTED_BOX_NONE)
+        pc_fitted_stage = st.radio(
+            "Fitted Boxes", (FITTED_BOX_NONE, *FITTED_BOX_STAGES), key=W_PC_FITTED,
+            on_change=S.sync_sticky, args=(W_PC_FITTED, OPT_PC_FITTED),
             help=("Box Fitting で推定した 3D ボックスを点群に重ねる。"
-                  "色は Instance Color の指定に従う"),
+                  "色は Instance Color の指定に従う。" + FITTED_BOX_HELP),
         )
+        show_fitted_boxes = pc_fitted_stage != FITTED_BOX_NONE
 
         S.init_sticky(W_PC_COLOR, OPT_PC_COLOR, COLOR_MODE_LABEL)
         pc_color_mode = st.radio(
@@ -1540,6 +1581,8 @@ with pointcloud_tab_view:
     # 途中段階を見るために、推論時と同じパラメータで自動的に再計算したか
     auto_refilter = False
     fitted_boxes: list[dict] = []
+    # 途中段階のボックスを記録していない（古い run の）ボックス数
+    fitted_boxes_missing = 0
     refilter_summary: dict[str, int] | None = None
 
     if view_run_id:
@@ -1740,13 +1783,17 @@ with pointcloud_tab_view:
                     key = instance_legend_key(fit, pc_color_mode)
                     if enabled_keys is not None and key not in enabled_keys:
                         continue
+                    box = fitted_box_at(fit, pc_fitted_stage)
+                    if box is None:
+                        fitted_boxes_missing += 1
+                        continue
                     fitted_boxes.append({
                         "key": f"{fit['label']}#{fit['track_id']}",
                         # 点群と同じ色にして、どの点群に当てた箱かを分かるようにする
                         "color": instance_color(fit, pc_color_mode),
-                        "center": fit["center_ego"],
-                        "size_wlh": fit["size_wlh"],
-                        "yaw": fit["yaw_ego"],
+                        "center": box["center_ego"],
+                        "size_wlh": box["size_wlh"],
+                        "yaw": box["yaw_ego"],
                     })
 
     with view_col:
@@ -2045,6 +2092,10 @@ with pointcloud_tab_view:
                     "（可視化に対応する前の run）。再推論するか、Filter Params で "
                     "Apply すると表示されます"
                 )
+            if fitted_boxes_missing:
+                st.caption(f"{pc_fitted_stage} を記録していない run のため、"
+                           f"ボックス {fitted_boxes_missing} 件を表示していません"
+                           "（Final Box なら表示できます）")
             if refilter_summary is not None:
                 s = refilter_summary
                 raw_total, kept_total, n_inst = s["raw"], s["kept"], s["instances"]
@@ -2141,7 +2192,7 @@ with fitting_tab_view:
         )
         bf_has_lidar = bool(run_info and run_info["use_lidar"])
         show_bf_lidar = st.checkbox(
-            "LiDAR Instances", value=False,
+            "LiDAR Instances", value=bf_has_lidar,
             # PointCloud タブと同じ理由で run ごとにキーを分ける
             key=f"_w_bf_lidar_{view_run_id}",
             disabled=not bf_has_lidar,
@@ -2151,7 +2202,7 @@ with fitting_tab_view:
         show_bf_depth = st.checkbox(
             "Depth Instances", value=True, key="_w_bf_depth")
         show_hull = st.checkbox(
-            "Convex-Hull", value=False, key="_w_bf_hull",
+            "Convex-Hull", value=True, key="_w_bf_hull",
             help="当てはめに使った凸包を重ねる")
         S.init_sticky(W_BF_DEPTH_INST, OPT_BF_DEPTH_INST, DEPTH_INSTANCE_CORRECTED)
         bf_depth_mode = st.radio(
@@ -2161,6 +2212,12 @@ with fitting_tab_view:
                   "（LiDAR corrected）のどちらで表示するか。"
                   "**当てはめは補正後の点群で行っている**ので、"
                   "ボックスと見比べるなら LiDAR corrected を選ぶ"),
+        )
+        S.init_sticky(W_BF_FITTED, OPT_BF_FITTED, FITTED_BOX_FINAL)
+        bf_fitted_stage = st.radio(
+            "Fitted Boxes", FITTED_BOX_STAGES, key=W_BF_FITTED,
+            on_change=S.sync_sticky, args=(W_BF_FITTED, OPT_BF_FITTED),
+            help="表示するボックスの補正段階。" + FITTED_BOX_HELP,
         )
 
         S.init_sticky(W_BF_COLOR, OPT_BF_COLOR, COLOR_MODE_LABEL)
@@ -2200,18 +2257,24 @@ with fitting_tab_view:
         def _bf_color(item: dict) -> str:
             return instance_color(item, bf_color_mode)
 
-        # 推定ボックス（当てはめできたものだけ）
-        est_boxes = [
-            {
+        # 推定ボックス（当てはめできたものだけ）。Fitted Boxes で選んだ補正段階で描く
+        est_boxes = []
+        bf_boxes_missing = 0
+        for fit in bf_flat:
+            if not has_box(fit):
+                continue
+            box = fitted_box_at(fit, bf_fitted_stage)
+            if box is None:
+                bf_boxes_missing += 1
+                continue
+            est_boxes.append({
                 "key": f"{fit['label']}#{fit['track_id']}",
                 "color": _bf_color(fit),
-                "center_xy": fit["center_ego"][:2],
-                "width": fit["size_wlh"][0],
-                "length": fit["size_wlh"][1],
-                "yaw": fit["yaw_ego"] or 0.0,
-            }
-            for fit in bf_flat if has_box(fit)
-        ]
+                "center_xy": box["center_ego"][:2],
+                "width": box["size_wlh"][0],
+                "length": box["size_wlh"][1],
+                "yaw": box["yaw_ego"],
+            })
         hulls = [
             {"key": f"{fit['label']}#{fit['track_id']}", "color": _bf_color(fit),
              "points": fit["hull_xy"]["points"]}
@@ -2277,6 +2340,10 @@ with fitting_tab_view:
                 f"インスタンス {len(bf_flat)} 件 / ボックス生成 {len(est_boxes)} 件"
                 + (f" / GT {len(gt_boxes)} 件" if compare_gt else "")
             )
+            if bf_boxes_missing:
+                st.caption(f"{bf_fitted_stage} を記録していない run のため、"
+                           f"ボックス {bf_boxes_missing} 件を表示していません"
+                           "（Final Box なら表示できます）")
             render_merge_diagnostics(run_info)
             common = dict(
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,

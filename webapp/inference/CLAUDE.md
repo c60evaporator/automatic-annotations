@@ -523,12 +523,12 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: 基準ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
     - global_track点群のz座標の分位点（Top Estimationのz_percentileパラメータで指定）に基づき上面高さを決める（後で複数フレームを考慮して補正）
 - 同一フレーム同ラベル別カメラでボックスの重なりが大きいインスタンスを結合（基本は上で実施したInter-cam mergeと同様に）し、再度BoxFittingを実施（**未実装**）
-- global_track_idごとに以下手順でAIモデルによるボックス角度の再推定を実施（**未実装**。`settings.BOX_ORIENTATION_ESTIMATIONS`も未追加で、実装時に追加する。後述の疑似コードは実装方針を示すもの）
+- global_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施（**未実装**。`settings.BOX_ORIENTATION_ESTIMATIONS`も未追加で、実装時に追加する。後述の疑似コードは実装方針を示すもの）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
     - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度推定を実施。（**未実装**）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
         - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything"`のとき: Orient-Anything-2で補正。補正時はボックスのXY方向中心を固定し、yaw角のみを動かす
-        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。元の角度から±90度回転する場合、以下手順で、元の長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）し、見えている面は動かさずに反対側の面のみを動かし、見えていない面は両側面の中心を固定して反対側の面を含めた両面を対称に動かす
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_fourdir"`のとき: 元々のボックス中心から各側面に伸びる4方向のうち、Orient-Anything-2で推定した角度に最も近いものをX軸として採用。元の角度から±90度回転する場合、以下手順で、元の長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）し、見えている面は動かさずに反対側の面のみを動かし、見えていない面は両側面の中心を固定して反対側の面を含めた両面を対称に動かす（車両系を想定）
             - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
             - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
             - 以下のように面が見えているかを判定する
@@ -559,6 +559,9 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の幅を、そのglobal_track共通のボックス幅とする
         - `settings.BOX_WIDTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - 補正前の寸法と固定の仕方は`fit_metrics["size_correction"]`に記録する
+- 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
+    - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
+    - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定。角度再推定は未実装）の後、global_track_id単位の補正の前
 
 ### 推論に使用するパラメータ
 

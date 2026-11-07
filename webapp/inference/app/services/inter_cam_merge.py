@@ -785,7 +785,12 @@ def merge_and_fit(
     （結合後・深度＋LiDAR）で数える。判定は **フレームごと**に行うので、
     遠方で点が減ったフレームだけボックスが欠け、トラックは残る。
     """
-    from app.services.box_fitting import fit_box, method_for_label
+    from app.services.box_fitting import (
+        BOX_STAGE_LOCAL_CORRECTED,
+        fit_box,
+        method_for_label,
+        record_box_stage,
+    )
 
     overlap_threshold = float(merge_params.get("overlap_threshold", 0.3))
     max_gap = float(merge_params.get("max_hull_gap", 0.5))
@@ -960,6 +965,8 @@ def merge_and_fit(
                     fit, box_fitting_params, label,
                     ground_points=ground_points, use_lidar=use_lidar,
                 )
+                # 1 フレーム単位の補正はここまで（トラック単位の寸法補正の前）
+                record_box_stage(fit, BOX_STAGE_LOCAL_CORRECTED)
             # ボックスは代表 1 行だけに入れる。全行へ入れると BEV 表示で
             # 同じ箱が重なって見える
             for member in members:

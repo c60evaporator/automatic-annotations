@@ -19,7 +19,12 @@ import numpy as np
 
 from app.core.logging import get_logger
 from common.mask_rle import decode_rle, encode_rle, rle_bbox
-from app.services.box_fitting import convex_hull_xy
+from app.services.box_fitting import (
+    BOX_STAGE_FIRST_FIT,
+    BOX_STAGE_LOCAL_CORRECTED,
+    convex_hull_xy,
+    record_box_stage,
+)
 from common.point_ops import downsample_to_max, points_to_json
 from common.transform3d import scale_intrinsic
 
@@ -328,4 +333,7 @@ class BoxFittingStub:
                     convex_hull_xy(depth_points[:, :2]), 3).tolist()},
                 "fit_metrics": {"method": "stub", "occlusion_area": 0.0},
             })
+            # 本実装と同じく補正途中のボックスも残す（スタブは補正しないので同じ箱）
+            record_box_stage(results[-1], BOX_STAGE_FIRST_FIT)
+            record_box_stage(results[-1], BOX_STAGE_LOCAL_CORRECTED)
         return results

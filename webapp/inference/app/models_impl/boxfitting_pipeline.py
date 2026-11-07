@@ -28,7 +28,12 @@ from PIL import Image
 
 from app.core import models as model_registry
 from app.core.logging import get_logger
-from app.services.box_fitting import fit_box, method_for_label
+from app.services.box_fitting import (
+    BOX_STAGE_LOCAL_CORRECTED,
+    fit_box,
+    method_for_label,
+    record_box_stage,
+)
 from app.services.depth_ops import (
     close_mask,
     is_small_mask,
@@ -800,6 +805,7 @@ class BoxFittingPipeline:
                     fit, box_fitting_params, instance.get("label"),
                     ground_points=ground_points, use_lidar=use_lidar,
                 )
+                record_box_stage(fit, BOX_STAGE_LOCAL_CORRECTED)
                 entry.update(fit)
                 entry["status"] = "fitted"
             results.append(entry)
