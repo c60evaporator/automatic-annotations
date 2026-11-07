@@ -399,9 +399,10 @@ W_BF_ORIENTATION = "_w_bf_orientation"
 # 向き推定の矢印の長さ = ボックス長の半分 + これ [m]（ボックスの外まで伸ばす）
 ORIENTATION_ARROW_EXTRA = 1.0
 ORIENTATION_HELP = (
-    "AI モデル（PartHOE / Orient-Anything-2）で推定したボックスの向きを、"
-    "ボックス中心から伸びる矢印で描く。ボックスには反映していない。"
-    "推定するラベルと方式は config の BOX_ORIENTATION_ESTIMATIONS"
+    "AI モデル（PartHOE / Orient-Anything V1 Large）で推定したボックスの向きを、"
+    "ボックス中心から伸びる矢印で描く。推定するラベルと方式は config の "
+    "BOX_ORIENTATION_ESTIMATIONS。Box Fitting の実行時に推定してボックスへ反映する"
+    "（向き推定を組み込む前の run は、推定だけを後から実行できる）"
 )
 
 
@@ -417,6 +418,23 @@ def orientation_alpha_text(orientation: dict) -> str:
     if alpha is None:
         return ""
     return f"<br>alpha={alpha:.0f}（{ORIENTATION_ALPHA_LABELS.get(int(alpha), '?')}）"
+
+
+# ボックスへの反映方法（Box Fitting の実行時に推定・反映した run のみ記録がある）
+ORIENTATION_APPLIED_LABELS = {
+    "yaw_only": "中心を固定して yaw を差し替え",
+    "long_axis": "長辺の前後を選択",
+}
+
+
+def orientation_applied_text(orientation: dict) -> str:
+    """ホバー表示用の、ボックスへの反映方法."""
+    applied = orientation.get("applied")
+    if not applied:
+        return ""
+    before = orientation.get("yaw_before")
+    before_text = f"、反映前 yaw={np.degrees(before):.0f}°" if before is not None else ""
+    return f"<br>反映: {ORIENTATION_APPLIED_LABELS.get(applied, applied)}{before_text}"
 
 
 def orientation_estimation_of(item: dict) -> dict | None:
@@ -1001,6 +1019,14 @@ with param_col:
                     grouped.setdefault(str(_m) if _m else "none", []).append(_lb)
                 return " / ".join(f"{m}: {', '.join(ls)}" for m, ls in grouped.items())
 
+            st.markdown("**Orientation Estimation**")
+            st.caption(
+                "方式: " + _correction_text(settings.BOX_ORIENTATION_ESTIMATIONS)
+                + "（config の BOX_ORIENTATION_ESTIMATIONS）。底面推定の後に AI モデルで"
+                "向きを推定してボックスへ反映する。orient_anything_combined は長辺が"
+                f"短辺の標準値 × {settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO} 以上なら"
+                "元のボックスの前後を選ぶだけ（config の ORIENT_ANYTHING_SWITCH_LENGTH_RATIO）"
+            )
             st.caption(
                 "以下はグローバルトラックの全フレームから共通の寸法を決めて当て直す"
                 "（percentile: 全フレームの分位点 / default: DEFAULT_BOX_SIZES）"
@@ -1086,6 +1112,11 @@ box_fitting_params = {
     },
     # 当てはめに使う点数の下限。結合後のグローバルトラック単位で判定する
     "min_points": int(boxfit_min_points),
+    # AI モデルによる向きの再推定（底面推定の後・寸法補正の前にボックスへ反映）
+    "orientation": {
+        "methods": dict(settings.BOX_ORIENTATION_ESTIMATIONS),
+        "switch_length_ratio": float(settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO),
+    },
     # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）
     "lshape": {
         "enabled": bool(lshape_enabled),
@@ -1177,9 +1208,18 @@ def _save_completed_job(job: dict) -> None:
 
 
 def render_orientation_status(
-    params_id: str, num_arrows: int, *, run_has_orientation: bool
+    params_id: str, num_arrows: int, *, run_has_orientation: bool,
+    applied_in_pipeline: bool = False,
 ) -> None:
-    """向き推定の件数表示と、実行ボタン（表示中の run に対して推定する）."""
+    """向き推定の件数表示と、実行ボタン（表示中の run に対して推定する）.
+
+    Box Fitting の実行時に推定・反映した run ではボタンを出さない
+    （後から推定し直すと、記録だけが置き換わりボックスと食い違うため）
+    """
+    if applied_in_pipeline:
+        st.caption(f"Orientation Estimation: このサンプルで {num_arrows} 件"
+                   "（Box Fitting の実行時に推定し、ボックスへ反映済み）")
+        return
     info_col, button_col = st.columns([4, 1])
     with info_col:
         if run_has_orientation:
@@ -2364,6 +2404,7 @@ with fitting_tab_view:
                         f"conf={orientation['confidence']:.2f} "
                         f"cam={orientation['channel']}"
                         + orientation_alpha_text(orientation)
+                        + orientation_applied_text(orientation)
                     ),
                 })
             if box is None:
@@ -2455,6 +2496,8 @@ with fitting_tab_view:
                         for items_ in load_box_fittings(view_run_id).values()
                         for fit in items_
                     ),
+                    applied_in_pipeline="orientation" in (
+                        (run_info or {}).get("box_fitting_params") or {}),
                 )
             common = dict(
                 max_points_per_trace=settings.POINTCLOUD_DISPLAY_MAX_POINTS,

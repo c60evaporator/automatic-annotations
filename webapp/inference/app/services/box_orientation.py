@@ -15,7 +15,7 @@ from typing import Any
 ORIENTATION_METHOD_PART_HOE = "part_hoe"
 ORIENTATION_METHOD_ORIENT_ANYTHING = "orient_anything"
 # 推定は orient_anything と同じ。ボックスへの反映方法だけが異なる
-# （長辺が十分長ければ元のボックスの前後どちらかを選ぶ。反映は未実装）
+# （長辺が十分長ければ元のボックスの前後どちらかを選ぶ）
 ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED = "orient_anything_combined"
 # 実装済みの方式
 SUPPORTED_ORIENTATION_METHODS = (
@@ -47,6 +47,16 @@ ORIENTATION_STATUS_ESTIMATED = "estimated"
 ORIENTATION_STATUS_NO_BOX = "no_box"
 ORIENTATION_STATUS_UNSUPPORTED = "unsupported"
 ORIENTATION_STATUS_FAILED = "failed"
+
+# ボックスへの反映方法（fit_metrics["orientation_estimation"]["applied"] に残す）
+#   yaw_only  … XY 中心と寸法を固定し、yaw だけを推定値にする
+#   long_axis … 元のボックスの長辺の前後のうち推定に近い方を新しい X 軸にする
+#               （8 頂点は動かさず、軸の取り方だけを変える）
+ORIENTATION_APPLIED_YAW_ONLY = "yaw_only"
+ORIENTATION_APPLIED_LONG_AXIS = "long_axis"
+# orient_anything_combined で長辺を使うかの倍率の既定値（webapp の
+# ORIENT_ANYTHING_SWITCH_LENGTH_RATIO が box_fitting_params で渡ってくる）
+DEFAULT_SWITCH_LENGTH_RATIO = 1.2
 
 
 def group_candidates(
@@ -118,3 +128,59 @@ def camera_relative_to_yaw(
     dx = math.cos(theta) * fx - math.sin(theta) * rx
     dy = math.cos(theta) * fy - math.sin(theta) * ry
     return math.atan2(dy, dx)
+
+
+def wrap_angle(rad: float) -> float:
+    """角度を [-π, π) にする."""
+    return (rad + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def apply_orientation(
+    box: dict[str, Any],
+    method: str,
+    yaw_estimated: float,
+    *,
+    standard_width: float | None,
+    switch_length_ratio: float = DEFAULT_SWITCH_LENGTH_RATIO,
+) -> dict[str, Any]:
+    """推定した向きをボックスへ反映する（box の yaw_ego / size_wlh をその場で書き換える）.
+
+    Args:
+        box: ``center_ego`` / ``size_wlh``（w, l, h。l が yaw 方向）/ ``yaw_ego`` を持つ
+        method: BOX_ORIENTATION_ESTIMATIONS の方式
+        yaw_estimated: 推定した向き（基準 ego 座標の yaw [rad]）
+        standard_width: ラベルの短辺の標準値（DEFAULT_BOX_SIZES の width）。
+            orient_anything_combined の切り替え判定に使う。None なら yaw_only
+        switch_length_ratio: 長辺が standard_width × これ以上なら long_axis
+
+    Returns:
+        記録用の ``{"applied", "yaw_before", "long_side", "switch_length"}``
+    """
+    yaw_before = float(box["yaw_ego"])
+    width, length, height = (float(v) for v in box["size_wlh"])
+    long_side = max(width, length)
+    switch_length = (
+        standard_width * switch_length_ratio if standard_width else None
+    )
+    record: dict[str, Any] = {
+        "yaw_before": yaw_before,
+        "long_side": long_side,
+        "switch_length": switch_length,
+    }
+
+    if (method == ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED
+            and switch_length is not None and long_side >= switch_length):
+        # 長辺の向き（size_wlh の l が yaw 方向。w の方が長ければ 90 度回した向き）
+        long_yaw = yaw_before if length >= width else yaw_before + math.pi / 2.0
+        # 長辺の前後 2 方向のうち、推定に近い方を X 軸（length の向き）にする
+        candidates = (long_yaw, long_yaw + math.pi)
+        best = min(candidates, key=lambda y: abs(wrap_angle(y - yaw_estimated)))
+        box["yaw_ego"] = wrap_angle(best)
+        box["size_wlh"] = [min(width, length), long_side, height]
+        record["applied"] = ORIENTATION_APPLIED_LONG_AXIS
+        return record
+
+    # XY 中心と寸法はそのまま、yaw だけ差し替える
+    box["yaw_ego"] = wrap_angle(yaw_estimated)
+    record["applied"] = ORIENTATION_APPLIED_YAW_ONLY
+    return record

@@ -488,15 +488,19 @@ class Settings(BaseSettings):
         "traffic_cone": "convex_hull_moa",
         "barrier": "convex_hull_moa",
     }
-    # ラベルごとの AI モデルによるボックス向きの再推定方式。None は推定しない。
-    #   part_hoe: PartHOE（人物の向き推定）
-    #   orient_anything: Orient-Anything V1 Large（物体の向き推定。背景はトラッキングのマスクで落とす）
-    #   orient_anything_combined: 推定は orient_anything と同じ。長辺が十分長いボックスは
-    #     元のボックスの前後どちらかを選ぶ（ボックスへの反映は未実装）
-    # 推論サーバーへリクエストで渡す（ラベル体系は webapp 側の設定のため）
+    # ラベルごとの AI モデルによるボックス向きの再推定方式。None は推定しない（当てはめた向きのまま）。
+    # Box Fitting のパス 2（底面推定の後・寸法補正の前）で推定し、ボックスへ反映する。
+    #   part_hoe: PartHOE（人物の向き推定）。XY 中心を固定して yaw だけを推定値にする
+    #   orient_anything: Orient-Anything V1 Large（物体の向き推定。背景はトラッキングのマスクで落とす）。
+    #     XY 中心を固定して yaw だけを推定値にする
+    #   orient_anything_combined: 推定は orient_anything と同じ。長辺が短辺の標準値
+    #     （DEFAULT_BOX_SIZES の width）× ORIENT_ANYTHING_SWITCH_LENGTH_RATIO 以上なら、
+    #     元のボックスの長辺の前後のうち推定に近い方を X 軸にする（8 頂点は動かさない）。
+    #     未満なら orient_anything と同じ
+    # 推論サーバーへ box_fitting_params["orientation"] で渡す（ラベル体系は webapp 側の設定のため）
     BOX_ORIENTATION_ESTIMATIONS: dict[str, str | None] = {
-        "car": "orient_anything",
-        "truck": "orient_anything",
+        "car": "orient_anything_combined",
+        "truck": "orient_anything_combined",
         "bus": None,
         "trailer": None,
         "construction_vehicle": None,
@@ -506,6 +510,10 @@ class Settings(BaseSettings):
         "traffic_cone": None,
         "barrier": None,
     }
+    # orient_anything_combined で、長辺が短辺の標準値のこの倍率以上なら
+    # 長辺が写っているとみなし、元のボックスの前後を選ぶだけにする
+    # （長辺の面の点群があれば、当てはめた向きの方が AI の推定より正確なため）
+    ORIENT_ANYTHING_SWITCH_LENGTH_RATIO: float = 1.2
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1

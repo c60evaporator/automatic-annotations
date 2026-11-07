@@ -162,7 +162,8 @@ project-root/
                 ├── depth_ops.py, depth_correction.py, lidar_ops.py         # 深度→点群、LiDAR 基準の深度補正、LiDAR 読込・地面除去
                 ├── distance_filter.py, lshape_filter.py, refilter.py       # 点群ノイズ除去・保存済み深度からの再フィルタ
                 ├── inter_cam_merge.py       # カメラ間の同一インスタンス結合（global_track_id）
-                ├── box_orientation.py       # AI モデルによるボックス向き推定の前後処理（カメラ選択・yaw 変換）
+                ├── box_orientation.py       # AI モデルによるボックス向き推定の前後処理（カメラ選択・yaw 変換・ボックスへの反映）
+                ├── box_orientation_inference.py  # 向き推定モデルの実行（Box Fitting のパス 2 と向き推定ジョブで共有）
                 └── box_fitting.py, box_fitting_moa.py, box_bottom.py, box_size.py  # 3D ボックス当てはめと補正
 ```
 

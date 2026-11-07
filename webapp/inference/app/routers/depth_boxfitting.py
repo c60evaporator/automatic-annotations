@@ -8,7 +8,7 @@ Detection2D / Instance Tracking と同じジョブ方式に揃えてある。
                  （姿勢付きモデルは同一カメラの連続フレームをウィンドウで推定）
   2. LiDAR 統合  sample ごと。use_lidar に関係なく常に実行する
                  （UI が比較用に生 LiDAR と地面を表示できるようにする）
-  3. Box Fitting インスタンスごと
+  3. Box Fitting インスタンスごと（パス 2 で結合・当てはめ・向きの再推定・寸法補正）
 
 ## 進捗
 
@@ -287,6 +287,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
 
     # --- パス 2: グローバルトラックを決めて（結合して）から当てはめる ------
     merge_stats: dict[str, Any] = {}
+    orientation_stats: dict[str, int] = {}
     if not job.cancel_requested():
         from app.services.inter_cam_merge import merge_and_fit
 
@@ -294,7 +295,25 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
             done, message="カメラ間の結合" if merge_enabled else "ボックスの当てはめ"
         )
         try:
+            from app.services.box_orientation_inference import orient_fitted_groups
             from app.services.lidar_ops import load_ground_points
+
+            mask_by_instance = {i.instance_tracking_2d_id: i.mask_rle for i in req.instances}
+            camera_frames = {f.sample_data_token: f.model_dump() for f in req.camera_frames}
+
+            def orient_boxes(groups: list[dict[str, Any]]) -> None:
+                # 深度モデルは解放済み（use_gpu の外）。向き推定モデルを載せ替えて推定する
+                orientation_stats.update(orient_fitted_groups(
+                    groups,
+                    box_fitting_params=req.box_fitting_params,
+                    frame_by_token=camera_frames,
+                    mask_by_instance=mask_by_instance,
+                    reference_ego_poses=req.reference_ego_poses,
+                    dataroot=dataroot,
+                    cancelled=job.cancel_requested,
+                    on_model=lambda model: job.set_progress(
+                        done, message=f"向き推定（{model}）"),
+                ))
 
             merge_stats = merge_and_fit(
                 entries_by_sample,
@@ -307,6 +326,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                 ),
                 use_lidar=req.use_lidar,
                 merge_enabled=merge_enabled,
+                orient_boxes=orient_boxes,
             )
         except Exception as exc:  # noqa: BLE001
             # 結合に失敗しても点群は残す（当てはめだけ諦める）
@@ -328,6 +348,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
         "num_merged_instances": merge_stats.get("num_merged", 0),
         # 結合後の点数が下限に届かず当てはめを飛ばしたフレーム数
         "num_too_few_points": merge_stats.get("num_too_few_points", 0),
+        # AI モデルで向きを推定してボックスへ反映した数
+        "num_orientation_applied": orientation_stats.get("num_applied", 0),
         # 「なぜ結合されなかったか」を後から確認するための記録
         # 結合しない場合は照合していないので出さない
         "merge_diagnostics": (

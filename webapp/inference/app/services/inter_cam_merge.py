@@ -747,6 +747,7 @@ def merge_and_fit(
     ground_loader: Callable[[str], np.ndarray | None] | None = None,
     use_lidar: bool = False,
     merge_enabled: bool = True,
+    orient_boxes: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
     """カメラ跨ぎで結合し、グループごとに 3D ボックスを当てはめる.
 
@@ -763,6 +764,10 @@ def merge_and_fit(
         merge_enabled: False ならカメラ間の照合をせず、(カメラ, track_id) を
             そのままグローバルトラックにする。結合の有無に関わらず
             global_track_id を付け、トラック単位の寸法補正を同じ流れで行うため
+        orient_boxes: 当てはめたグループ（``{"global_track_id", "sample_token",
+            "label", "primary", "members"}``）をまとめて受け取り、AI モデルで
+            推定した向きを primary のボックスへ反映する。全フレームの当てはめ後・
+            寸法補正の前に 1 回だけ呼ぶ（モデルの読み込みを 1 回で済ませるため）
 
     Returns:
         ``{"num_groups", "num_merged"}``。entry は **その場で書き換える**
@@ -775,6 +780,8 @@ def merge_and_fit(
     3. グローバルトラック全体でラベルを多数決
     4. sample ごとに、グループの要約を結合して当てはめる
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
+    5. AI モデルによる向きの再推定と反映（orient_boxes）
+    6. グローバルトラック単位の寸法補正
 
     ## 点数の下限をここで判定する理由
 
@@ -901,6 +908,8 @@ def merge_and_fit(
     # 当てはめた代表行（トラック単位の寸法補正に使う）
     # [(global_track_id, ラベル, 行, センサー位置)]
     fitted_rows: list[tuple[str, str | None, dict[str, Any], tuple[float, float]]] = []
+    # 向きの再推定に渡すグループ（代表行と、推定に使うカメラを選ぶためのメンバー）
+    fitted_groups: list[dict[str, Any]] = []
     for sample_token, entries in entries_by_sample.items():
         groups: dict[str, list[dict[str, Any]]] = {}
         # その sample の地面点（底面推定用）。当てはめるときに 1 回だけ読む
@@ -965,8 +974,6 @@ def merge_and_fit(
                     fit, box_fitting_params, label,
                     ground_points=ground_points, use_lidar=use_lidar,
                 )
-                # 1 フレーム単位の補正はここまで（トラック単位の寸法補正の前）
-                record_box_stage(fit, BOX_STAGE_LOCAL_CORRECTED)
             # ボックスは代表 1 行だけに入れる。全行へ入れると BEV 表示で
             # 同じ箱が重なって見える
             for member in members:
@@ -976,6 +983,10 @@ def merge_and_fit(
                     member["status"] = "fitted"
                     member["is_primary"] = True
                     fitted_rows.append((global_id, label, member, tuple(origin)))
+                    fitted_groups.append({
+                        "global_track_id": global_id, "sample_token": sample_token,
+                        "label": label, "primary": member, "members": members,
+                    })
                 elif member is primary:
                     member["status"] = "not_fitted"
                     member["is_primary"] = True
@@ -984,13 +995,21 @@ def merge_and_fit(
                     member["status"] = "merged"
                     member["is_primary"] = False
 
-    # --- 5) グローバルトラック単位の寸法補正 ------------------------------
+    # --- 5) AI モデルによる向きの再推定 ----------------------------------
+    # 全フレームの当てはめが済んでからまとめて推定する（モデルを 1 回だけ載せる）
+    if orient_boxes is not None and fitted_groups:
+        orient_boxes(fitted_groups)
+    # 1 フレーム単位の補正（底面・向き）はここまで（トラック単位の寸法補正の前）
+    for _, _, member, _ in fitted_rows:
+        record_box_stage(member, BOX_STAGE_LOCAL_CORRECTED)
+
+    # --- 6) グローバルトラック単位の寸法補正 ------------------------------
     # 全フレームの箱がそろってから、トラック共通の高さ・幅・長さを当て直す
     from app.services.box_size import correct_box_sizes
 
     size_stats = correct_box_sizes(fitted_rows, box_fitting_params)
 
-    # --- 6) 診断情報 -----------------------------------------------------
+    # --- 7) 診断情報 -----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。
     # 閾値を緩めても結合されない場合、原因は閾値ではなく
     # 1 対 1 の割り当てやカメラ重複の保護であることが多い
