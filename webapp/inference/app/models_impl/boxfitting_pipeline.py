@@ -256,28 +256,15 @@ class BoxFittingPipeline:
         # 実際の取り付け高さを渡す（既定値のままだと車種差で外れる）
         sensor_height = float(calib["translation"][2])
 
-        points_lidar, ground_mask = merge_sweeps_with_ground(
-            target_sweeps, Path(dataroot), sensor_height=sensor_height
+        # 自車の反射は **インスタンス抽出より前**に落とす必要がある。
+        # 反射点は非常に密で、DBSCAN の最大クラスタとして勝ってしまうため
+        # 後段では救えない。sweep ごとに、その sweep の ego 座標で落とす
+        # （統合後に切ると過去の sweep の反射が移動ぶんずれて残る）
+        points_lidar, ground_mask, removed_ego = merge_sweeps_with_ground(
+            target_sweeps, Path(dataroot), sensor_height=sensor_height,
+            ego_box=ego_box or None,
         )
         points_ego = lidar_to_ego(points_lidar, calib)
-
-        # 自車の反射を落とす。**インスタンス抽出より前**に落とす必要がある。
-        # 反射点は非常に密で、DBSCAN の最大クラスタとして勝ってしまうため
-        # 後段では救えない。地面推定への影響も避けられる
-        if ego_box:
-            from app.services.lidar_ops import remove_ego_points
-
-            before = points_ego.shape[0]
-            points_ego, keep = remove_ego_points(
-                points_ego,
-                x_range=ego_box.get("x"),
-                y_range=ego_box.get("y"),
-                z_range=ego_box.get("z"),
-            )
-            ground_mask = ground_mask[keep]
-            removed_ego = before - points_ego.shape[0]
-        else:
-            removed_ego = 0
 
         path = output_dir / "lidar" / f"{frame['sample_token']}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)

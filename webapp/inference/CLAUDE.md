@@ -414,8 +414,10 @@ Depth Boxfittingは、以下のフローで行われます
     - MapAnythingは前処理で中央を切り出すため、インスタンスマスクと位置が合うよう、元画像を単純リサイズした画素格子へ深度を移す（切り出しで失われた範囲は無効領域）
     - 深度画像を`settings.DEPTH_MAP_DOWNSCALE`倍に縮小し（内部パラメータも同じ倍率で補正）、深度・内部パラメータ・無効領域マスクを`.npz`として`DERIVED_ROOT`に保存
 - キーフレームのループで、LiDARの読込を実施（Use LiDARに関わらず常に実施。UIでの比較表示に使うため）
-    - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとにPatchwork++による地面判定を実行したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する（Patchwork++のsensor_heightにはLiDARの実際の取り付け高さを渡す）
-    - 合体したLiDAR点群をego座標に変換し、自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除
+    - キーフレームから直近LiDAR Sweepsスイープ分のLiDARデータを読み込み、スイープごとに以下を実施したのち、キーフレームのLiDAR座標に合わせて全sweep点群を合体する
+        - そのスイープ自身のego座標で、自車周辺の直方体領域（`settings.EGO_BOX_X_RANGE`,`settings.EGO_BOX_Y_RANGE`,`settings.EGO_BOX_Z_RANGE`で指定）の点を自車反射とみなして削除。合体後（キーフレームのego座標）に切ると、過去のスイープの反射が自車の移動ぶん後ろへずれて直方体の外に出るため、屋根の反射が自車の後方に残る
+        - Patchwork++による地面判定（sensor_heightにはLiDARの実際の取り付け高さを渡す）
+    - 合体したLiDAR点群をego座標に変換
     - 点群と地面判定結果を`.npz`として`DERIVED_ROOT`に保存
 - キーフレーム → カメラのループ（パス1）で、以下手順でインスタンスごと点群を作成する（3Dバウンディングボックスのフィッティングは、全キーフレームの点群が揃ってからパス2で実施）
     - キーフレーム内の全インスタンスマスクを走査し、以下手順でインスタンスごとDepth点群を得る
@@ -548,8 +550,16 @@ Depth Boxfittingは、以下のフローで行われます
         - 以下のように面が見えているかを判定する
             - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
             - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施（**未実装**）
-        - `settings.BOX_ORIENTATION_CORRECTIONS="inaccurate_only"`のとき: 前後フレームとの角度差がどちらも閾値を超えたとき、前後フレームの中間角度に補正する。回転中心はボックスをBEV視点で見たときの2つの短辺のうち、自車に近い方の中心から引いた垂線に沿って、ボックスの内側に短辺の長さの半分だけ進んだ点とする。
+    - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
+        - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する
+            - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
+            - 残りのフレームのボックス角度をグローバル座標に変換したのち、単位円上の2次元座標に変換してDBSCANクラスタリングを実施。パラメータは以下のように決める
+                - eps: `settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`パラメータを $\epsilon{}_d$ としたとき、 $\text{eps} = 2\sin(\epsilon{}_d \cdot \frac{\pi{}}{180})$ を使用
+                - min_samples: `settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`を使用
+            - 最大クラスタ以外のフレーム（角度推定直角ずれフラグが立ったフレームを含む）のボックスを、以下の手順で補正する
+                - 補正後の角度として、前後方向の最寄りの最大クラスタフレームの角度で線形円周補間した値を採用する
+                - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
+                - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
     - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する。長さ方向の面（車両の場合前面または後面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は前面と後面の中心を固定して対称に両面を動かす
         - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Length Percentileパラメータで指定）をそのglobal_track共通のボックス長さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
@@ -770,14 +780,16 @@ for camera_channel in CAMERA_CHANNELS:
 # Frame loop
 for sample_index in range(len(samples)):
     ###### LiDAR（Use LiDARに関わらず常に読み込む。UIの比較表示に使うため） ######
-    # 直近NUM_LIDAR_SWEEPS個のsweepを読み、sweepごとにPatchwork++で地面判定してから
-    # キーフレームのLiDAR座標に合わせて合体する（sensor_heightにはLiDARの取り付け高さを渡す）
-    lidar_points, ground_mask = merge_sweeps_with_ground(lidar_sweeps[sample_index], sensor_height)
+    # 直近NUM_LIDAR_SWEEPS個のsweepを読み、sweepごとに
+    #   1. そのsweep自身のego座標で自車の反射を落とす（remove_ego_points。合体後に切ると過去sweepの反射が
+    #      移動ぶんずれて残る。インスタンス抽出より前に落とさないと、DBSCANの最大クラスタとして勝ってしまう）
+    #   2. Patchwork++で地面判定（sensor_heightにはLiDARの取り付け高さを渡す）
+    # してから、キーフレームのLiDAR座標に合わせて合体する
+    lidar_points, ground_mask, num_ego_removed = merge_sweeps_with_ground(
+        lidar_sweeps[sample_index], sensor_height, ego_box=(EGO_BOX_X_RANGE, EGO_BOX_Y_RANGE, EGO_BOX_Z_RANGE))
     lidar_points_ego = lidar_to_ego(lidar_points, lidar_calib)
-    # 自車の反射を落とす（インスタンス抽出より前に落とさないと、DBSCANの最大クラスタとして勝ってしまう）
-    lidar_points_ego, keep = remove_ego_points(lidar_points_ego, EGO_BOX_X_RANGE, EGO_BOX_Y_RANGE, EGO_BOX_Z_RANGE)
-    ground_points = lidar_points_ego[ground_mask[keep]]       # 底面推定（ground方式）用
-    nonground_points = lidar_points_ego[~ground_mask[keep]]   # インスタンス抽出用
+    ground_points = lidar_points_ego[ground_mask]       # 底面推定（ground方式）用
+    nonground_points = lidar_points_ego[~ground_mask]   # インスタンス抽出用
     lidar_origin_xy = sensor_origin_xy(lidar_calib, lidar_ego_pose, reference_ego_pose)
 
     # Camera channel loop

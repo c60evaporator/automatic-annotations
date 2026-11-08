@@ -99,20 +99,28 @@ def merge_sweeps_with_ground(
     *,
     sensor_height: float = 1.723,
     remove_ground: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+    ego_box: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, int]:
     """sweep を統合し、地面判定を付けた点群を返す.
 
     Args:
         sweeps: 古い順のフレーム情報（末尾がキーフレーム）。
             各要素は filename / calibrated_sensor / ego_pose を持つ
+        ego_box: 自車の車体範囲（ego 座標の x / y / z）。指定すると
+            各 sweep の点を **その sweep 自身の ego 座標**で切って自車の反射を落とす
 
     Returns:
-        (points (N, 3) キーフレームの LiDAR 座標, ground_mask (N,))
+        (points (N, 3) キーフレームの LiDAR 座標, ground_mask (N,),
+        自車の反射として落とした点数)
+
+    自車の反射は統合前に落とす。統合後（キーフレームの ego 座標）に切ると、
+    過去の sweep の反射は自車の移動ぶん後ろへずれて車体範囲の外に出てしまい、
+    屋根の反射が自車の後方に残る（5 sweep・速度 10 m/s で最大約 2 m）。
 
     地面点も捨てずに返すのは、UI が比較用に地面を表示できるようにするため。
     """
     if not sweeps:
-        return np.empty((0, 3)), np.empty((0,), dtype=bool)
+        return np.empty((0, 3)), np.empty((0,), dtype=bool), 0
 
     key_frame = sweeps[-1]
     key_calib = key_frame["calibrated_sensor"]
@@ -120,6 +128,7 @@ def merge_sweeps_with_ground(
 
     ground_chunks: list[np.ndarray] = []
     nonground_chunks: list[np.ndarray] = []
+    removed_ego = 0
 
     for sweep in sweeps:
         path = dataroot / sweep["filename"]
@@ -127,6 +136,17 @@ def merge_sweeps_with_ground(
             logger.warning("lidar file not found: %s", path)
             continue
         points, intensity = load_lidar_points(path)
+
+        if ego_box:
+            # 地面推定より前に落とす（反射点が地面推定を乱さないように）
+            _, keep = remove_ego_points(
+                lidar_to_ego(points, sweep["calibrated_sensor"]),
+                x_range=ego_box.get("x"),
+                y_range=ego_box.get("y"),
+                z_range=ego_box.get("z"),
+            )
+            removed_ego += int((~keep).sum())
+            points, intensity = points[keep], intensity[keep]
 
         if remove_ground:
             # 地面推定は LiDAR 座標のまま、sweep ごとに行う。
@@ -161,7 +181,7 @@ def merge_sweeps_with_ground(
         np.zeros(nonground_all.shape[0], dtype=bool),
         np.ones(ground_all.shape[0], dtype=bool),
     ])
-    return points, ground_mask
+    return points, ground_mask, removed_ego
 
 
 def lidar_to_ego(points: np.ndarray, calib: dict[str, Any]) -> np.ndarray:
