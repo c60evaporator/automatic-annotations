@@ -273,6 +273,8 @@ def orient_fitted_groups(
                 standard_width=float(size[1]) if size and len(size) >= 2 else None,
                 switch_length_ratio=settings["switch_length_ratio"],
                 inaccurate_threshold_deg=settings["inaccurate_threshold_deg"],
+                # 回したあと点群に当て直すのに使う（当てはめに使った凸包）
+                hull_xy=(primary.get("hull_xy") or {}).get("points"),
             ))
             stats["num_applied"] += 1
         record(primary, values)

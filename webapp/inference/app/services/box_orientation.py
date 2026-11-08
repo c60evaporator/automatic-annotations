@@ -12,6 +12,8 @@ import math
 from collections import defaultdict
 from typing import Any
 
+import numpy as np
+
 ORIENTATION_METHOD_PART_HOE = "part_hoe"
 ORIENTATION_METHOD_ORIENT_ANYTHING = "orient_anything"
 # 推定は orient_anything と同じ。ボックスへの反映方法だけが異なる
@@ -53,6 +55,9 @@ ORIENTATION_STATUS_FAILED = "failed"
 #   swap_axis    … 回転が 45〜135 度（長短辺の向きが入れ替わる）。8 頂点を動かさずに
 #                  元の ±Y のうち推定に近い方を X 軸に取り直してから（w と l を入れ替え）、
 #                  XY 中心を固定して yaw を推定値にする
+#   （yaw_only / swap_axis は、回したあと新しい向きの軸で点群の凸包に当て直す。
+#     中心のまわりに回しただけでは面が点群を斜めに横切り、後段の寸法補正が
+#     点群の表面ではない面を固定してしまうため）
 #   long_axis    … orient_anything_combined で長辺が十分長いとき。元のボックスの長辺の
 #                  前後のうち推定に近い方を新しい X 軸にする（8 頂点は動かさない）
 ORIENTATION_APPLIED_YAW_ONLY = "yaw_only"
@@ -152,8 +157,9 @@ def apply_orientation(
     standard_width: float | None,
     switch_length_ratio: float = DEFAULT_SWITCH_LENGTH_RATIO,
     inaccurate_threshold_deg: float = DEFAULT_INACCURATE_THRESHOLD_DEG,
+    hull_xy: Any = None,
 ) -> dict[str, Any]:
-    """推定した向きをボックスへ反映する（box の yaw_ego / size_wlh をその場で書き換える）.
+    """推定した向きをボックスへ反映する（box の yaw_ego / size_wlh / center_ego をその場で書き換える）.
 
     Args:
         box: ``center_ego`` / ``size_wlh``（w, l, h。l が yaw 方向）/ ``yaw_ego`` を持つ
@@ -164,6 +170,9 @@ def apply_orientation(
         switch_length_ratio: 長辺が standard_width × これ以上なら long_axis
         inaccurate_threshold_deg: long_axis で推定と選んだ軸のなす角がこれ以上なら
             ``perpendicular_flag`` を立てる
+        hull_xy: 当てはめに使った点群の BEV 凸包（``[[x, y], ...]``）。yaw_only /
+            swap_axis で回したあと、新しい向きの軸でこの範囲に当て直す。
+            None なら当て直さない（中心と寸法を固定したまま回す）
 
     Returns:
         記録用の ``{"applied", "yaw_before", "rotation_deg", "long_side",
@@ -216,9 +225,43 @@ def apply_orientation(
         box["size_wlh"] = [length, width, height]
         box["yaw_ego"] = wrap_angle(yaw_estimated)
         record["applied"] = ORIENTATION_APPLIED_SWAP_AXIS
-        return record
-
-    # XY 中心と寸法はそのまま、yaw だけ差し替える（前後反転もここ）
-    box["yaw_ego"] = wrap_angle(yaw_estimated)
-    record["applied"] = ORIENTATION_APPLIED_YAW_ONLY
+    else:
+        # XY 中心と寸法はそのまま、yaw だけ差し替える（前後反転もここ）
+        box["yaw_ego"] = wrap_angle(yaw_estimated)
+        record["applied"] = ORIENTATION_APPLIED_YAW_ONLY
+    record.update(refit_to_hull(box, hull_xy))
     return record
+
+
+def refit_to_hull(box: dict[str, Any], hull_xy: Any) -> dict[str, Any]:
+    """box の yaw のまま、点群の凸包を囲む最小の矩形へ当て直す（box をその場で書き換える）.
+
+    中心と長さ・幅を凸包の範囲から決め直す（高さと z は変えない）。
+    凸包が無い・潰れている場合は何もしない。
+
+    Returns:
+        記録用の ``{"refit", "refit_center_shift"}``
+    """
+    points = np.asarray(hull_xy if hull_xy is not None else [], dtype=float)
+    if points.ndim != 2 or points.shape[0] < 3:
+        return {"refit": False}
+    yaw = float(box["yaw_ego"])
+    u = np.array([math.cos(yaw), math.sin(yaw)])   # 長さ方向
+    v = np.array([-math.sin(yaw), math.cos(yaw)])  # 幅方向
+    pu, pv = points @ u, points @ v
+    length, width = float(pu.max() - pu.min()), float(pv.max() - pv.min())
+    if length <= 1e-3 or width <= 1e-3:
+        return {"refit": False}
+    center_xy = ((pu.max() + pu.min()) / 2.0) * u + ((pv.max() + pv.min()) / 2.0) * v
+    old_xy = np.asarray(box["center_ego"][:2], dtype=float)
+    box["center_ego"] = [float(center_xy[0]), float(center_xy[1]),
+                         *[float(z) for z in box["center_ego"][2:]]]
+    box["size_wlh"] = [width, length, float(box["size_wlh"][2])]
+    metrics = box.get("fit_metrics")
+    if isinstance(metrics, dict) and "corners_xy" in metrics:
+        hl, hw = length / 2.0, width / 2.0
+        corners = [center_xy - u * hl - v * hw, center_xy + u * hl - v * hw,
+                   center_xy + u * hl + v * hw, center_xy - u * hl + v * hw]
+        metrics["corners_xy"] = np.round(np.stack(corners), 3).tolist()
+    return {"refit": True,
+            "refit_center_shift": float(np.linalg.norm(center_xy - old_xy))}

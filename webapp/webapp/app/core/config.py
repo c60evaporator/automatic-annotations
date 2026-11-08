@@ -501,11 +501,11 @@ class Settings(BaseSettings):
     BOX_ORIENTATION_ESTIMATIONS: dict[str, str | None] = {
         "car": "orient_anything_combined",
         "truck": "orient_anything_combined",
-        "bus": None,
-        "trailer": None,
-        "construction_vehicle": None,
-        "bicycle": None,
-        "motorcycle": None,
+        "bus": "orient_anything_combined",
+        "trailer": "orient_anything_combined",
+        "construction_vehicle": "orient_anything_combined",
+        "bicycle": "orient_anything_combined",
+        "motorcycle": "orient_anything_combined",
         "pedestrian": "part_hoe",
         "traffic_cone": None,
         "barrier": None,
@@ -513,7 +513,7 @@ class Settings(BaseSettings):
     # orient_anything_combined で、長辺が短辺の標準値のこの倍率以上なら
     # 長辺が写っているとみなし、元のボックスの前後を選ぶだけにする
     # （長辺の面の点群があれば、当てはめた向きの方が AI の推定より正確なため）
-    ORIENT_ANYTHING_SWITCH_LENGTH_RATIO: float = 1.2
+    ORIENT_ANYTHING_SWITCH_LENGTH_RATIO: float = 1.4
     # orient_anything_combined で長辺の前後を選んだとき、推定と選んだ軸のなす角 [度] が
     # これ以上なら「角度推定直角ずれ」の印を付ける（後段の複数フレームを考慮した補正の対象）
     ORIENT_INACCURATE_THRESHOLD: float = 60.0
