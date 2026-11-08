@@ -539,17 +539,11 @@ Depth Boxfittingは、以下のフローで行われます
             - 未満のとき: Orient-Anything V1 Largeで補正。補正時の回転方法は"part_hoe"のときと同様
                 - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
-- 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下のようにバウンディングボックスの高さ、方向、幅、長さ補正を実施する（寸法補正は`webapp/inference/app/services/box_size.py`）
+- 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 角度補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）。幅・長さの共通値は角度補正の後の寸法から決める（角度補正で幅と長さが入れ替わることがあるため）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを判定（センサー位置はフィッティング時のセンサー原点を使う）
-        - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
-        - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
-        - 以下のように面が見えているかを判定する
-            - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
-            - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
     - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
         - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する
             - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
@@ -561,15 +555,21 @@ Depth Boxfittingは、以下のフローで行われます
                 - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
                 - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
-    - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する。長さ方向の面（車両の場合前面または後面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は前面と後面の中心を固定して対称に両面を動かす
-        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Length Percentileパラメータで指定）をそのglobal_track共通のボックス長さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
-        - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の長さを、そのglobal_track共通のボックス長さとする
-        - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - ラベルごとに指定した`settings.BOX_WIDTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅補正を実施する（長さ補正で動かした後の中心を基準に判定する）。幅方向の面（車両の場合両側面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は両側面の中心を固定して対称に両面を動かす
+    - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを、幅・長さを動かす前の箱で2軸まとめて判定（センサー位置はフィッティング時のセンサー原点を使う。幅方向に中心を動かしても長さ方向のa = d·uは変わらないので、逐次判定と結果は同じ）
+        - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
+        - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
+        - 以下のように面が見えているかを判定する
+            - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
+            - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
+    - ラベルごとに指定した`settings.BOX_WIDTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅補正を実施する。幅方向の面（車両の場合両側面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は両側面の中心を固定して対称に両面を動かす
         - `settings.BOX_WIDTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の分位点（Width Percentileパラメータで指定）をそのglobal_track共通のボックス幅とする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の幅を、そのglobal_track共通のボックス幅とする
         - `settings.BOX_WIDTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - 補正前の寸法と固定の仕方は`fit_metrics["size_correction"]`に記録する
+    - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する（幅補正で動かした後の箱に対して、判定済みの見えている面を使う）。長さ方向の面（車両の場合前面または後面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は前面と後面の中心を固定して対称に両面を動かす
+        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Length Percentileパラメータで指定）をそのglobal_track共通のボックス長さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
+        - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の長さを、そのglobal_track共通のボックス長さとする
+        - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
+    - 補正前の寸法（`before_wlh`）、見えている面（`visible`。+1 / -1 は+軸 / -軸側の面、0は見えていない）、固定の仕方（`anchors`）は`fit_metrics["size_correction"]`に記録する
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
@@ -770,7 +770,7 @@ for camera_channel in CAMERA_CHANNELS:
 - カメラ間同一インスタンス結合
 - Box Fitting（底面推定を含む）
 - ボックス角度再推定
-- global_track_idごとに所属する全てのフレームを考慮してボックスの方向（未実装）、高さ、幅、長さ補正
+- global_track_idごとに所属する全てのフレームを考慮してボックスの高さ、方向（未実装）、幅、長さ補正
 
 は、以下のパイプラインで実装しています（実装は`webapp/inference/app/routers/depth_boxfitting.py`の`_run_boxfitting`、`webapp/inference/app/models_impl/boxfitting_pipeline.py`、`webapp/inference/app/services/`以下。関数の引数は実装より簡略化している）。点群はすべて、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で扱います。
 
@@ -1147,44 +1147,60 @@ def reestimate_orientation(fitted_rows, method_by_label):
 def correct_box_sizes(fitted_rows, box_fitting_params):
     for global_id, rows in group_by(fitted_rows, key=global_id).items():
         label = rows[0].label
-        targets = {}
-        for dim in ("height", "width", "length"):
-            method = {"height": BOX_HEIGHT_CORRECTIONS, "width": BOX_WIDTH_CORRECTIONS,
-                      "length": BOX_LENGTH_CORRECTIONS}[dim].get(label)
-            values = [row.box.size[dim] for row in rows]
-            if method == "default":
-                targets[dim] = DEFAULT_BOX_SIZES[label][dim]                       # (length, width, height)
-            elif method == "percentile" and len(values) >= BOX_SIZE_CORRECTION_MIN_FRAMES:
-                targets[dim] = np.percentile(values, PERCENTILE[dim])              # Height / Width / Length Percentile
-            else:
-                targets[dim] = None                                                # 補正しない
-        if not any(targets.values()):
-            continue
 
+        # 1. 高さ: 底面を固定して上面を動かす
+        if (height := target_size("height", label, rows)) is not None:
+            for row in rows:
+                bottom = row.box.center_z - row.box.height / 2
+                row.box.height = height
+                row.box.center_z = bottom + height / 2
+
+        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。未実装）
+
+        # 3. 共通の幅・長さ（角度補正後の寸法から決める）
+        targets = {dim: target_size(dim, label, rows) for dim in ("width", "length")}
         for row in rows:                       # 各フレームの箱に当て直す
             box, origin_xy = row.box, row.origin_xy
             center = box.center_xy
             u = [cos(box.yaw), sin(box.yaw)]   # 長さ方向
             v = [-sin(box.yaw), cos(box.yaw)]  # 幅方向
-            if targets["length"]:
-                center = resize_axis(center, u, box.length / 2, targets["length"] / 2, origin_xy)
+            # 見えている面の判定（動かす前の箱で2軸まとめて）
+            side_w = visible_side(center, v, box.width / 2, origin_xy)
+            side_l = visible_side(center, u, box.length / 2, origin_xy)
+            # 4. 幅
             if targets["width"]:
-                # 長さ方向で動かした後の中心で判定する
-                center = resize_axis(center, v, box.width / 2, targets["width"] / 2, origin_xy)
-            if targets["height"]:
-                bottom = box.center_z - box.height / 2                             # 底面を固定して上面を動かす
-                box.center_z = bottom + targets["height"] / 2
+                center = resize_axis(center, v, box.width / 2, targets["width"] / 2, side_w)
+            # 5. 長さ
+            if targets["length"]:
+                center = resize_axis(center, u, box.length / 2, targets["length"] / 2, side_l)
             box.center_xy = center
-            box.size = (targets["width"] or box.width, targets["length"] or box.length,
-                        targets["height"] or box.height)
+            box.width = targets["width"] or box.width
+            box.length = targets["length"] or box.length
 
 
-def resize_axis(center, axis, half, new_half, origin_xy):
-    """見えている面を固定して反対側の面を動かす。見えていなければ中心を固定して対称に伸ばす"""
+def target_size(dim, label, rows):
+    method = {"height": BOX_HEIGHT_CORRECTIONS, "width": BOX_WIDTH_CORRECTIONS,
+              "length": BOX_LENGTH_CORRECTIONS}[dim].get(label)
+    values = [row.box.size[dim] for row in rows]
+    if method == "default":
+        return DEFAULT_BOX_SIZES[label][dim]                       # (length, width, height)
+    if method == "percentile" and len(values) >= BOX_SIZE_CORRECTION_MIN_FRAMES:
+        return np.percentile(values, PERCENTILE[dim])              # Height / Width / Length Percentile
+    return None                                                    # 補正しない
+
+
+def visible_side(center, axis, half, origin_xy):
+    """その軸の見えている面. +1 / -1（+axis / -axis 側）、0 は見えていない"""
     a = (origin_xy - center) @ axis    # センサーがその軸方向に中心からどれだけ離れているか
     if abs(a) > half:                  # センサーはその軸の片側の面より外側 → その面は見えている
-        side = sign(a)
+        return sign(a)
+    return 0                           # 2面の間（真横から見ている）
+
+
+def resize_axis(center, axis, half, new_half, side):
+    """見えている面を固定して反対側の面を動かす。見えていなければ中心を固定して対称に伸ばす"""
+    if side:
         near_face = center + side * half * axis
         return near_face - side * new_half * axis
-    return center                      # 2面の間（真横から見ている）→ 中心固定
+    return center
 ```

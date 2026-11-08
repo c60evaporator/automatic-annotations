@@ -13,11 +13,19 @@ BOX_LENGTH_CORRECTIONS: {label: 方式}。辞書に無い・None は補正しな
                届かなければ補正しない
   default    … config の DEFAULT_BOX_SIZES（length, width, height）
 
+## 補正の順番
+
+高さ → 角度（未実装。高さの後に入れる）→ 見えている面の判定 → 幅 → 長さ。
+幅・長さの共通値は、角度を補正した後の寸法から決める（角度の補正で
+幅と長さが入れ替わることがあるため）。
+
 ## 当て直し方
 
 - 高さ: **底面を固定**して上面を動かす（底面は地面などから別に決めている）
 - 幅・長さ: **センサーから見えている面を固定**して反対側の面を動かす。
-  軸ごとに次のように判定する（u は箱の軸の単位ベクトル、e はその軸の
+  見えている面は、幅・長さを動かす前の箱で 2 軸まとめて判定する
+  （幅方向に中心を動かしても長さ方向の a = d·u は変わらないので、
+  逐次判定と結果は同じ）。軸ごとに次のように判定する（u は箱の軸の単位ベクトル、e はその軸の
   半分の長さ、d は箱の中心からセンサーへのベクトル）:
 
     a = d·u
@@ -94,21 +102,29 @@ def _target_size(
     return float(np.percentile(values, pct)), {"method": method, "percentile": pct}
 
 
+def _visible_side(
+    center_xy: np.ndarray, axis: np.ndarray, half: float, origin_xy: np.ndarray,
+) -> float:
+    """その軸の見えている面. +1 / -1（+axis / -axis 側の面）、0 は見えていない."""
+    a = float(np.dot(origin_xy - center_xy, axis))
+    if abs(a) > half:
+        return 1.0 if a > 0 else -1.0
+    return 0.0
+
+
 def _resize_axis(
     center_xy: np.ndarray,
     axis: np.ndarray,
     half: float,
     new_half: float,
-    origin_xy: np.ndarray,
+    side: float,
 ) -> tuple[np.ndarray, str]:
-    """1 軸の大きさを変える. 見えている面を固定し、見えていなければ対称.
+    """1 軸の大きさを変える. 見えている面（side）を固定し、見えていなければ対称.
 
     Returns:
         (新しい中心, 固定の仕方 "near_face" / "center")
     """
-    a = float(np.dot(origin_xy - center_xy, axis))
-    if abs(a) > half:
-        side = 1.0 if a > 0 else -1.0
+    if side:
         # 見えている面（センサー側）の位置を保ったまま、反対側の面を動かす
         near = center_xy + side * half * axis
         return near - side * new_half * axis, "near_face"
@@ -124,55 +140,59 @@ def _corners(center_xy: np.ndarray, length: float, width: float, yaw: float) -> 
     return np.round(np.stack(pts), 3).tolist()
 
 
-def apply_size(
+def apply_height(fit: dict[str, Any], height: float) -> None:
+    """底面を固定して上面を動かす（fit をその場で書き換える）."""
+    cx, cy, cz = (float(v) for v in fit["center_ego"])
+    old = float(fit["size_wlh"][2])
+    bottom = cz - old / 2.0
+    fit["center_ego"] = [cx, cy, round(bottom + height / 2.0, 3)]
+    fit["size_wlh"] = [float(fit["size_wlh"][0]), float(fit["size_wlh"][1]),
+                       round(float(height), 3)]
+
+
+def apply_width_length(
     fit: dict[str, Any],
     targets: dict[str, float | None],
     origin_xy: tuple[float, float],
 ) -> dict[str, Any]:
-    """1 フレームの箱に共通の寸法を当て直す（fit をその場で書き換える）.
+    """見えている面を判定してから、幅 → 長さの順に当て直す（fit をその場で書き換える）.
 
     Returns:
-        診断（固定の仕方と補正前の寸法）
+        診断（見えている面と固定の仕方）
     """
     width, length, height = (float(v) for v in fit["size_wlh"])
     cx, cy, cz = (float(v) for v in fit["center_ego"])
     yaw = float(fit["yaw_ego"])
-    info: dict[str, Any] = {"before_wlh": [width, length, height]}
 
     center = np.array([cx, cy])
     origin = np.asarray(origin_xy, dtype=float)
     u = np.array([np.cos(yaw), np.sin(yaw)])   # 長さ方向
     v = np.array([-np.sin(yaw), np.cos(yaw)])  # 幅方向
 
-    new_length = targets.get("length") or length
+    # 見えている面の判定（幅・長さを動かす前の箱で 2 軸まとめて）
+    visible = {
+        "width": _visible_side(center, v, width / 2.0, origin),
+        "length": _visible_side(center, u, length / 2.0, origin),
+    }
     new_width = targets.get("width") or width
+    new_length = targets.get("length") or length
     anchors: dict[str, str] = {}
+    if targets.get("width"):
+        center, anchors["width"] = _resize_axis(
+            center, v, width / 2.0, new_width / 2.0, visible["width"],
+        )
     if targets.get("length"):
         center, anchors["length"] = _resize_axis(
-            center, u, length / 2.0, new_length / 2.0, origin,
+            center, u, length / 2.0, new_length / 2.0, visible["length"],
         )
-    if targets.get("width"):
-        # 長さ方向で動かした後の中心で判定する（幅方向の位置は変わらない）
-        center, anchors["width"] = _resize_axis(
-            center, v, width / 2.0, new_width / 2.0, origin,
-        )
-
-    new_height = height
-    if targets.get("height"):
-        # 底面を固定して上面を動かす
-        bottom = cz - height / 2.0
-        new_height = float(targets["height"])
-        cz = bottom + new_height / 2.0
-        anchors["height"] = "bottom"
 
     fit["center_ego"] = [round(float(center[0]), 3), round(float(center[1]), 3),
                          round(cz, 3)]
-    fit["size_wlh"] = [round(new_width, 3), round(new_length, 3), round(new_height, 3)]
+    fit["size_wlh"] = [round(new_width, 3), round(new_length, 3), round(height, 3)]
     metrics = fit.setdefault("fit_metrics", {})
     if "corners_xy" in metrics:
         metrics["corners_xy"] = _corners(center, new_length, new_width, yaw)
-    info["anchors"] = anchors
-    return info
+    return {"visible": {k: int(side) for k, side in visible.items()}, "anchors": anchors}
 
 
 def correct_box_sizes(
@@ -199,20 +219,36 @@ def correct_box_sizes(
     num_tracks = num_boxes = 0
     for global_id, rows in by_track.items():
         label = rows[0][0]
-        targets: dict[str, float | None] = {}
         details: dict[str, Any] = {"num_frames": len(rows)}
-        for dim in ("height", "width", "length"):
+        befores = [[float(x) for x in r["size_wlh"]] for _, r, _ in rows]
+
+        def target(dim: str) -> float | None:
             values = [float(r["size_wlh"][_INDEX[dim]]) for _, r, _ in rows]
-            target, detail = _target_size(dim, label, values, settings)
-            targets[dim] = target
-            if target is not None:
-                detail["value"] = round(target, 3)
+            value, detail = _target_size(dim, label, values, settings)
+            if value is not None:
+                detail["value"] = round(value, 3)
             details[dim] = detail
-        if not any(targets.values()):
+            return value
+
+        # 1. 高さ（底面を固定して上面を動かす）
+        height = target("height")
+        if height is not None:
+            for _label, row, _origin in rows:
+                apply_height(row, height)
+
+        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。未実装）
+
+        # 3〜5. 見えている面の判定 → 幅 → 長さ。共通値は角度補正後の寸法から決める
+        targets = {"width": target("width"), "length": target("length")}
+        if height is None and not any(targets.values()):
             continue
         num_tracks += 1
-        for _label, row, origin in rows:
-            info = apply_size(row, targets, origin)
-            row.setdefault("fit_metrics", {})["size_correction"] = {**details, **info}
+        for (_label, row, origin), before in zip(rows, befores, strict=True):
+            info = apply_width_length(row, targets, origin)
+            if height is not None:
+                info["anchors"] = {"height": "bottom", **info["anchors"]}
+            row.setdefault("fit_metrics", {})["size_correction"] = {
+                **details, "before_wlh": before, **info,
+            }
             num_boxes += 1
     return {"num_tracks": num_tracks, "num_boxes": num_boxes}
