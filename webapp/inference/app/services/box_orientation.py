@@ -49,14 +49,23 @@ ORIENTATION_STATUS_UNSUPPORTED = "unsupported"
 ORIENTATION_STATUS_FAILED = "failed"
 
 # ボックスへの反映方法（fit_metrics["orientation_estimation"]["applied"] に残す）
-#   yaw_only  … XY 中心と寸法を固定し、yaw だけを推定値にする
-#   long_axis … 元のボックスの長辺の前後のうち推定に近い方を新しい X 軸にする
-#               （8 頂点は動かさず、軸の取り方だけを変える）
+#   yaw_only     … 回転が 45 度未満（前後反転を含む）。XY 中心と寸法を固定し、yaw だけを推定値にする
+#   swap_axis    … 回転が 45〜135 度（長短辺の向きが入れ替わる）。8 頂点を動かさずに
+#                  元の ±Y のうち推定に近い方を X 軸に取り直してから（w と l を入れ替え）、
+#                  XY 中心を固定して yaw を推定値にする
+#   long_axis    … orient_anything_combined で長辺が十分長いとき。元のボックスの長辺の
+#                  前後のうち推定に近い方を新しい X 軸にする（8 頂点は動かさない）
 ORIENTATION_APPLIED_YAW_ONLY = "yaw_only"
+ORIENTATION_APPLIED_SWAP_AXIS = "swap_axis"
 ORIENTATION_APPLIED_LONG_AXIS = "long_axis"
+# 長短辺の向きが入れ替わるとみなす回転角 [度]（45〜135 度、225〜315 度）
+SWAP_AXIS_MIN_DEG = 45.0
 # orient_anything_combined で長辺を使うかの倍率の既定値（webapp の
 # ORIENT_ANYTHING_SWITCH_LENGTH_RATIO が box_fitting_params で渡ってくる）
 DEFAULT_SWITCH_LENGTH_RATIO = 1.2
+# long_axis で、推定と選んだ軸のなす角がこれ以上なら「角度推定直角ずれ」として印を付ける
+# （webapp の ORIENT_INACCURATE_THRESHOLD。後段の複数フレームを考慮した補正の対象にする）
+DEFAULT_INACCURATE_THRESHOLD_DEG = 60.0
 
 
 def group_candidates(
@@ -142,6 +151,7 @@ def apply_orientation(
     *,
     standard_width: float | None,
     switch_length_ratio: float = DEFAULT_SWITCH_LENGTH_RATIO,
+    inaccurate_threshold_deg: float = DEFAULT_INACCURATE_THRESHOLD_DEG,
 ) -> dict[str, Any]:
     """推定した向きをボックスへ反映する（box の yaw_ego / size_wlh をその場で書き換える）.
 
@@ -150,11 +160,22 @@ def apply_orientation(
         method: BOX_ORIENTATION_ESTIMATIONS の方式
         yaw_estimated: 推定した向き（基準 ego 座標の yaw [rad]）
         standard_width: ラベルの短辺の標準値（DEFAULT_BOX_SIZES の width）。
-            orient_anything_combined の切り替え判定に使う。None なら yaw_only
+            orient_anything_combined の切り替え判定に使う。None なら長辺を使わない
         switch_length_ratio: 長辺が standard_width × これ以上なら long_axis
+        inaccurate_threshold_deg: long_axis で推定と選んだ軸のなす角がこれ以上なら
+            ``perpendicular_flag`` を立てる
 
     Returns:
-        記録用の ``{"applied", "yaw_before", "long_side", "switch_length"}``
+        記録用の ``{"applied", "yaw_before", "rotation_deg", "long_side",
+        "switch_length", "perpendicular_flag"}``
+
+    ## 回転が大きいときに軸を取り直す理由
+
+    前面だけが写った車のように、点群が片方の面に沿って細長いボックスを
+    中心のまわりに 90 度近く回すと、ボックスが点群から外れる。さらに回した
+    ことで側面が見えている扱いになり、後段の幅の補正で自車から離れる側へ
+    伸ばされる。長短辺が入れ替わる回転では、先に 8 頂点を動かさずに軸を
+    取り直す（点群に沿ったまま）ことで、残りの回転を 45 度未満に抑える。
     """
     yaw_before = float(box["yaw_ego"])
     width, length, height = (float(v) for v in box["size_wlh"])
@@ -164,8 +185,11 @@ def apply_orientation(
     )
     record: dict[str, Any] = {
         "yaw_before": yaw_before,
+        # 元のボックスからの回転角 [度]（-180〜180）
+        "rotation_deg": math.degrees(wrap_angle(yaw_estimated - yaw_before)),
         "long_side": long_side,
         "switch_length": switch_length,
+        "perpendicular_flag": False,
     }
 
     if (method == ORIENTATION_METHOD_ORIENT_ANYTHING_COMBINED
@@ -178,9 +202,23 @@ def apply_orientation(
         box["yaw_ego"] = wrap_angle(best)
         box["size_wlh"] = [min(width, length), long_side, height]
         record["applied"] = ORIENTATION_APPLIED_LONG_AXIS
+        # 推定が長辺と直交に近い（前後の判定が当てにならない）
+        record["estimate_axis_diff_deg"] = math.degrees(
+            abs(wrap_angle(best - yaw_estimated)))
+        record["perpendicular_flag"] = (
+            record["estimate_axis_diff_deg"] >= inaccurate_threshold_deg)
         return record
 
-    # XY 中心と寸法はそのまま、yaw だけ差し替える
+    if abs(record["rotation_deg"]) >= SWAP_AXIS_MIN_DEG and \
+            abs(record["rotation_deg"]) <= 180.0 - SWAP_AXIS_MIN_DEG:
+        # 8 頂点を動かさずに、元の ±Y（推定に近い方）を X 軸に取り直す（w と l が入れ替わる）。
+        # そのうえで XY 中心を固定して推定の向きまで回す（残りの回転は 45 度未満）
+        box["size_wlh"] = [length, width, height]
+        box["yaw_ego"] = wrap_angle(yaw_estimated)
+        record["applied"] = ORIENTATION_APPLIED_SWAP_AXIS
+        return record
+
+    # XY 中心と寸法はそのまま、yaw だけ差し替える（前後反転もここ）
     box["yaw_ego"] = wrap_angle(yaw_estimated)
     record["applied"] = ORIENTATION_APPLIED_YAW_ONLY
     return record

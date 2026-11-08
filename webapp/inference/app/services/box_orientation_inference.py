@@ -145,13 +145,19 @@ ORIENTATION_METRICS_KEY = "orientation_estimation"
 
 def orientation_settings(box_fitting_params: dict[str, Any] | None) -> dict[str, Any]:
     """run のパラメータから向き推定の設定を取り出す（無ければ推定しない）."""
-    from app.services.box_orientation import DEFAULT_SWITCH_LENGTH_RATIO
+    from app.services.box_orientation import (
+        DEFAULT_INACCURATE_THRESHOLD_DEG,
+        DEFAULT_SWITCH_LENGTH_RATIO,
+    )
 
     params = (box_fitting_params or {}).get("orientation") or {}
     return {
         "methods": {k: v for k, v in (params.get("methods") or {}).items() if v},
         "switch_length_ratio": float(
             params.get("switch_length_ratio", DEFAULT_SWITCH_LENGTH_RATIO)
+        ),
+        "inaccurate_threshold_deg": float(
+            params.get("inaccurate_threshold_deg", DEFAULT_INACCURATE_THRESHOLD_DEG)
         ),
         # (length, width, height)
         "box_sizes": (box_fitting_params or {}).get("box_sizes") or {},
@@ -266,6 +272,7 @@ def orient_fitted_groups(
                 primary, result["method"], float(result["yaw_ego"]),
                 standard_width=float(size[1]) if size and len(size) >= 2 else None,
                 switch_length_ratio=settings["switch_length_ratio"],
+                inaccurate_threshold_deg=settings["inaccurate_threshold_deg"],
             ))
             stats["num_applied"] += 1
         record(primary, values)

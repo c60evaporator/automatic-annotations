@@ -423,6 +423,7 @@ def orientation_alpha_text(orientation: dict) -> str:
 # ボックスへの反映方法（Box Fitting の実行時に推定・反映した run のみ記録がある）
 ORIENTATION_APPLIED_LABELS = {
     "yaw_only": "中心を固定して yaw を差し替え",
+    "swap_axis": "長短辺を入れ替えてから yaw を差し替え",
     "long_axis": "長辺の前後を選択",
 }
 
@@ -434,7 +435,9 @@ def orientation_applied_text(orientation: dict) -> str:
         return ""
     before = orientation.get("yaw_before")
     before_text = f"、反映前 yaw={np.degrees(before):.0f}°" if before is not None else ""
-    return f"<br>反映: {ORIENTATION_APPLIED_LABELS.get(applied, applied)}{before_text}"
+    flag_text = "<br>⚠ 角度推定直角ずれ" if orientation.get("perpendicular_flag") else ""
+    return (f"<br>反映: {ORIENTATION_APPLIED_LABELS.get(applied, applied)}{before_text}"
+            + flag_text)
 
 
 def orientation_estimation_of(item: dict) -> dict | None:
@@ -1025,7 +1028,8 @@ with param_col:
                 + "（config の BOX_ORIENTATION_ESTIMATIONS）。底面推定の後に AI モデルで"
                 "向きを推定してボックスへ反映する。orient_anything_combined は長辺が"
                 f"短辺の標準値 × {settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO} 以上なら"
-                "元のボックスの前後を選ぶだけ（config の ORIENT_ANYTHING_SWITCH_LENGTH_RATIO）"
+                "元のボックスの前後を選ぶだけ（config の ORIENT_ANYTHING_SWITCH_LENGTH_RATIO）。"
+                "それ以外で 45〜135 度回るときは、先に長短辺を入れ替えてから回す"
             )
             st.caption(
                 "以下はグローバルトラックの全フレームから共通の寸法を決めて当て直す"
@@ -1116,6 +1120,7 @@ box_fitting_params = {
     "orientation": {
         "methods": dict(settings.BOX_ORIENTATION_ESTIMATIONS),
         "switch_length_ratio": float(settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO),
+        "inaccurate_threshold_deg": float(settings.ORIENT_INACCURATE_THRESHOLD),
     },
     # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）
     "lshape": {

@@ -514,6 +514,9 @@ class Settings(BaseSettings):
     # 長辺が写っているとみなし、元のボックスの前後を選ぶだけにする
     # （長辺の面の点群があれば、当てはめた向きの方が AI の推定より正確なため）
     ORIENT_ANYTHING_SWITCH_LENGTH_RATIO: float = 1.2
+    # orient_anything_combined で長辺の前後を選んだとき、推定と選んだ軸のなす角 [度] が
+    # これ以上なら「角度推定直角ずれ」の印を付ける（後段の複数フレームを考慮した補正の対象）
+    ORIENT_INACCURATE_THRESHOLD: float = 60.0
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
