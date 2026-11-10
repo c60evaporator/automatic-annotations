@@ -375,23 +375,28 @@ def has_box(item: dict) -> bool:
 
 
 # Fitted Boxes: どの補正段階のボックスを表示するか。
-# First Fit / Local Corrected は推論サーバーが fit_metrics に残したもの、
+# First Fit / Local Corrected / Orientation Corrected は推論サーバーが fit_metrics に残したもの、
 # Final Box は最終的なボックス（center_ego / size_wlh / yaw_ego）
 FITTED_BOX_NONE = "None"
 FITTED_BOX_FIRST = "First Fit"
 FITTED_BOX_LOCAL = "Local Corrected"
+FITTED_BOX_ORIENTATION = "Orientation Corrected"
 FITTED_BOX_FINAL = "Final Box"
-FITTED_BOX_STAGES = (FITTED_BOX_FIRST, FITTED_BOX_LOCAL, FITTED_BOX_FINAL)
+FITTED_BOX_STAGES = (
+    FITTED_BOX_FIRST, FITTED_BOX_LOCAL, FITTED_BOX_ORIENTATION, FITTED_BOX_FINAL,
+)
 FITTED_BOX_METRICS_KEY = {
     FITTED_BOX_FIRST: "first_fit",
     FITTED_BOX_LOCAL: "local_corrected",
+    FITTED_BOX_ORIENTATION: "orientation_corrected",
 }
 OPT_PC_FITTED, W_PC_FITTED = "boxfit_pc_fitted", "_w_boxfit_pc_fitted"
 OPT_BF_FITTED, W_BF_FITTED = "boxfit_bf_fitted", "_w_boxfit_bf_fitted"
 FITTED_BOX_HELP = (
     "First Fit: 当てはめた直後のボックス（convex_hull_moa 等）。"
     "Local Corrected: 1 フレーム単位の補正（底面の高さ・角度）後。"
-    "Final Box: 複数フレームを考慮した補正（角度・高さ・幅・長さ）後の最終的なボックス"
+    "Orientation Corrected: 複数フレームを考慮した補正のうち高さ・角度まで適用したボックス。"
+    "Final Box: 複数フレームを考慮した補正（高さ・角度・幅・長さ）後の最終的なボックス"
 )
 
 
@@ -1031,6 +1036,15 @@ with param_col:
                 "元のボックスの前後を選ぶだけ（config の ORIENT_ANYTHING_SWITCH_LENGTH_RATIO）。"
                 "それ以外で 45〜135 度回るときは、先に長短辺を入れ替えてから回す"
             )
+            st.markdown("**Orientation Correction**")
+            st.caption(
+                "方式: " + _correction_text(settings.BOX_ORIENTATION_CORRECTIONS)
+                + "（config の BOX_ORIENTATION_CORRECTIONS）。高さ補正の後に、グローバルトラックの"
+                "向きを DBSCAN でまとめ、最大クラスタ以外のフレームを前後のフレームから補間する"
+                f"（eps {settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE} 度、"
+                f"min_samples {settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES}、"
+                f"{settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES} フレーム未満のトラックは補正しない）"
+            )
             st.caption(
                 "以下はグローバルトラックの全フレームから共通の寸法を決めて当て直す"
                 "（percentile: 全フレームの分位点 / default: DEFAULT_BOX_SIZES）"
@@ -1121,6 +1135,13 @@ box_fitting_params = {
         "methods": dict(settings.BOX_ORIENTATION_ESTIMATIONS),
         "switch_length_ratio": float(settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO),
         "inaccurate_threshold_deg": float(settings.ORIENT_INACCURATE_THRESHOLD),
+        # グローバルトラックの全フレームを考慮した角度補正
+        "correction": {
+            "methods": dict(settings.BOX_ORIENTATION_CORRECTIONS),
+            "eps_deg": float(settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE),
+            "min_samples": int(settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES),
+            "min_frames": int(settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES),
+        },
     },
     # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）
     "lshape": {

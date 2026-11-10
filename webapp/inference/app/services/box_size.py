@@ -15,7 +15,7 @@ BOX_LENGTH_CORRECTIONS: {label: 方式}。辞書に無い・None は補正しな
 
 ## 補正の順番
 
-高さ → 角度（未実装。高さの後に入れる）→ 見えている面の判定 → 幅 → 長さ。
+高さ → 角度（services/box_orientation_correction.py）→ 見えている面の判定 → 幅 → 長さ。
 幅・長さの共通値は、角度を補正した後の寸法から決める（角度の補正で
 幅と長さが入れ替わることがあるため）。
 
@@ -39,10 +39,6 @@ BOX_LENGTH_CORRECTIONS: {label: 方式}。辞書に無い・None は補正しな
   1 軸だけなら、その面を固定しつつ、もう一方の軸は（見えている面の中心
   ＝箱の中心を固定して）対称に伸ばすことになる。
 
-NOTE: 長さと幅は各フレームの MOA の「長辺 = length、短辺 = width」を
-そのまま集計する（簡易版）。後ろ姿だけのフレームでは長辺と短辺が入れ替わり
-向きも 90° ずれることがあるが、トラック全体で向きをそろえる処理を入れる
-まではそのままにしている。
 """
 from __future__ import annotations
 
@@ -196,34 +192,42 @@ def apply_width_length(
 
 
 def correct_box_sizes(
-    fitted: list[tuple[str, str | None, dict[str, Any], tuple[float, float]]],
+    fitted: list[tuple[str, str | None, dict[str, Any], tuple[float, float], str]],
     box_fitting_params: dict[str, Any] | None,
+    *,
+    reference_ego_poses: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """グローバルトラック単位で寸法を補正する.
+    """グローバルトラック単位で高さ・角度・幅・長さを補正する.
 
     Args:
-        fitted: ``(global_track_id, label, 当てはめ結果の行, センサー位置)`` のリスト。
-            行（fit の値を持つ dict）は**その場で書き換える**
+        fitted: ``(global_track_id, label, 当てはめ結果の行, センサー位置, sample_token)``
+            のリスト。行（fit の値を持つ dict）は**その場で書き換える**
+        reference_ego_poses: sample_token → 基準 ego_pose（角度補正に使う）
 
     Returns:
-        ``{"num_tracks", "num_boxes"}``（補正した数）
+        ``{"num_tracks", "num_boxes", "num_orientation_corrected"}``（補正した数）
     """
+    from app.services.box_fitting import BOX_STAGE_ORIENTATION_CORRECTED, record_box_stage
+    from app.services.box_orientation_correction import (
+        correct_track_orientation,
+        correction_settings as orientation_correction_settings,
+    )
+
     settings = correction_settings(box_fitting_params)
-    if not any(settings[d]["methods"] for d in ("height", "width", "length")):
-        return {"num_tracks": 0, "num_boxes": 0}
+    orientation_settings = orientation_correction_settings(box_fitting_params)
 
-    by_track: dict[str, list[tuple[str | None, dict[str, Any], tuple[float, float]]]] = {}
-    for global_id, label, row, origin in fitted:
-        by_track.setdefault(global_id, []).append((label, row, origin))
+    by_track: dict[str, list[tuple[str | None, dict[str, Any], tuple[float, float], str]]] = {}
+    for global_id, label, row, origin, sample_token in fitted:
+        by_track.setdefault(global_id, []).append((label, row, origin, sample_token))
 
-    num_tracks = num_boxes = 0
+    num_tracks = num_boxes = num_orientation_corrected = 0
     for global_id, rows in by_track.items():
         label = rows[0][0]
         details: dict[str, Any] = {"num_frames": len(rows)}
-        befores = [[float(x) for x in r["size_wlh"]] for _, r, _ in rows]
+        befores = [[float(x) for x in r["size_wlh"]] for _, r, _, _ in rows]
 
         def target(dim: str) -> float | None:
-            values = [float(r["size_wlh"][_INDEX[dim]]) for _, r, _ in rows]
+            values = [float(r["size_wlh"][_INDEX[dim]]) for _, r, _, _ in rows]
             value, detail = _target_size(dim, label, values, settings)
             if value is not None:
                 detail["value"] = round(value, 3)
@@ -233,17 +237,26 @@ def correct_box_sizes(
         # 1. 高さ（底面を固定して上面を動かす）
         height = target("height")
         if height is not None:
-            for _label, row, _origin in rows:
+            for _label, row, _origin, _sample in rows:
                 apply_height(row, height)
 
-        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。未実装）
+        # 2. 角度（BOX_ORIENTATION_CORRECTIONS）
+        num_orientation_corrected += correct_track_orientation(
+            label,
+            [row for _, row, _, _ in rows],
+            [sample for _, _, _, sample in rows],
+            [(reference_ego_poses or {}).get(sample) for _, _, _, sample in rows],
+            orientation_settings,
+        )
+        for _label, row, _origin, _sample in rows:
+            record_box_stage(row, BOX_STAGE_ORIENTATION_CORRECTED)
 
         # 3〜5. 見えている面の判定 → 幅 → 長さ。共通値は角度補正後の寸法から決める
         targets = {"width": target("width"), "length": target("length")}
         if height is None and not any(targets.values()):
             continue
         num_tracks += 1
-        for (_label, row, origin), before in zip(rows, befores, strict=True):
+        for (_label, row, origin, _sample), before in zip(rows, befores, strict=True):
             info = apply_width_length(row, targets, origin)
             if height is not None:
                 info["anchors"] = {"height": "bottom", **info["anchors"]}
@@ -251,4 +264,5 @@ def correct_box_sizes(
                 **details, "before_wlh": before, **info,
             }
             num_boxes += 1
-    return {"num_tracks": num_tracks, "num_boxes": num_boxes}
+    return {"num_tracks": num_tracks, "num_boxes": num_boxes,
+            "num_orientation_corrected": num_orientation_corrected}

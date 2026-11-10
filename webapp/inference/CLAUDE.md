@@ -545,16 +545,18 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
-        - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する
+        - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する（`BOX_ORIENTATION_ESTIMATIONS=None`で個別角度補正を実施していないラベルのボックスは補正の対象外とする）
             - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
             - 残りのフレームのボックス角度をグローバル座標に変換したのち、単位円上の2次元座標に変換してDBSCANクラスタリングを実施。パラメータは以下のように決める
-                - eps: `settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`パラメータを $\epsilon{}_d$ としたとき、 $\text{eps} = 2\sin(\epsilon{}_d \cdot \frac{\pi{}}{180})$ を使用
+                - eps: `settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`パラメータを $\epsilon{}_d$ としたとき、 $\text{eps} = 2\sin(\frac{\epsilon{}_d}{2} \cdot \frac{\pi{}}{180})$ を使用
                 - min_samples: `settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`を使用
+            - フレーム数がmin_samples未満などで最大クラスタが無い場合は補正せずに処理を終了。最大クラスタが存在する場合は以降の処理に進む
             - 最大クラスタ以外のフレーム（角度推定直角ずれフラグが立ったフレームを含む）のボックスを、以下の手順で補正する
-                - 補正後の角度として、前後方向の最寄りの最大クラスタフレームの角度で線形円周補間した値を採用する
+                - 補正後の角度として、前後方向の最寄りの最大クラスタフレームの角度で線形円周補間した値を採用する（片側にしか最大クラスタのフレームが無いときは最寄りの値をそのまま使う）
                 - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
                 - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
+    - このタイミングでボックス同士のInter-cam mergeを実施し、マージ後のボックスをマージ前の点群数で重み付けした平均角度と凸包から作り直す。IoSではなく規定長と方向に基づく判定が良さそう。例えば「同ラベル かつ 別カメラ かつ 方向の角度差が閾値以下 かつ 合体後のボックス長さが規定長×`settings.BOX_MERGE_LENGTH_RATIO`以下かつ 合体後のボックス幅が規定幅×`settings.BOX_MERGE_WIDTH_RATIO`以下」で、条件を満たすボックスの組み合わせを中心間距離でHungarian matching。（未実装。ここまでのglobal_trackをhull_global_track_idとして、以降をglobal_track_idにするのがよさそう）
     - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを、幅・長さを動かす前の箱で2軸まとめて判定（センサー位置はフィッティング時のセンサー原点を使う。幅方向に中心を動かしても長さ方向のa = d·uは変わらないので、逐次判定と結果は同じ）
         - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
         - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
@@ -573,6 +575,7 @@ Depth Boxfittingは、以下のフローで行われます
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
+    - `fit_metrics["orientation_corrected"]`: global_track_id単位の補正のうち高さ補正・角度補正の後、幅補正・長さ補正の前
 
 ### 推論に使用するパラメータ
 
@@ -666,7 +669,11 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.BOXFIT_METHODS`|dict[str, str]|ラベルごとのBox Fittingの手法。辞書に無いラベルは"convex_hull_moa"|全ラベル"convex_hull_moa"|向き推定（PartHOE / Orient Anything等）を足すときに、ラベルごとに手法を切り替える差し込み口として辞書にしている|
 |`settings.BOX_ORIENTATION_ESTIMATIONS`|dict[str, str \| None]|ラベルごとのAIモデルによるボックス向き推定の方式（"part_hoe" / "orient_anything" / "orient_anything_combined" / None）。Box Fittingのリクエストの`box_fitting_params["orientation"]["methods"]`で推論サーバーへ渡す|pedestrianは"part_hoe"、car・truckは"orient_anything_combined"、他はNone|車両は長辺の面の点群が取れていれば当てはめた向きの方が正確なため、前後の判定だけをAIに任せるcombinedにする|
 |`settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO`|float|orient_anything_combinedで、ボックスの長辺が短辺の標準値（`settings.DEFAULT_BOX_SIZES`のwidth）のこの倍率以上なら、長辺が写っているとみなして元のボックスの前後を選ぶだけにする。`box_fitting_params["orientation"]["switch_length_ratio"]`で渡す|1.2|-|
-|`settings.ORIENT_INACCURATE_THRESHOLD`|float|orient_anything_combinedで長辺の前後を選んだとき、推定角度と選んだ軸のなす角がこの値 [度] 以上なら角度推定直角ずれフラグ（`perpendicular_flag`）を立てる（複数フレームを考慮した角度補正の対象にする予定。補正自体は未実装）。`box_fitting_params["orientation"]["inaccurate_threshold_deg"]`で渡す|60.0|直交（90度）と前後の境界（45度）の中間より直交寄りにした（要調整）|
+|`settings.ORIENT_INACCURATE_THRESHOLD`|float|orient_anything_combinedで長辺の前後を選んだとき、推定角度と選んだ軸のなす角がこの値 [度] 以上なら角度推定直角ずれフラグ（`perpendicular_flag`）を立てる（複数フレームを考慮した角度補正でクラスタリングから除外し、補正の対象にする）。`box_fitting_params["orientation"]["inaccurate_threshold_deg"]`で渡す|60.0|直交（90度）と前後の境界（45度）の中間より直交寄りにした（要調整）|
+|`settings.BOX_ORIENTATION_CORRECTIONS`|dict[str, str \| None]|ラベルごとの、グローバルトラックの全フレームを考慮した角度補正の方式（"dbscan_interp" / None）。`box_fitting_params["orientation"]["correction"]["methods"]`で渡す。`settings.BOX_ORIENTATION_ESTIMATIONS`がNoneのラベルは補正しない|traffic_cone / barrier: None、他: "dbscan_interp"|向き推定が無いラベルはyawの前後が決まらないため対象にしない|
+|`settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`|float|角度補正のDBSCANのeps（角度の閾値 [度]）。$\text{eps} = 2\sin(\epsilon_d / 2 \cdot \pi / 180)$で単位円上の距離にする。`["correction"]["eps_deg"]`で渡す|20.0|2Hzのキーフレームで緩やかに曲がる物体が1つのクラスタに連鎖する幅|
+|`settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`|int|角度補正のDBSCANのmin_samples（自分自身を含む）。`["correction"]["min_samples"]`で渡す|3|-|
+|`settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES`|int|角度補正に必要なフレーム数（これ未満のトラックは補正しない）。`["correction"]["min_frames"]`で渡す|4|min_samples=3では3フレーム以下のトラックに補正の余地が無い|
 |`settings.BOX_BOTTOM_ESTIMATIONS`|dict[str, str]|ラベルごとの底面の推定方式（"percentile" / "ground" / "ego"）。辞書に無いラベルは"percentile"|全ラベル"ground"|LiDARの上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすいため|
 |`settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS`|list[str]|Ground Height Methodパラメータの選択肢|`["percentile", "least_squares"]`|-|
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|
@@ -770,7 +777,7 @@ for camera_channel in CAMERA_CHANNELS:
 - カメラ間同一インスタンス結合
 - Box Fitting（底面推定を含む）
 - ボックス角度再推定
-- global_track_idごとに所属する全てのフレームを考慮してボックスの高さ、方向（未実装）、幅、長さ補正
+- global_track_idごとに所属する全てのフレームを考慮してボックスの高さ、方向、幅、長さ補正
 
 は、以下のパイプラインで実装しています（実装は`webapp/inference/app/routers/depth_boxfitting.py`の`_run_boxfitting`、`webapp/inference/app/models_impl/boxfitting_pipeline.py`、`webapp/inference/app/services/`以下。関数の引数は実装より簡略化している）。点群はすべて、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で扱います。
 
@@ -1091,7 +1098,7 @@ def distance_filter(points, origin_xy, *, method, quantile, margin, long_side,
 
 #### ボックス角度再推定
 
-Box Fittingのパス2で、全キーフレームのボックスの当てはめ・底面推定が終わってから、global_track_id単位の寸法補正の前にまとめて推定し、ボックスへ反映する（実装は`webapp/inference/app/services/box_orientation_inference.py`の`orient_fitted_groups`。`inter_cam_merge.merge_and_fit`の`orient_boxes`から呼ぶ）。深度推定モデルを解放してから向き推定モデルを載せ、同じモデルを使う方式はまとめて1回のモデルロードで推定する。グローバルトラックの全フレームを考慮した向きの補正（`settings.BOX_ORIENTATION_CORRECTIONS`）は未実装
+Box Fittingのパス2で、全キーフレームのボックスの当てはめ・底面推定が終わってから、global_track_id単位の寸法補正の前にまとめて推定し、ボックスへ反映する（実装は`webapp/inference/app/services/box_orientation_inference.py`の`orient_fitted_groups`。`inter_cam_merge.merge_and_fit`の`orient_boxes`から呼ぶ）。深度推定モデルを解放してから向き推定モデルを載せ、同じモデルを使う方式はまとめて1回のモデルロードで推定する。グローバルトラックの全フレームを考慮した向きの補正（`settings.BOX_ORIENTATION_CORRECTIONS`）は後述の「global_track_id単位の角度補正」を参照
 
 - 設定: webappが`box_fitting_params["orientation"]`（`methods` = `settings.BOX_ORIENTATION_ESTIMATIONS`、`switch_length_ratio` = `settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO`、`inaccurate_threshold_deg` = `settings.ORIENT_INACCURATE_THRESHOLD`）としてBox Fittingのリクエストで渡す。短辺の標準値は`box_fitting_params["box_sizes"]`（`settings.DEFAULT_BOX_SIZES`）のwidth。`orientation`が無い古いrunでは推定しない
 - 推定に使うカメラ: global_track_id × sampleのメンバー（カメラごとのインスタンス）のうち、点数（`num_points_depth + num_points_lidar`。深度を使わなかったカメラも深度の点数を数える）が最大のもの。外接矩形はトラッキングのマスクから求める
@@ -1103,7 +1110,7 @@ Box Fittingのパス2で、全キーフレームのボックスの当てはめ�
         - 0〜45度・135〜225度・315〜360度（長短辺の向きが入れ替わらない。前後反転を含む）: XY中心と寸法を固定し、yawだけを推定値にする（`applied="yaw_only"`）
         - 45〜135度・225〜315度（長短辺の向きが入れ替わる）: まず8頂点を動かさずに元の±Y方向のうち推定に近い方を新しいX軸に取り直し（wとlを入れ替える）、そのうえでXY中心を固定してyawを推定値まで回す（残りの回転は45度未満。`applied="swap_axis"`）。前面だけが写った車のように点群が片方の面に沿って細長いボックスを中心のまわりに90度近く回すと、ボックスが点群から外れ、さらに回したことで側面が見えている扱いになって、後段の幅の補正で自車から離れる側へ伸ばされてしまうため
         - どちらの場合も、回したあと新しいyawの軸で当てはめに使った点群のBEV凸包（`hull_xy`）の範囲を測り直し、それを囲む最小の矩形にボックスの中心・長さ・幅を当て直す（高さとzは変えない。`refit_to_hull`）。中心のまわりに回しただけでは面が点群を斜めに横切り、後段の寸法補正（見えている面を固定して反対側を動かす）が点群の表面ではない面を固定してしまうため。凸包が無い場合は当て直さない
-    - orient_anything_combined: 長辺（size_wlhのwとlの大きい方）が短辺の標準値×`switch_length_ratio`以上なら、元のボックスの長辺方向の前後2方向のうち推定に近い方をyawにする（`applied="long_axis"`。8頂点は動かさず、長辺をlength、短辺をwidthに並べ直す）。推定と選んだ軸のなす角（0〜90度）が`inaccurate_threshold_deg`以上なら`perpendicular_flag`を立てる（角度推定直角ずれ。複数フレームを考慮した角度補正の対象にする予定）。未満、またはラベルの標準サイズが無ければpart_hoe / orient_anythingと同じ
+    - orient_anything_combined: 長辺（size_wlhのwとlの大きい方）が短辺の標準値×`switch_length_ratio`以上なら、元のボックスの長辺方向の前後2方向のうち推定に近い方をyawにする（`applied="long_axis"`。8頂点は動かさず、長辺をlength、短辺をwidthに並べ直す）。推定と選んだ軸のなす角（0〜90度）が`inaccurate_threshold_deg`以上なら`perpendicular_flag`を立てる（角度推定直角ずれ。複数フレームを考慮した角度補正でクラスタリングから除外し、補正の対象にする）。未満、またはラベルの標準サイズが無ければpart_hoe / orient_anythingと同じ
 - 記録: 代表行の`fit_metrics["orientation_estimation"]`に、`method`、`status`（estimated / unsupported / failed）、`source_instance_tracking_2d_id`・`channel`・`bbox`（使ったカメラ）、`angle_deg`（モデルの出力）、`confidence`（PartHOEはargmaxビンの確率、Orient-Anythingは向きを持つ物体である確率）、`yaw_ego`（推定した向き）、`applied`、`yaw_before`（反映前のyaw）、`rotation_deg`（元のボックスからの回転角、−180〜180度）、`long_side`・`switch_length`（combinedの判定に使った値）、`perpendicular_flag`と`estimate_axis_diff_deg`（long_axisのときの推定と選んだ軸のなす角）、`refit`と`refit_center_shift`（点群への当て直しをしたか、それで中心が動いた距離）を残す。推定できなかったボックスは向きを変えない
 - 別ジョブでの推定（`POST /box-orientation/jobs`）: 向き推定をパイプラインに組み込む前に保存したrunの確認用。ボックスには反映せず、webappが代表行の`fit_metrics["orientation_estimation"]`へ書く（`routers/box_orientation.py`、`app/services/box_orientation_service.py`）。推定処理は`box_orientation_inference.estimate_groups`をパイプラインと共有する
 
@@ -1139,9 +1146,9 @@ def reestimate_orientation(fitted_rows, method_by_label):
                 box.center_xy, box.length, box.width = bounding_rect(box.hull_xy, box.yaw)
 ```
 
-#### global_track_id単位の寸法補正
+#### global_track_id単位の補正
 
-実装は`webapp/inference/app/services/box_size.py`
+実装は`webapp/inference/app/services/box_size.py`（高さ・幅・長さ）と`webapp/inference/app/services/box_orientation_correction.py`（角度）
 
 ```python
 def correct_box_sizes(fitted_rows, box_fitting_params):
@@ -1155,7 +1162,10 @@ def correct_box_sizes(fitted_rows, box_fitting_params):
                 row.box.height = height
                 row.box.center_z = bottom + height / 2
 
-        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。未実装）
+        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。後述の correct_track_orientation）
+        correct_track_orientation(label, rows, reference_ego_poses)
+        for row in rows:
+            record_box_stage(row.box, "orientation_corrected")
 
         # 3. 共通の幅・長さ（角度補正後の寸法から決める）
         targets = {dim: target_size(dim, label, rows) for dim in ("width", "length")}
@@ -1203,4 +1213,31 @@ def resize_axis(center, axis, half, new_half, side):
         near_face = center + side * half * axis
         return near_face - side * new_half * axis
     return center
+
+def correct_track_orientation(label, rows, reference_ego_poses):
+    """dbscan_interp: グローバル座標の向きをクラスタリングし、最大クラスタ以外のフレームを補間した向きへ直す"""
+    if BOX_ORIENTATION_CORRECTIONS.get(label) != "dbscan_interp":
+        return
+    # 記録は fit_metrics["orientation_correction"]（status = kept / corrected / skipped、skipped は reason を持つ）
+    if BOX_ORIENTATION_ESTIMATIONS.get(label) is None or len(rows) < BOX_ORIENTATION_CORRECTION_MIN_FRAMES:
+        return
+    ego_yaw = [yaw_of(reference_ego_poses[row.sample_token]) for row in rows]
+    t = [reference_ego_poses[row.sample_token].timestamp for row in rows]
+    yaw_global = [row.box.yaw + e for row, e in zip(rows, ego_yaw)]
+    # 角度推定直角ずれのフレームと、推定できなかった（前後が決まっていない）フレームは使わない
+    usable = [row.orientation.status == "estimated" and not row.orientation.perpendicular_flag for row in rows]
+    if not any(usable):
+        return
+    labels = dbscan(unit_circle(yaw_global[usable]), eps=2 * sin(radians(EPS_DEGREE) / 2), min_samples=MIN_SAMPLES)
+    # 最大クラスタ。同じ大きさなら平均時刻がトラックの時間の中央に近い方
+    cluster = largest_cluster(labels, t, center_time=(min(t) + max(t)) / 2)
+    if cluster is None:                  # 全フレームがノイズ
+        return
+    for i, row in enumerate(rows):
+        if labels[i] == cluster:
+            continue
+        # 前後の最寄りの最大クラスタのフレームから時刻で線形円周補間（片側しか無ければ最寄りの値）
+        target = interpolate_circular(t[i], t[cluster_frames], yaw_global[cluster_frames]) - ego_yaw[i]
+        # part_hoe と同じ: 45〜135度の回転はwとlを入れ替え、回したあと凸包に当て直す
+        apply_orientation(row.box, "part_hoe", target, hull_xy=row.box.hull_xy)
 ```

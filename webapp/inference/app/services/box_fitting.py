@@ -146,6 +146,8 @@ def fit_box(
 # 補正途中のボックスを fit_metrics に残すときのキー（UI の Fitted Boxes で表示する）
 BOX_STAGE_FIRST_FIT = "first_fit"            # 当てはめた直後
 BOX_STAGE_LOCAL_CORRECTED = "local_corrected"  # 1 フレーム単位の補正（底面・角度）の後
+# 複数フレームを考慮した補正のうち、高さ・角度まで（幅・長さの前）
+BOX_STAGE_ORIENTATION_CORRECTED = "orientation_corrected"
 
 
 def record_box_stage(fit: dict[str, Any], stage: str) -> dict[str, Any]:

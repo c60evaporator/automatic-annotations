@@ -748,6 +748,7 @@ def merge_and_fit(
     use_lidar: bool = False,
     merge_enabled: bool = True,
     orient_boxes: Callable[[list[dict[str, Any]]], None] | None = None,
+    reference_ego_poses: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """カメラ跨ぎで結合し、グループごとに 3D ボックスを当てはめる.
 
@@ -768,6 +769,8 @@ def merge_and_fit(
             "label", "primary", "members"}``）をまとめて受け取り、AI モデルで
             推定した向きを primary のボックスへ反映する。全フレームの当てはめ後・
             寸法補正の前に 1 回だけ呼ぶ（モデルの読み込みを 1 回で済ませるため）
+        reference_ego_poses: sample_token → 基準 ego_pose。トラック単位の角度補正で
+            グローバル座標の向きと時刻を求めるのに使う
 
     Returns:
         ``{"num_groups", "num_merged"}``。entry は **その場で書き換える**
@@ -781,7 +784,7 @@ def merge_and_fit(
     4. sample ごとに、グループの要約を結合して当てはめる
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
     5. AI モデルによる向きの再推定と反映（orient_boxes）
-    6. グローバルトラック単位の寸法補正
+    6. グローバルトラック単位の補正（高さ → 角度 → 幅 → 長さ）
 
     ## 点数の下限をここで判定する理由
 
@@ -907,7 +910,7 @@ def merge_and_fit(
     frames_with_group: Counter = Counter()
     # 当てはめた代表行（トラック単位の寸法補正に使う）
     # [(global_track_id, ラベル, 行, センサー位置)]
-    fitted_rows: list[tuple[str, str | None, dict[str, Any], tuple[float, float]]] = []
+    fitted_rows: list[tuple[str, str | None, dict[str, Any], tuple[float, float], str]] = []
     # 向きの再推定に渡すグループ（代表行と、推定に使うカメラを選ぶためのメンバー）
     fitted_groups: list[dict[str, Any]] = []
     for sample_token, entries in entries_by_sample.items():
@@ -982,7 +985,7 @@ def merge_and_fit(
                     member.update(fit)
                     member["status"] = "fitted"
                     member["is_primary"] = True
-                    fitted_rows.append((global_id, label, member, tuple(origin)))
+                    fitted_rows.append((global_id, label, member, tuple(origin), sample_token))
                     fitted_groups.append({
                         "global_track_id": global_id, "sample_token": sample_token,
                         "label": label, "primary": member, "members": members,
@@ -1000,14 +1003,16 @@ def merge_and_fit(
     if orient_boxes is not None and fitted_groups:
         orient_boxes(fitted_groups)
     # 1 フレーム単位の補正（底面・向き）はここまで（トラック単位の寸法補正の前）
-    for _, _, member, _ in fitted_rows:
+    for _, _, member, _, _ in fitted_rows:
         record_box_stage(member, BOX_STAGE_LOCAL_CORRECTED)
 
-    # --- 6) グローバルトラック単位の寸法補正 ------------------------------
-    # 全フレームの箱がそろってから、トラック共通の高さ・幅・長さを当て直す
+    # --- 6) グローバルトラック単位の補正 ----------------------------------
+    # 全フレームの箱がそろってから、高さ → 角度 → 幅 → 長さの順に補正する
     from app.services.box_size import correct_box_sizes
 
-    size_stats = correct_box_sizes(fitted_rows, box_fitting_params)
+    size_stats = correct_box_sizes(
+        fitted_rows, box_fitting_params, reference_ego_poses=reference_ego_poses,
+    )
 
     # --- 7) 診断情報 -----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。
@@ -1109,5 +1114,6 @@ def merge_and_fit(
         "num_merged": num_merged,
         "num_too_few_points": sum(len(c) for c in too_few_points.values()),
         "num_size_corrected_tracks": size_stats["num_tracks"],
+        "num_orientation_corrected_boxes": size_stats["num_orientation_corrected"],
         "diagnostics": diagnostics,
     }

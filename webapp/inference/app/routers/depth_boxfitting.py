@@ -327,6 +327,7 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
                 use_lidar=req.use_lidar,
                 merge_enabled=merge_enabled,
                 orient_boxes=orient_boxes,
+                reference_ego_poses=req.reference_ego_poses,
             )
         except Exception as exc:  # noqa: BLE001
             # 結合に失敗しても点群は残す（当てはめだけ諦める）

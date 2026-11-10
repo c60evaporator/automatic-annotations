@@ -234,6 +234,7 @@
         - Top Estimation
             - z_percentile: 上面の高さとして採用する点群のz座標のパーセンタイル
         - Orientation Estimation: ウィジェットは無く、AIモデルによる向き推定の方式（`settings.BOX_ORIENTATION_ESTIMATIONS`）と`settings.ORIENT_ANYTHING_SWITCH_LENGTH_RATIO`をキャプションで表示する
+        - Orientation Correction: ウィジェットは無く、複数フレームを考慮した角度補正の方式（`settings.BOX_ORIENTATION_CORRECTIONS`）と`settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`・`settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`・`settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES`をキャプションで表示する
         - Min Frames for Size Correction: percentile方式の寸法補正に必要なフレーム数
         - Height Estimation / Width Estimation / Length Estimation
             - Height Percentile [%] / Width Percentile [%] / Length Percentile [%]: percentile方式の寸法補正で、global_trackの全フレームのボックス寸法から取る分位点
@@ -281,6 +282,7 @@
             - None: ボックスを表示しない（デフォルト選択はこれにする）
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
+            - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
             - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
@@ -298,6 +300,7 @@
         - Fitted Boxesラジオボタン: 以下の選択肢に応じて、表示されるバウンディングボックスを切り替える（色はInstance Colorの指定に従う。デフォルトはFinal Box。First Fit・Local Correctedは推論サーバーが`box_fittings.fit_metrics`の`first_fit`・`local_corrected`に記録したボックスで、記録の無い古いrunでは表示せず件数をキャプションに出す。手修正したボックスはどの選択肢でも手修正後のボックスを表示する）
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
+            - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
             - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Orientation Estimationチェックボックス: チェックすると、AIモデル（PartHOEまたはOrient-Anything V1 Large）で推定したボックスの向きを、Fitted Boxesで選んだボックスの中心から伸びる矢印（長さはボックス長の半分+1m、色はInstance Colorに従う）で描画する（デフォルトはオフ）。推定はBox Fittingの実行時に行い、ボックスへ反映済み（推定対象のラベルと方式はconfigの`settings.BOX_ORIENTATION_ESTIMATIONS`）。矢印の先端にホバーすると方式・推定角度・確率・使ったカメラと、ボックスへの反映方法（中心を固定してyawを差し替え / 長短辺を入れ替えてからyawを差し替え / 長辺の前後を選択）・反映前のyawと、角度推定直角ずれフラグが立っていればその旨を表示する（Orient-Anything-V2で推定した古い結果では対称性alphaも）。view_colに、このサンプルの推定件数のキャプションを表示する。向き推定を組み込む前のrun（`box_fitting_params`に`orientation`が無いもの）では、代わりに「Run Orientation Estimation」ボタン（推定済みのrunでは「Re-run Orientation Estimation」）を表示し、押すと表示中のrunに対して推論サーバーの向き推定ジョブを実行して、完了まで進捗バーを表示したうえで結果を保存する（ボックスには反映しない）
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）

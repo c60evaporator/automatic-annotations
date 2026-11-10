@@ -517,6 +517,22 @@ class Settings(BaseSettings):
     # orient_anything_combined で長辺の前後を選んだとき、推定と選んだ軸のなす角 [度] が
     # これ以上なら「角度推定直角ずれ」の印を付ける（後段の複数フレームを考慮した補正の対象）
     ORIENT_INACCURATE_THRESHOLD: float = 60.0
+    # グローバルトラックの全フレームを考慮した角度補正（高さ補正の後・幅補正の前）。
+    #   dbscan_interp: グローバル座標の向きを単位円上で DBSCAN し、最大クラスタ以外の
+    #     フレームを、前後の最大クラスタのフレームから時刻で線形円周補間した向きに直す
+    #   None / 辞書に無い: 補正しない
+    # BOX_ORIENTATION_ESTIMATIONS が None のラベルは前後が決まらないので補正しない
+    BOX_ORIENTATION_CORRECTIONS: dict[str, str | None] = {
+        "car": "dbscan_interp", "truck": "dbscan_interp", "bus": "dbscan_interp",
+        "trailer": "dbscan_interp", "construction_vehicle": "dbscan_interp",
+        "bicycle": "dbscan_interp", "motorcycle": "dbscan_interp",
+        "pedestrian": "dbscan_interp", "traffic_cone": None, "barrier": None,
+    }
+    # DBSCAN の eps（角度の閾値 [度]）。単位円上の距離 2 * sin(この値 / 2) にして使う
+    BOX_ORIENTATION_DBSCAN_EPS_DEGREE: float = 20.0
+    BOX_ORIENTATION_DBSCAN_MIN_SAMPLES: int = 3
+    # これ未満のフレーム数のトラックは角度補正しない
+    BOX_ORIENTATION_CORRECTION_MIN_FRAMES: int = 4
     # 向きの探索刻み [度]。細かくしても結果はほぼ変わらず、計算時間だけ伸びる
     BOXFIT_ANGLE_STEP_DEG_DEFAULT: float = 0.5
     BOXFIT_ANGLE_STEP_DEG_MIN: float = 0.1
