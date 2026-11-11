@@ -755,6 +755,13 @@ class BoxFittingPipeline:
                     z_percentiles=(float(percentiles[0]), float(percentiles[1])),
                 )
                 entry["_summary"]["sensor_origin_xy"] = origin_xy
+                # 当てはめへ渡す点群に含まれる LiDAR 点の数。深度の補正に失敗して
+                # 補正前の深度点群だけを使う場合は 0（LiDAR で裏付けられていない）。
+                # カメラ間の結合で、どのカメラの点群を使うかの判定に使う
+                entry["_summary"]["num_points_lidar"] = (
+                    int(lidar_instance.shape[0])
+                    if lidar_only or corrected is not None else 0
+                )
                 results.append(entry)
                 continue
 

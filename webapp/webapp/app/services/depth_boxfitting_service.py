@@ -231,6 +231,7 @@ def create_pending_run(
             depth_params=depth_params,
             lidar_params=lidar_params,
             box_fitting_params=box_fitting_params,
+            merge_params=merge_params,
         )
 
 

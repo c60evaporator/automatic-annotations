@@ -510,7 +510,10 @@ Depth Boxfittingは、以下のフローで行われます
     - global_track_idごとに全トラックのラベルを多数決し、それを全メンバーの最終ラベルとする
     - 結合しなかった対も含め、却下理由などの診断情報を`merge_diagnostics`としてrunに残す
 - キーフレーム → global_track_idのループで、結合した点群に対して以下のようにバウンディングボックスをフィッティングする
-    - 同一キーフレーム・同一global_track_idのメンバー（複数カメラのインスタンス）の点群を結合する。代表行（点数が最も多いメンバー）にのみボックスを持たせ、他のメンバーは`status="merged"`とする
+    - 以下の条件で、同一キーフレーム・同一global_track_idのメンバー（複数カメラのインスタンス）の点群を結合する。代表行（結合に使うメンバーのうち点数が最も多いもの）にのみボックスを持たせ、他のメンバーは`status="merged"`とする（点群を捨てたメンバーも`merged`。どのメンバーを使ったかは代表行の`fit_metrics["merge_selection"]`に`selection`（all / lidar / most_points）・`used`・`dropped`として記録する）
+        - 「LiDAR点群を持つ」は、当てはめへ渡す点群にLiDAR点が1点以上含まれること（フィルタ後）。深度の補正に失敗して補正前の深度点群だけを使うインスタンスは、LiDAR点があっても持たないとみなす
+        - LiDAR点群を持つメンバーが1つ以上ある：LiDAR 点群を持つメンバーの点群だけを結合し、持たないメンバーの点群は捨てる（低精度の深度点群が結合されてボックス精度が下がるのを防ぐため）
+        - どのメンバーもLiDAR点群を持たない：点数が最も多いメンバーの点群だけを残す
     - 結合後の点数がMin Points to fit Box未満なら、そのキーフレームではバウンディングボックスをフィッティングしない（`status="too_few_points"`。点群は保持し、トラックも残る）
     - ラベルごとに指定した`settings.BOXFIT_METHODS`辞書（keyがラベル名、valueが推定方法。辞書に無いラベルは"convex_hull_moa"）に基づき、以下のようにバウンディングボックスの平面方向の大きさと角度（yaw角）を推定する
         - `settings.BOXFIT_METHODS="convex_hull_moa"`のとき（現状は全ラベルこの手法）
@@ -947,13 +950,16 @@ global_label = {gid: majority_label(...) for gid in set(global_ids.values())}
 fitted_rows = []
 for sample_index in range(len(samples)):
     for global_id, members in group_by_global_id(pointclouds_per_instance[sample_index], global_ids).items():
-        combined = combine_summaries(members)       # 凸包の和集合 = 結合後の凸包
-        primary = max(members, key=num_points)      # 代表行（ボックスはここだけに持たせ、他はstatus="merged"）
+        # 結合するメンバー: LiDAR点群を持つものがあればそれらだけ、無ければ点数最大の1つ
+        with_lidar = [m for m in members if m.num_points_lidar > 0]
+        used = with_lidar if with_lidar else [max(members, key=num_points)]
+        combined = combine_summaries(used)          # 凸包の和集合 = 結合後の凸包
+        primary = max(used, key=num_points)         # 代表行（ボックスはここだけに持たせ、他はstatus="merged"）
         if combined.num_points < BOXFIT_MIN_POINTS:
             status = "too_few_points"               # このキーフレームだけボックスが欠ける（トラックは残る）
             continue
         label = global_label[global_id]
-        origin_xy = dominant_sensor_origin(members)  # 点数が最も多いカメラの位置をMOAのセンサー原点にする
+        origin_xy = dominant_sensor_origin(used)     # 点数が最も多いカメラの位置をMOAのセンサー原点にする
         fitted_box = fit_box(combined.points, BOXFIT_METHODS.get(label, "convex_hull_moa"),
                              angle_step_deg=BOXFIT_ANGLE_STEP_DEG,
                              z_range=combined.z_range,             # 上面: Z_PERCENTILE_HIGH分位点

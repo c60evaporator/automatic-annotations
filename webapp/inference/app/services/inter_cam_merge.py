@@ -699,6 +699,42 @@ def combine_summaries(summaries: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+MERGE_SELECTION_SINGLE = "single"            # メンバーが 1 つ
+MERGE_SELECTION_ALL = "all"                  # 全メンバーが LiDAR 点群を持つ（全部結合）
+MERGE_SELECTION_LIDAR = "lidar"              # LiDAR 点群を持つメンバーだけ結合
+MERGE_SELECTION_MOST_POINTS = "most_points"  # どれも LiDAR 点群を持たない（点数最大の 1 つ）
+
+
+def select_merge_members(
+    members: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    """同じ sample・同じ global_track_id のメンバーのうち、点群を結合するものを選ぶ.
+
+    - LiDAR 点群を持つメンバーがあれば、それらだけを結合する（持たないメンバーは捨てる）
+    - どのメンバーも持たなければ、点数が最も多いメンバーだけを使う
+
+    LiDAR で裏付けられていない深度点群は、カメラによって全く違う位置に出ることが
+    あり、結合すると異常に大きなボックスになるため。
+    LiDAR 点群の有無は ``_summary["num_points_lidar"]``（当てはめへ渡す点群に
+    含まれる LiDAR 点の数）で判定する。
+
+    Returns:
+        (結合するメンバー, 選び方 MERGE_SELECTION_*)
+    """
+    members = list(members)
+    if len(members) < 2:
+        return members, MERGE_SELECTION_SINGLE
+    with_lidar = [
+        m for m in members if int(m["_summary"].get("num_points_lidar") or 0) > 0
+    ]
+    if len(with_lidar) == len(members):
+        return members, MERGE_SELECTION_ALL
+    if with_lidar:
+        return with_lidar, MERGE_SELECTION_LIDAR
+    return [max(members, key=lambda m: m["_summary"]["num_points"])], \
+        MERGE_SELECTION_MOST_POINTS
+
+
 def dominant_sensor_origin(
     instances: Sequence[dict[str, Any]], group: Sequence[int]
 ) -> tuple[float, float]:
@@ -908,6 +944,8 @@ def merge_and_fit(
     too_few_points: dict[str, list[int]] = {}
     # グループが成立したフレーム数（上の割合を読むための母数）
     frames_with_group: Counter = Counter()
+    # メンバーが 2 つ以上のグループで、点群を結合するメンバーをどう選んだか
+    selection_counts: Counter = Counter()
     # 当てはめた代表行（トラック単位の寸法補正に使う）
     # [(global_track_id, ラベル, 行, センサー位置)]
     fitted_rows: list[tuple[str, str | None, dict[str, Any], tuple[float, float], str]] = []
@@ -928,15 +966,18 @@ def merge_and_fit(
                 groups.setdefault(global_id, []).append(entry)
 
         for global_id, members in groups.items():
-            summaries = [m["_summary"] for m in members]
+            # 点群を結合するメンバー（LiDAR 点群の有無で選ぶ）
+            used, selection = select_merge_members(members)
+            summaries = [m["_summary"] for m in used]
             combined = combine_summaries(summaries)
             if len(members) > 1:
                 num_merged += len(members)
+                selection_counts[selection] += 1
             frames_with_group[global_id] += 1
 
-            # 代表行（点数が最も多いメンバー）。当てはめの成否に関わらず
-            # 1 グループ 1 行にしておく
-            primary = max(members, key=lambda m: m["_summary"]["num_points"])
+            # 代表行（結合に使うメンバーのうち点数が最も多いもの）。当てはめの
+            # 成否に関わらず 1 グループ 1 行にしておく
+            primary = max(used, key=lambda m: m["_summary"]["num_points"])
 
             # **点数の下限。** 当てはめへ渡す点群そのもので数える。
             # 点が少なすぎると BEV の凸包が線や点に潰れ、向きも大きさも
@@ -983,6 +1024,14 @@ def merge_and_fit(
                 member.pop("_summary", None)
                 if member is primary and fit is not None:
                     member.update(fit)
+                    if len(members) > 1:
+                        # どのカメラの点群を結合したか（捨てたカメラも残す）
+                        member.setdefault("fit_metrics", {})["merge_selection"] = {
+                            "selection": selection,
+                            "used": [m["instance_tracking_2d_id"] for m in used],
+                            "dropped": [m["instance_tracking_2d_id"]
+                                        for m in members if not any(m is u for u in used)],
+                        }
                     member["status"] = "fitted"
                     member["is_primary"] = True
                     fitted_rows.append((global_id, label, member, tuple(origin), sample_token))
@@ -1115,5 +1164,6 @@ def merge_and_fit(
         "num_too_few_points": sum(len(c) for c in too_few_points.values()),
         "num_size_corrected_tracks": size_stats["num_tracks"],
         "num_orientation_corrected_boxes": size_stats["num_orientation_corrected"],
+        "merge_selection_counts": dict(selection_counts),
         "diagnostics": diagnostics,
     }

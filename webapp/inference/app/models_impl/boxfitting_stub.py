@@ -274,6 +274,7 @@ class BoxFittingStub:
                 summary["sensor_origin_xy"] = (
                     float(translation[0]), float(translation[1])
                 )
+                summary["num_points_lidar"] = int(num_lidar)
                 results.append({
                     **base,
                     "status": "pending_merge",
