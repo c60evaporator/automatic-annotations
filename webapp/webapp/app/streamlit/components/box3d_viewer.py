@@ -39,10 +39,11 @@ from app.streamlit.components.instance_tracking_viewer import (
 )
 
 # カメラ跨ぎで結合したトラック ID を文字として出すモード
+TEXT_MODE_HULL = "Hull Merged"
 TEXT_MODE_GLOBAL = "Global Track"
 # Box on Cam の Instance text の選択肢
 BOX3D_TEXT_MODES = (
-    TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_TRACK, TEXT_MODE_GLOBAL,
+    TEXT_MODE_NONE, TEXT_MODE_LABEL, TEXT_MODE_TRACK, TEXT_MODE_HULL, TEXT_MODE_GLOBAL,
 )
 
 # 3D ボックスの線幅。12 辺あるので細いと画像上で追いにくい
@@ -119,16 +120,28 @@ def box_center_in_fov(
 
 
 # カメラ跨ぎで結合したトラックで色分けするモード。
-# 別カメラの同一物体が同色になるので、結合の妥当性を目で確かめられる
+# 別カメラの同一物体が同色になるので、結合の妥当性を目で確かめられる。
+# Hull Merged は凸包の IoS で結合した後、Global Track はさらにボックスの
+# 規定長と向きで結合した後
+COLOR_MODE_HULL = "Hull Merged"
 COLOR_MODE_GLOBAL = "Global Track"
 
 
+def _track_key(box: dict[str, Any], mode: str) -> str:
+    """Hull Merged / Global Track のキー.
+
+    結合していない run では global_track_id が無いので track_id へ落とす。
+    hull_merged_track_id を導入する前の run では global_track_id が凸包の結合結果
+    """
+    if mode in (COLOR_MODE_HULL, TEXT_MODE_HULL):
+        return str(box.get("hull_merged_track_id") or box.get("global_track_id")
+                   or box.get("track_id", ""))
+    return str(box.get("global_track_id") or box.get("track_id", ""))
+
+
 def color_for_box(box: dict[str, Any], color_mode: str) -> str:
-    if color_mode == COLOR_MODE_GLOBAL:
-        # 結合していない run では global_track_id が無いので track_id へ落とす
-        return color_for_track(
-            str(box.get("global_track_id") or box.get("track_id", ""))
-        )
+    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+        return color_for_track(_track_key(box, color_mode))
     if color_mode == COLOR_MODE_TRACK:
         return color_for_track(str(box.get("track_id", "")))
     return color_for_label(str(box.get("label", "")))
@@ -140,8 +153,8 @@ def legend_key(box: dict[str, Any], color_mode: str) -> str:
     **color_for_box と同じ軸で分けること。** 片方だけ分岐を足すと、
     色は Global Track なのに凡例は Label、という食い違いが起きる
     """
-    if color_mode == COLOR_MODE_GLOBAL:
-        return str(box.get("global_track_id") or box.get("track_id", ""))
+    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+        return _track_key(box, color_mode)
     if color_mode == COLOR_MODE_TRACK:
         return str(box.get("track_id", ""))
     return str(box.get("label", ""))
@@ -187,10 +200,8 @@ def draw_boxes_3d(
         if font is not None:
             if text_mode == TEXT_MODE_LABEL:
                 text = str(box.get("label", ""))
-            elif text_mode == TEXT_MODE_GLOBAL:
-                # 結合していない run では global_track_id が無いので
-                # track_id へ落とす
-                text = str(box.get("global_track_id") or box.get("track_id", ""))
+            elif text_mode in (TEXT_MODE_HULL, TEXT_MODE_GLOBAL):
+                text = _track_key(box, text_mode)
             else:
                 text = str(box.get("track_id", ""))
             if not text:

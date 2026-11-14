@@ -356,6 +356,11 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
         "merge_diagnostics": (
             merge_stats.get("diagnostics") if merge_enabled else None
         ),
+        "box_merge_diagnostics": (
+            merge_stats.get("box_diagnostics") if merge_enabled else None
+        ),
+        # ボックスの規定長と向きによる結合で、別のボックスへまとめた数
+        "num_box_merged_boxes": merge_stats.get("num_box_merged_boxes", 0),
         "inference_time": round(time.perf_counter() - started_all, 3),
         "depth_estimations": depth_results,
         "lidar_pointclouds": lidar_results,

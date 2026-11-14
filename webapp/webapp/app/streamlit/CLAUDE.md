@@ -209,9 +209,8 @@
             - Near Quantile [%]: 各ビンで輪郭点とする距離の分位点
             - Margin [m]: 除去閾値（LiDARは固定値）
     - Inter-cam Mergeタブ: 複数カメラ間での同一インスタンス結合に使用するパラメータ
-        - カメラ間の結合を行う: カメラ間の同一インスタンス結合を実施するかを指定するチェックボックス（オフにすると以下のウィジェットが無効化され、（カメラ, track_id）ごとにglobal_track_idを割り当てる）
-        - Match Method: カメラ間の同一インスタンス結合に使用する手法を選択するプルダウン（`settings.MERGE_METHODS`）。以下の選択肢を持つ
-            - BEV convex-hull: XY平面での凸包の隙間がMax Hull Gap以下かつ重なり率（IoS）がOverlap Threshold以上なら、そのキーフレームで同一判定。同一判定されたキーフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合。以下のパラメータを使用
+        - カメラ間の結合を行う: カメラ間の同一インスタンス結合（以下の2段階とも）を実施するかを指定するチェックボックス（オフにすると以下のウィジェットが無効化され、（カメラ, track_id）ごとにhull_merged_track_id・global_track_idを割り当てる）
+        - Hull Based Mergeセクション: 凸包のIoSによる結合（結合後のIDがhull_merged_track_id）。手法は常にBEV convex-hull（XY平面での凸包の隙間がMax Hull Gap以下かつ重なり率（IoS）がOverlap Threshold以上なら、そのキーフレームで同一判定。同一判定されたキーフレーム数がMin Match Frames以上なら同一インスタンスと判定して結合）。以下のパラメータを使用
                 - Overlap Threshold: XY平面での凸包の重なり率（IoS）のしきい値
                 - Max Hull Gap [m]: インスタンス凸包間の隙間のしきい値。凸包間の隙間がこれより離れた組は、重なりを計算する前に捨てる
                 - Max Same-Camera Gap: 同一カメラのトラック同士は、このキーフレーム数を超えて離れている場合は結合されない（同一キーフレームを含む場合も結合されない）
@@ -220,6 +219,12 @@
             - label: ラベルが一致する場合のみマッチング対象とする
             - category_group: カテゴリグループが一致する場合のみマッチング対象とする
             - none: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
+        - Box-Orient Based Mergeセクション: 角度補正の後、ボックスの規定長と向きに基づく結合（結合後のIDがglobal_track_id）。対象ラベル（`settings.BOX_ORIENT_MERGE_LABELS`）をキャプションで表示し、以下のスライダを横に並べる（同一カメラの扱いはHull Based MergeのMax Same-Camera Gapに従う）
+            - Orientation Diff Threshold [deg]: ボックスどうしの向きの差の上限（180度違いは同じ向きとみなす）
+            - Length Ratio Threshold: 合体後のボックス長さの上限（`settings.DEFAULT_BOX_SIZES`の規定長に対する倍率）
+            - Width Ratio Threshold: 合体後のボックス幅の上限（規定幅に対する倍率）
+            - Max Hull Gap [m]: 凸包どうしの隙間の上限（足切り）
+            - Min Match Frames: 対応付けられたキーフレーム数がこれ以上なら結合する
     - Box Fittingタブ: 3Dバウンディングボックスのフィッティングに使用するパラメータ。フィッティング手法・底面推定方式・寸法補正方式はラベルごとにconfig（`settings.BOXFIT_METHODS`、`settings.BOX_BOTTOM_ESTIMATIONS`、`settings.BOX_HEIGHT_CORRECTIONS`等）で指定し、現在の割り当てをキャプションで表示する
         - Common
             - Min Points to fit Box: Box Fittingを行うための点数の下限しきい値（カメラ間結合後、global_track単位・キーフレームごとに判定し、これを下回ったキーフレームは3Dバウンディングボックスを推定しない）
@@ -287,7 +292,8 @@
         - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
-            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（global_track_id。結合していないrunではtrack_id）で色分け
+            - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id。導入前のrunではglobal_track_id、結合していないrunではtrack_id）で色分け
+            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（global_track_id。結合していないrunではtrack_id）で色分け
         - Camerasチェックボックス: カメラごとに設置し、チェックされているカメラに紐づくインスタンスごと点群のみを表示する
     - Box Fittingタブ: 3Dバウンディングボックスのフィッティング結果をBEV視点で表示する。現状は[こちらの論文](https://arxiv.org/abs/2302.01034)の手法（convex_hull_moa）を前提とした表示にしている。view_colには、インスタンス数・ボックス生成数（・GT数）のキャプションと、カメラ間結合の診断情報（後述のMerge Diagnostics）も表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
@@ -306,12 +312,17 @@
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
-            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
-        - Merge Diagnosticsエクスパンダー: runに`merge_diagnostics`がある場合に表示し、以下をテーブル表示する（閾値を緩めても結合されない場合に、原因を確認するため）
+            - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id）で色分け
+            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（最終的なInstance ID）で色分け
+        - Hull Merge Diagnosticsエクスパンダー: runに`merge_diagnostics`（凸包のIoSによる結合の診断）がある場合に表示し、以下をテーブル表示する（閾値を緩めても結合されない場合に、原因を確認するため）
             - 結合の条件（推論時のInter-cam Mergeパラメータ）
-            - グループ: global_track_idごとのメンバー（カメラ:track_id）、ラベル、フレーム数
+            - グループ: hull_merged_track_idごとのメンバー（カメラ:track_id）、ラベル、フレーム数、どのトラック対がどのサンプル番号で結合されたか（merged pairs (samples)。`{CAM_FRONT:30 + CAM_FRONT_RIGHT:61: [7, 8], ...}`の形式）
             - 点数不足で当てはめなかったグループ: 結合後の点数がMin Points to fit Boxに届かなかったglobal_track_idと、スキップしたフレーム数 / 全フレーム数、最小・中央値の点数
-            - トラック対の判定: トラック対ごとの最大重なり率、最小の凸包の隙間、status（accepted / rejected / gated）、却下理由
+            - トラック対の判定: トラック対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason・最大重なり率）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、重なり率、凸包の隙間）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
+        - Box-Orient Merge Diagnosticsエクスパンダー: runに`box_merge_diagnostics`（ボックスの規定長と向きに基づく結合の診断）がある場合に表示し、以下をテーブル表示する
+            - 結合の条件（推論時のBox-Orient Based Mergeパラメータと対象ラベル）
+            - 結合したグループ: global_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
+            - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
     - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。view_colには推定ボックス数（・GT数）のキャプションも表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる
@@ -319,11 +330,13 @@
         - Instance Colorラジオボタン: 3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
-            - Global Track: 複数カメラ間での同一インスタンス結合処理後のTrack ID（最終的なInstance ID）で色分け
+            - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id）で色分け
+            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（最終的なInstance ID）で色分け
         - Instance textラジオボタン: 画像上でボックスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
             - None: 何も表示しない
             - Label: ラベル文字を表示（文字色はボックスの色と一致）
             - Track ID: Track IDを表示（文字色はボックスの色と一致）
+            - Hull Merged: hull_merged_track_idを表示
             - Global Track: global_track_idを表示
         - チェックボックス付きlabel凡例: config（`settings.LABEL_TO_CATEGORY_GROUP`等）の全ラベルを件数付きで表示し、チェックしているlabelのボックスのみを表示する（検出結果に含まれるラベルだけを出すと、推論のたびに並びとチェック状態が変わるため）
 - PointCloudタブを選択しているとき、view_colには点群表示用のキャンバス以外にも、上から順番に以下のウィジェットを表示する（点群表示用のキャンバスが一番下）

@@ -1,4 +1,4 @@
-"""グローバルトラック単位のボックス角度の補正（dbscan_interp）.
+"""トラック（hull_merged_track_id）単位のボックス角度の補正（dbscan_interp）.
 
 フレームごとの向きの推定は外れることがあるが、同じ物体の向きはフレーム間で
 大きくは変わらない。グローバル座標の向きを単位円上でクラスタリングし、
@@ -209,4 +209,35 @@ def correct_track_orientation(
                 "applied", "yaw_before", "rotation_deg", "refit", "refit_center_shift")},
         }
         num_corrected += 1
+    return num_corrected
+
+
+def correct_orientations(
+    fitted: list[tuple[str, str | None, dict[str, Any], tuple[float, float], str]],
+    box_fitting_params: dict[str, Any] | None,
+    *,
+    reference_ego_poses: dict[str, dict[str, Any]] | None = None,
+) -> int:
+    """トラック（hull_merged_track_id）ごとに向きを補正する（行をその場で書き換える）.
+
+    Args:
+        fitted: ``(hull_merged_track_id, label, 当てはめ結果の行, センサー位置, sample_token)``
+        reference_ego_poses: sample_token → 基準 ego_pose
+
+    Returns:
+        補正したボックスの数
+    """
+    settings = correction_settings(box_fitting_params)
+    by_track: dict[str, list[tuple[str | None, dict[str, Any], str]]] = {}
+    for track_id, label, row, _origin, sample_token in fitted:
+        by_track.setdefault(track_id, []).append((label, row, sample_token))
+    num_corrected = 0
+    for rows in by_track.values():
+        num_corrected += correct_track_orientation(
+            rows[0][0],
+            [row for _, row, _ in rows],
+            [sample for _, _, sample in rows],
+            [(reference_ego_poses or {}).get(sample) for _, _, sample in rows],
+            settings,
+        )
     return num_corrected

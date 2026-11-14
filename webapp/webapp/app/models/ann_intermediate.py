@@ -508,6 +508,8 @@ class DepthEstimationParams(Base):
     # 結合の診断情報（グループ一覧と、却下された辺の理由）。
     # 「なぜ結合されなかったか」を後から確認するために残す
     merge_diagnostics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # ボックスの規定長と向きによる結合（global_track_id を決める）の診断情報
+    box_merge_diagnostics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 実行結果メタ
     num_inferences: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     num_boxes:      Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -766,6 +768,9 @@ class BoxFitting3D(Base):
     # 写ると別トラックになる。それを束ねた ID がこちら。
     # エクスポートの Instance はこの単位で作る
     global_track_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 凸包の IoS で結合した後のトラック ID（global_track_id はこれをさらに
+    # ボックスの規定長と向きで結合したもの）。導入前の run では NULL
+    hull_merged_track_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # グループの代表行か。結合したグループの 3D ボックスは
     # **代表 1 行にだけ**入れる（全行に入れると BEV 表示で同じ箱が重なる）。
     # 点群は各行が自分のカメラのものを保持する

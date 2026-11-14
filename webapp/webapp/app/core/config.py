@@ -451,6 +451,22 @@ class Settings(BaseSettings):
     # 判定にはトラック内で多数決したラベルを使う
     DEFAULT_MERGE_LABEL_MATCH: str = "category_group"
 
+    # --- ボックスの規定長と向きに基づく結合（Box-Orient Based Merge） ---------
+    # 凸包の重なりで結合した後（hull_merged_track_id）、角度補正を済ませたボックス
+    # どうしを「同じラベル・向きの差が閾値以下・合体しても規定長（DEFAULT_BOX_SIZES）
+    # × 倍率に収まる」条件で結合し、global_track_id を決める。
+    # 対象ラベル（車両系だけ。歩行者は 2 人が極端に近いことが多く、誤結合が増える）
+    BOX_ORIENT_MERGE_LABELS: list[str] = [
+        "car", "truck", "bus", "trailer", "construction_vehicle",
+    ]
+    DEFAULT_BOX_MERGE_ORIENTATION_DIFF: float = 20.0
+    BOX_MERGE_ORIENTATION_DIFF_MAX: float = 45.0
+    DEFAULT_BOX_MERGE_LENGTH_RATIO: float = 1.4
+    DEFAULT_BOX_MERGE_WIDTH_RATIO: float = 1.3
+    BOX_MERGE_RATIO_MAX: float = 2.0
+    DEFAULT_BOX_MERGE_MAX_HULL_GAP: float = 0.8
+    DEFAULT_BOX_MERGE_MIN_MATCH_FRAMES: int = 1
+
     # --- 物体の想定サイズ ---------------------------------------------------
     # ラベルごとの (length, width, height) [m]。距離フィルタ（long_side）で
     # 長辺（length と width の大きい方）を奥行きの上限に使う。

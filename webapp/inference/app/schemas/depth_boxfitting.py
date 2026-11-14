@@ -166,7 +166,9 @@ class BoxFittingResult(BaseModel):
     # LiDAR を基準に補正した深度点群と、その係数
     points_depth_corrected_ego: dict[str, Any] | None = None
     depth_correction: dict[str, Any] | None = None
-    # カメラ跨ぎで結合した後のトラック ID
+    # 凸包の IoS で結合した後のトラック ID
+    hull_merged_track_id: str | None = None
+    # ボックスの規定長と向きでさらに結合した後のトラック ID（最終的なトラック）
     global_track_id: str | None = None
     # グループの代表行か（ボックスは代表 1 行にだけ入る）
     is_primary: bool = True
@@ -290,8 +292,11 @@ class BoxFittingJobResult(BaseModel):
     # カメラ跨ぎの結合結果
     num_merged_groups: int = 0
     num_merged_instances: int = 0
-    # 結合の診断情報（グループ一覧と、却下された辺の理由）
+    # 凸包の IoS による結合の診断情報（グループ一覧と、却下された辺の理由）
     merge_diagnostics: dict[str, Any] | None = None
+    # ボックスの規定長と向きによる結合の診断情報
+    box_merge_diagnostics: dict[str, Any] | None = None
+    num_box_merged_boxes: int = 0
     num_fitted: int
     inference_time: float
     depth_estimations: list[DepthEstimationResult]

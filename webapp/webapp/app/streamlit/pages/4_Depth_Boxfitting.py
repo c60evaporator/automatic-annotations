@@ -241,17 +241,30 @@ OPT_BF_DEPTH_INST, W_BF_DEPTH_INST = (
 )
 
 # カメラ跨ぎの結合を目で確かめるための色分け。
-# global_track_id で塗ると、結合されたインスタンスが別カメラでも同色になる
+# Hull Merged は凸包の IoS で結合した後の ID（hull_merged_track_id）、
+# Global Track はさらにボックスの規定長と向きで結合した後の ID（global_track_id）。
+# 結合されたインスタンスは別カメラでも同色になる
+COLOR_MODE_HULL = "Hull Merged"
 COLOR_MODE_GLOBAL = "Global Track"
-BOXFIT_COLOR_MODES = (*COLOR_MODES, COLOR_MODE_GLOBAL)
+BOXFIT_COLOR_MODES = (*COLOR_MODES, COLOR_MODE_HULL, COLOR_MODE_GLOBAL)
+
+
+def _track_key(item: dict, color_mode: str) -> str:
+    """Hull Merged / Global Track の色分けのキー.
+
+    結合していない run には global_track_id が無いので track_id へ落とす。
+    hull_merged_track_id を導入する前の run では global_track_id が凸包の結合結果
+    """
+    if color_mode == COLOR_MODE_HULL:
+        return str(item.get("hull_merged_track_id") or item.get("global_track_id")
+                   or item.get("track_id", ""))
+    return str(item.get("global_track_id") or item.get("track_id", ""))
 
 
 def instance_color(item: dict, color_mode: str) -> str:
     """インスタンスの表示色を決める（3D ボックスと点群で共通）."""
-    if color_mode == COLOR_MODE_GLOBAL:
-        # 結合していない run では global_track_id が無いので track_id へ落とす
-        key = str(item.get("global_track_id") or item.get("track_id", ""))
-        return color_for_track(key)
+    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+        return color_for_track(_track_key(item, color_mode))
     if color_mode == COLOR_MODE_TRACK:
         return color_for_track(str(item.get("track_id", "")))
     return color_for_label(str(item.get("label", "")))
@@ -259,15 +272,35 @@ def instance_color(item: dict, color_mode: str) -> str:
 
 def instance_legend_key(item: dict, color_mode: str) -> str:
     """色分けの単位となるキー（凡例フィルタと揃える）."""
-    if color_mode == COLOR_MODE_GLOBAL:
-        return str(item.get("global_track_id") or item.get("track_id", ""))
+    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+        return _track_key(item, color_mode)
     if color_mode == COLOR_MODE_TRACK:
         return str(item.get("track_id", ""))
     return str(item.get("label", ""))
 
 
+def _merged_pairs_text(pairs: list[dict] | None) -> str:
+    """結合した対ごとのサンプル番号を辞書の形で表す（例: {A + B: [7, 8], B + C: [9]}）.
+
+    サンプル番号は Select Sample と同じ番号。
+    """
+    if pairs is None:
+        return "-"  # 対ごとのサンプルを記録していない古い run
+    index = {s["token"]: i for i, s in enumerate(samples)}
+    items = [
+        f"{p['pair'][0]} + {p['pair'][1]}: "
+        f"[{', '.join(str(index.get(t, '?')) for t in p['sample_tokens'])}]"
+        for p in pairs
+    ]
+    return "{" + ", ".join(items) + "}"
+
+
+def _sample_number(token: str | None) -> int | None:
+    return next((i for i, s in enumerate(samples) if s["token"] == token), None)
+
+
 def render_merge_diagnostics(run_info: dict | None) -> None:
-    """カメラ間結合の診断をエクスパンダーで出す.
+    """凸包の IoS による結合の診断をエクスパンダーで出す.
 
     「閾値を緩めても結合されない」ときの原因は閾値ではなく、
     1 対 1 の割り当てやカメラ重複の保護であることが多い。
@@ -283,7 +316,7 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
     too_few = diagnostics.get("too_few_points") or {}
     too_few_tracks = too_few.get("tracks") or []
 
-    title = f"Merge Diagnostics（{len(groups)} グループ / 結合 {len(merged)} 件"
+    title = f"Hull Merge Diagnostics（{len(groups)} グループ / 結合 {len(merged)} 件"
     if too_few.get("num_frames"):
         title += f" / 点数不足 {too_few['num_frames']} フレーム"
     with st.expander(title + "）", expanded=False):
@@ -295,10 +328,15 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
         st.dataframe(
             [
                 {
-                    "global_track_id": g["global_track_id"],
+                    # 導入前の run の診断は global_track_id で残っている
+                    "hull_merged_track_id": g.get("hull_merged_track_id")
+                    or g.get("global_track_id"),
                     "members": ", ".join(g.get("members") or []),
                     "label": g.get("label"),
                     "frames": g.get("num_frames"),
+                    # どの対がどのサンプルで結合されたか
+                    "merged pairs (samples)": _merged_pairs_text(g.get("merged_pairs"))
+                    if len(g.get("members") or []) > 1 else "",
                 }
                 for g in sorted(groups, key=lambda g: -len(g.get("members") or []))
             ],
@@ -322,7 +360,8 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
             st.dataframe(
                 [
                     {
-                        "global_track_id": r["global_track_id"],
+                        "hull_merged_track_id": r.get("hull_merged_track_id")
+                        or r.get("global_track_id"),
                         "label": r.get("label"),
                         # 「全フレームで落ちた」のか「遠方だけ落ちた」のかが分かる
                         "skipped / total": (
@@ -336,29 +375,84 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
                 width="stretch", hide_index=True,
             )
 
-        st.markdown("**トラック対の判定**")
-        gated = [e for e in edges if e.get("status") == "gated"]
-        if gated:
-            st.caption(
-                f"status=gated は足切り（凸包の隙間・ラベル）で、重なりの判定まで"
-                f"進まなかった組（表示中 {len(gated)} 件）"
-            )
+        st.markdown("**トラック対の判定**（トラック対 × サンプル）")
+        st.caption(
+            "status / pair reason はトラック対としての結果（gated は足切り（凸包の隙間・ラベル）で"
+            "重なりの判定まで進まなかった組）。result / reason はサンプルごとの照合結果"
+            "（matched は対応付けられたサンプル）"
+        )
         total = diagnostics.get("num_edges_total", len(edges))
         if total > len(edges):
-            st.caption(f"重なりの大きい順に {len(edges)} / {total} 件を表示")
-        st.dataframe(
-            [
-                {
-                    "track A": e["pair"][0], "track B": e["pair"][1],
-                    "max overlap": e["max_overlap"],
-                    # 古い run の診断には無い
-                    "min gap [m]": e.get("min_gap"),
-                    "status": e["status"], "reason": e.get("reason", ""),
-                }
-                for e in edges
-            ],
-            width="stretch", hide_index=True,
+            st.caption(f"重なりの大きい順に {len(edges)} / {total} 対を表示")
+        rows = []
+        for e in edges:
+            pair_cols = {"track A": e["pair"][0], "track B": e["pair"][1],
+                         "status": e["status"], "pair reason": e.get("reason", ""),
+                         "max overlap": e["max_overlap"]}
+            if "samples" not in e:  # サンプルごとの結果を記録していない古い run
+                rows.append({**pair_cols, "sample": None, "result": "", "reason": "",
+                             "overlap": None, "gap [m]": e.get("min_gap")})
+                continue
+            for r in e["samples"]:
+                rows.append({**pair_cols, "sample": _sample_number(r["sample_token"]),
+                             "result": r["result"], "reason": r.get("reason", ""),
+                             "overlap": r.get("overlap"), "gap [m]": r.get("gap")})
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+
+def render_box_merge_diagnostics(run_info: dict | None) -> None:
+    """ボックスの規定長と向きによる結合（global_track_id）の診断をエクスパンダーで出す."""
+    diagnostics = (run_info or {}).get("box_merge_diagnostics")
+    if not diagnostics:
+        return
+    groups = diagnostics.get("groups") or []
+    edges = diagnostics.get("edges") or []
+    title = (f"Box-Orient Merge Diagnostics（結合 {len(groups)} グループ / "
+             f"まとめたボックス {diagnostics.get('num_merged_boxes', 0)} 件）")
+    with st.expander(title, expanded=False):
+        st.caption(
+            "結合の条件: "
+            + " / ".join(f"{k}={v}" for k, v in (diagnostics.get("params") or {}).items())
         )
+        st.markdown("**結合したグループ**")
+        if groups:
+            st.dataframe(
+                [{"global_track_id": g["global_track_id"],
+                  "hull_merged_track_ids": ", ".join(g.get("members") or []),
+                  # どの対がどのサンプルで結合されたか
+                  "accepted pairs (samples)": _merged_pairs_text(g.get("accepted_pairs"))}
+                 for g in groups],
+                width="stretch", hide_index=True,
+            )
+        else:
+            st.caption("結合したグループはありません")
+        st.markdown("**トラック対の判定**（hull_merged_track_id の対 × サンプル）")
+        st.caption("status / pair reason はトラック対としての結果（gated は全サンプルが足切り"
+                   "（凸包の隙間・ラベル）、rejected は向き・合体後の寸法・1 対 1 の割り当て・"
+                   "Min Match Frames・同一カメラの保護で落ちた組）。"
+                   "result / reason はサンプルごとの照合結果（matched は対応付けられたサンプル）")
+        total = diagnostics.get("num_edges_total", len(edges))
+        if total > len(edges):
+            st.caption(f"{len(edges)} / {total} 対を表示")
+        rows = []
+        for e in edges:
+            pair_cols = {"track A": e["pair"][0], "track B": e["pair"][1],
+                         "status": e["status"], "pair reason": e.get("reason", ""),
+                         "frames": e.get("frames")}
+            if "samples" not in e:  # サンプルごとの結果を記録していない古い run
+                rows.append({**pair_cols, "sample": None, "result": "",
+                             "reason": "", "gap [m]": e.get("min_gap")})
+                continue
+            for r in e["samples"]:
+                values = r.get("values") or {}
+                rows.append({
+                    **pair_cols, "sample": _sample_number(r["sample_token"]),
+                    "result": r["result"], "reason": r.get("reason", ""),
+                    "gap [m]": values.get("gap"),
+                    "orient diff [deg]": values.get("orientation_diff"),
+                    "length [m]": values.get("length"), "width [m]": values.get("width"),
+                })
+        st.dataframe(rows, width="stretch", hide_index=True)
 
 
 def has_box(item: dict) -> bool:
@@ -857,22 +951,17 @@ with param_col:
         with merge_tab:
             st.caption(
                 "同じ物体が複数カメラに写ると別トラックになるため、"
-                "点群化してから結合する。結合したグループには共通の "
-                "global_track_id が付き、3D ボックスは結合後の点群に当てる"
+                "点群化してから 2 段階で結合する。凸包の重なりで結合したものに "
+                "hull_merged_track_id が付き、3D ボックスは結合後の点群に当てる。"
+                "角度補正の後、ボックスの規定長と向きでさらに結合したものが global_track_id"
             )
             enable_merge = st.checkbox(
                 "カメラ間の結合を行う", value=True, key="_w_boxfit_enable_merge",
-                help="オフにすると、従来どおりカメラごとに当てはめる",
+                help="オフにすると、従来どおりカメラごとに当てはめる（両方の結合を行わない）",
             )
-            merge_method = st.selectbox(
-                "Match Method", settings.MERGE_METHODS,
-                index=settings.MERGE_METHODS.index(settings.DEFAULT_MERGE_METHOD)
-                if settings.DEFAULT_MERGE_METHOD in settings.MERGE_METHODS else 0,
-                disabled=not enable_merge,
-                help=("BEV convex-hull: BEV に落とした凸包の重なり率で判定する。"
-                      "カメラごとに物体の違う面しか見えないため、和集合ではなく"
-                      "小さい方の面積で割った値（IoS）を使う"),
-            )
+            st.markdown("**Hull Based Merge**")
+            st.caption("BEV に落とした凸包の重なり率で判定する。カメラごとに物体の違う面しか"
+                       "見えないため、和集合ではなく小さい方の面積で割った値（IoS）を使う")
             merge_label_match = st.radio(
                 "Label Match", IOU_LABEL_MATCHES,
                 index=IOU_LABEL_MATCHES.index(settings.DEFAULT_MERGE_LABEL_MATCH)
@@ -922,6 +1011,56 @@ with param_col:
                     help=("何フレームでマッチしたら結合するか。同じ物体が"
                           "複数カメラに写るキーフレームは高々 1〜2 なので、"
                           "割合ではなくフレーム数で判定する"),
+                )
+
+            st.markdown("**Box-Orient Based Merge**")
+            st.caption(
+                "角度補正の後、同じラベル・同じ向きで、合体しても規定長（DEFAULT_BOX_SIZES）に"
+                "収まるボックスどうしを結合する（凸包が重ならない前後の部分観測など）。"
+                "対象ラベル: " + (", ".join(settings.BOX_ORIENT_MERGE_LABELS) or "なし")
+                + "（config の BOX_ORIENT_MERGE_LABELS）。同一カメラの扱いは"
+                "Max Same-Camera Gap に従う"
+            )
+            box_merge_cols = st.columns(5)
+            with box_merge_cols[0]:
+                box_merge_orient_diff = st.slider(
+                    "Orientation Diff Threshold [deg]", 0.0,
+                    settings.BOX_MERGE_ORIENTATION_DIFF_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_ORIENTATION_DIFF, step=1.0,
+                    disabled=not enable_merge,
+                    help="向きの差の上限（180 度違いは同じ向きとみなす）",
+                )
+            with box_merge_cols[1]:
+                box_merge_length_ratio = st.slider(
+                    "Length Ratio Threshold", 1.0,
+                    settings.BOX_MERGE_RATIO_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_LENGTH_RATIO, step=0.05,
+                    disabled=not enable_merge,
+                    help="合体後のボックス長さの上限（規定長に対する倍率）",
+                )
+            with box_merge_cols[2]:
+                box_merge_width_ratio = st.slider(
+                    "Width Ratio Threshold", 1.0,
+                    settings.BOX_MERGE_RATIO_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_WIDTH_RATIO, step=0.05,
+                    disabled=not enable_merge,
+                    help="合体後のボックス幅の上限（規定幅に対する倍率）",
+                )
+            with box_merge_cols[3]:
+                box_merge_hull_gap = st.slider(
+                    "Max Hull Gap [m]", 0.0,
+                    settings.MERGE_MAX_HULL_GAP_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_MAX_HULL_GAP, step=0.1,
+                    disabled=not enable_merge, key="_w_box_merge_hull_gap",
+                    help="凸包どうしの隙間の上限（足切り。重なっていれば 0）",
+                )
+            with box_merge_cols[4]:
+                box_merge_min_frames = st.slider(
+                    "Min Match Frames", 1,
+                    settings.MERGE_MIN_MATCH_FRAMES_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_MIN_MATCH_FRAMES, step=1,
+                    disabled=not enable_merge, key="_w_box_merge_min_frames",
+                    help="何キーフレームで対応付けられたら結合するか",
                 )
 
         with fitting_tab:
@@ -1093,12 +1232,21 @@ mask_params = {
 }
 # 結合しない場合は空の dict を渡す（推論側が結合を飛ばす）
 merge_params = {
-    "method": merge_method,
+    "method": settings.DEFAULT_MERGE_METHOD,
     "label_match": merge_label_match,
     "overlap_threshold": float(merge_overlap),
     "max_hull_gap": float(merge_hull_gap),
     "min_match_frames": int(merge_min_frames),
     "max_same_camera_gap": int(merge_same_cam_gap),
+    # ボックスの規定長と向きによる結合（角度補正の後。global_track_id を決める）
+    "box_orient": {
+        "labels": list(settings.BOX_ORIENT_MERGE_LABELS),
+        "orientation_diff_deg": float(box_merge_orient_diff),
+        "length_ratio": float(box_merge_length_ratio),
+        "width_ratio": float(box_merge_width_ratio),
+        "max_hull_gap": float(box_merge_hull_gap),
+        "min_match_frames": int(box_merge_min_frames),
+    },
 } if enable_merge else {}
 box_fitting_params = {
     # ラベルごとの手法と、手法ごとの設定
@@ -1902,7 +2050,7 @@ with pointcloud_tab_view:
                     flat, color_mode=pc_color_mode, points_key=depth_key,
                     key_fn=lambda f: instance_legend_key(f, pc_color_mode),
                     color_fn=lambda k: instance_color(
-                        {"global_track_id": k, "track_id": k, "label": k},
+                        {"global_track_id": k, "hull_merged_track_id": k, "track_id": k, "label": k},
                         pc_color_mode),
                 )
             if show_lidar_instances and lidar_key:
@@ -1917,7 +2065,7 @@ with pointcloud_tab_view:
                     # 重複除去は結合（combine_summaries）の側だけで行う
                     key_fn=lambda f: instance_legend_key(f, pc_color_mode),
                     color_fn=lambda k: instance_color(
-                        {"global_track_id": k, "track_id": k, "label": k},
+                        {"global_track_id": k, "hull_merged_track_id": k, "track_id": k, "label": k},
                         pc_color_mode),
                 )
 
@@ -2264,9 +2412,9 @@ with pointcloud_tab_view:
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
                 applied = st.session_state.get(PC_REFILTER_PARAMS)
-                if applied and pc_color_mode == COLOR_MODE_GLOBAL:
+                if applied and pc_color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
                     st.caption(
-                        "Global Track の色分けは推論時のカメラ間結合の結果です"
+                        f"{pc_color_mode} の色分けは推論時のカメラ間結合の結果です"
                         "（再フィルタでは結合をやり直さないため、Apply した条件で"
                         "結合がどう変わるかは反映されません）"
                     )
@@ -2457,7 +2605,7 @@ with fitting_tab_view:
                 bf_flat, color_mode=bf_color_mode, points_key=bf_depth_key,
                 key_fn=lambda f: instance_legend_key(f, bf_color_mode),
                 color_fn=lambda k: instance_color(
-                    {"global_track_id": k, "track_id": k, "label": k},
+                    {"global_track_id": k, "hull_merged_track_id": k, "track_id": k, "label": k},
                     bf_color_mode))
         if show_bf_lidar:
             bf_groups += group_instance_points(
@@ -2465,7 +2613,7 @@ with fitting_tab_view:
                 # 深度点群と同じ軸で色分けする。渡さないと Label へ落ちる
                 key_fn=lambda f: instance_legend_key(f, bf_color_mode),
                 color_fn=lambda k: instance_color(
-                    {"global_track_id": k, "track_id": k, "label": k},
+                    {"global_track_id": k, "hull_merged_track_id": k, "track_id": k, "label": k},
                     bf_color_mode),
                 symbol=SYMBOL_LIDAR, size=MARKER_SIZE_LIDAR)
 
@@ -2514,6 +2662,7 @@ with fitting_tab_view:
                            f"ボックス {bf_boxes_missing} 件を表示していません"
                            "（Final Box なら表示できます）")
             render_merge_diagnostics(run_info)
+            render_box_merge_diagnostics(run_info)
             if show_orientation:
                 render_orientation_status(
                     view_run_id, len(orientation_arrows),

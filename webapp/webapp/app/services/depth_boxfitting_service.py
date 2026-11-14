@@ -262,11 +262,14 @@ def finalize_run(
             status=status,
             num_inferences=int(job.get("processed", 0)),
             num_boxes=sum(
-                1 for b in box_fittings if b.get("center_ego") is not None
+                # ボックスの結合でまとめられた行は、結合前のボックスを持つが数えない
+                1 for b in box_fittings
+                if b.get("center_ego") is not None and b.get("is_primary", True)
             ),
             inference_time=(job.get("result") or {}).get("inference_time"),
             # 結合の診断情報。結合しなかった run では None のまま
             merge_diagnostics=(job.get("result") or {}).get("merge_diagnostics"),
+            box_merge_diagnostics=(job.get("result") or {}).get("box_merge_diagnostics"),
         )
 
     logger.info(
@@ -635,6 +638,7 @@ def refilter_sample(
                 # 保存済みの点群の表示と一致するよう、結合後の値を付ける
                 # （計算には結合前のラベルを使っており、ここは表示だけ）
                 "global_track_id": fit.get("global_track_id"),
+                "hull_merged_track_id": fit.get("hull_merged_track_id"),
                 "label": fit.get("label"),
                 "tracking_label": fit.get("tracking_label"),
                 "stored_raw": fit.get("num_points_depth"),

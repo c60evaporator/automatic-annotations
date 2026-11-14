@@ -768,6 +768,45 @@ def track_key(channel: str, track_id: Any) -> str:
     return f"{channel}:{track_id}"
 
 
+def _hull_sample_reason(
+    result: dict[str, Any], *, overlap_threshold: float, max_gap: float, label_match: str,
+) -> str:
+    """凸包の照合の、1 サンプル分の結果の説明（診断用）."""
+    status = result["result"]
+    if status == "matched":
+        return ""
+    if status == "gap_too_large":
+        return f"凸包の隙間 {result['gap']:.2f} m が上限（{max_gap} m）を超えた"
+    if status == "label_mismatch":
+        label_a, label_b = result["labels"]
+        return f"ラベルが結合の条件（{label_match}）に合わない（{label_a} / {label_b}）"
+    if status == "taken_by_other":
+        return "1 対 1 の割り当てで別の相手に取られた"
+    if status == "taken_by_same_label":
+        return "ラベルが同じ別の組を優先した（category_group）"
+    return f"重なりが閾値（{overlap_threshold}）未満"
+
+
+def group_matched_pairs(
+    members: Iterable[str], matched_samples: dict[tuple[str, str], list[str]],
+    sample_order: Sequence[str],
+) -> list[dict[str, Any]]:
+    """グループのメンバー同士で照合により対応付けられた対と、そのサンプル（診断用）.
+
+    Returns:
+        ``[{"pair": [トラック, トラック], "sample_tokens": [...]}]``
+        （サンプルは並び順。対は最初に対応付けられたサンプルの順）
+    """
+    member_set = set(members)
+    position = {token: i for i, token in enumerate(sample_order)}
+    pairs = [
+        {"pair": list(pair), "sample_tokens": sorted(set(samples), key=position.get)}
+        for pair, samples in matched_samples.items()
+        if pair[0] in member_set and pair[1] in member_set
+    ]
+    return sorted(pairs, key=lambda p: (position[p["sample_tokens"][0]], p["pair"]))
+
+
 def _as_xyz(hull_xy: np.ndarray) -> np.ndarray:
     """凸包の頂点を (N, 3) にする（重なり判定は XY しか見ない）."""
     hull_xy = np.asarray(hull_xy, dtype=np.float64)
@@ -815,12 +854,14 @@ def merge_and_fit(
     ## 流れ
 
     1. sample ごとにカメラ対で照合（BEV 凸包の IoS）
-    2. トラック単位で集計し、global_track_id を割り当てる
+    2. トラック単位で集計し、hull_merged_track_id を割り当てる
     3. グローバルトラック全体でラベルを多数決
     4. sample ごとに、グループの要約を結合して当てはめる
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
     5. AI モデルによる向きの再推定と反映（orient_boxes）
-    6. グローバルトラック単位の補正（高さ → 角度 → 幅 → 長さ）
+    6. hull_merged_track 単位の角度補正
+    7. ボックスの規定長と向きに基づく結合（global_track_id を割り当てる）
+    8. global_track_id 単位の寸法補正（高さ → 幅 → 長さ）
 
     ## 点数の下限をここで判定する理由
 
@@ -867,8 +908,12 @@ def merge_and_fit(
     frame_matches: list[dict[tuple[str, str], float]] = []
     # {トラック対: {"overlap": 最大, "status": 最良時の扱い}}
     candidate_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    # サンプルごとの照合結果（診断用。{トラック対: [{"sample_token", "result", ...}]}）
+    pair_sample_results: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    # 照合で対応付けられたサンプル（グループの診断用。{トラック対: [sample_token]}）
+    matched_samples: dict[tuple[str, str], list[str]] = {}
     # 結合しない場合は照合を飛ばす（辺が無いので各トラックが単独のグループ）
-    for entries in (entries_by_sample.values() if merge_enabled else ()):
+    for sample_token, entries in (entries_by_sample.items() if merge_enabled else ()):
         usable = [e for e in entries if e.get("_summary") is not None]
         if len(usable) < 2:
             continue
@@ -897,6 +942,15 @@ def merge_and_fit(
         for entry in pair_candidates:
             i, j = entry["pair"]
             pair = tuple(sorted((key_of(i), key_of(j))))
+            pair_sample_results.setdefault(pair, []).append({
+                "sample_token": sample_token,
+                "result": "matched" if entry["status"] == "accepted" else entry["status"],
+                "overlap": round(float(entry["overlap"]), 4),
+                "gap": round(float(entry["gap"]), 3),
+                "labels": [instances[i]["label"], instances[j]["label"]],
+            })
+            if entry["status"] == "accepted":
+                matched_samples.setdefault(pair, []).append(sample_token)
             previous = candidate_stats.get(pair)
             rank = (entry["overlap"], -entry["gap"])
             if previous is None or rank > (previous["overlap"], -previous["gap"]):
@@ -959,6 +1013,8 @@ def merge_and_fit(
             summary = entry.get("_summary")
             key = track_key(_channel_of(entry), entry["track_id"])
             global_id = global_ids.get(key, key)
+            # 凸包の結合後の ID。global_track_id はボックスの結合（box_orient_merge）で決め直す
+            entry["hull_merged_track_id"] = global_id
             entry["global_track_id"] = global_id
             # 最終ラベルはグローバルトラック全体の多数決
             entry["label"] = global_label.get(global_id) or entry.get("label")
@@ -968,6 +1024,8 @@ def merge_and_fit(
         for global_id, members in groups.items():
             # 点群を結合するメンバー（LiDAR 点群の有無で選ぶ）
             used, selection = select_merge_members(members)
+            # ボックスの結合（box_orient_merge）でも同じ規則で選ぶため残す
+            has_lidar = any(int(m["_summary"].get("num_points_lidar") or 0) > 0 for m in used)
             summaries = [m["_summary"] for m in used]
             combined = combine_summaries(summaries)
             if len(members) > 1:
@@ -1036,8 +1094,13 @@ def merge_and_fit(
                     member["is_primary"] = True
                     fitted_rows.append((global_id, label, member, tuple(origin), sample_token))
                     fitted_groups.append({
-                        "global_track_id": global_id, "sample_token": sample_token,
+                        "global_track_id": global_id, "hull_merged_track_id": global_id,
+                        "sample_token": sample_token,
                         "label": label, "primary": member, "members": members,
+                        # 結合に使った点数（ボックスの結合で向きの重みにする）
+                        "num_points": int(combined["num_points"]),
+                        # 当てはめた点群に LiDAR 点が含まれるか
+                        "has_lidar": has_lidar,
                     })
                 elif member is primary:
                     member["status"] = "not_fitted"
@@ -1055,15 +1118,49 @@ def merge_and_fit(
     for _, _, member, _, _ in fitted_rows:
         record_box_stage(member, BOX_STAGE_LOCAL_CORRECTED)
 
-    # --- 6) グローバルトラック単位の補正 ----------------------------------
-    # 全フレームの箱がそろってから、高さ → 角度 → 幅 → 長さの順に補正する
+    # --- 6) hull_merged_track 単位の角度補正 -----------------------------
+    from app.services.box_fitting import BOX_STAGE_ORIENTATION_CORRECTED
+    from app.services.box_orientation_correction import correct_orientations
+
+    num_orientation_corrected = correct_orientations(
+        fitted_rows, box_fitting_params, reference_ego_poses=reference_ego_poses,
+    )
+    for _, _, member, _, _ in fitted_rows:
+        record_box_stage(member, BOX_STAGE_ORIENTATION_CORRECTED)
+
+    # --- 7) ボックスの規定長と向きに基づく結合（global_track_id） ------------
+    # 角度を揃えた後に、凸包が重ならなかった同じ物体の部分どうしを結合する
+    from app.services.box_orient_merge import assign_box_merged_ids
+
+    track_members: dict[str, list[tuple[str, set[int]]]] = {}
+    for key, frames in frames_by_track.items():
+        track_members.setdefault(global_ids.get(key, key), []).append(
+            (key.rsplit(":", 1)[0], set(frames)))
+    box_merge = assign_box_merged_ids(
+        fitted_groups, track_members, merge_params, box_fitting_params,
+        enabled=merge_enabled,
+    )
+    final_ids = box_merge["global_ids"]
+    for entries in entries_by_sample.values():
+        for entry in entries:
+            hull_id = entry.get("hull_merged_track_id")
+            if hull_id is not None:
+                entry["global_track_id"] = final_ids.get(hull_id, hull_id)
+
+    # --- 8) global_track_id 単位の寸法補正（高さ → 幅 → 長さ） -----------------
     from app.services.box_size import correct_box_sizes
 
     size_stats = correct_box_sizes(
-        fitted_rows, box_fitting_params, reference_ego_poses=reference_ego_poses,
+        [
+            (final_ids.get(hull_id, hull_id), label, member, origin, sample)
+            for hull_id, label, member, origin, sample in fitted_rows
+            # ボックスの結合で代表でなくなった行は除く
+            if member.get("is_primary") and member.get("status") == "fitted"
+        ],
+        box_fitting_params,
     )
 
-    # --- 7) 診断情報 -----------------------------------------------------
+    # --- 9) 診断情報 -----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。
     # 閾値を緩めても結合されない場合、原因は閾値ではなく
     # 1 対 1 の割り当てやカメラ重複の保護であることが多い
@@ -1109,13 +1206,20 @@ def merge_and_fit(
             # 全フレームでの凸包の最小の隙間 [m]（重なっていれば 0）
             "min_gap": round(stats["min_gap"], 3),
             "status": status, "reason": reason,
+            # サンプルごとの照合結果（全サンプル分。サンプルの並び順）
+            "samples": [
+                {**r, "reason": _hull_sample_reason(
+                    r, overlap_threshold=overlap_threshold, max_gap=max_gap,
+                    label_match=label_match)}
+                for r in pair_sample_results.get(pair, [])
+            ],
         })
 
     # 点数不足で当てはめなかったグループ。「推論直後と Apply 後で
     # インスタンス数が違う」ときに、まずここを見れば切り分けられる
     too_few_rows = [
         {
-            "global_track_id": global_id,
+            "hull_merged_track_id": global_id,
             "label": global_label.get(global_id),
             "num_frames_skipped": len(counts),
             "num_frames_total": int(frames_with_group.get(global_id, 0)),
@@ -1124,17 +1228,20 @@ def merge_and_fit(
         }
         for global_id, counts in too_few_points.items()
     ]
-    too_few_rows.sort(key=lambda r: (-r["num_frames_skipped"], r["global_track_id"]))
+    too_few_rows.sort(key=lambda r: (-r["num_frames_skipped"], r["hull_merged_track_id"]))
 
     diagnostics = {
         "groups": [
             {
-                "global_track_id": global_id,
+                "hull_merged_track_id": global_id,
                 "members": sorted(members_),
                 "label": global_label.get(global_id),
                 "num_frames": len(
                     set().union(*(frames_by_track.get(k, set()) for k in members_))
                 ),
+                # メンバー同士で照合により対応付けられた対と、そのサンプル
+                "merged_pairs": group_matched_pairs(
+                    members_, matched_samples, list(entries_by_sample)),
             }
             for global_id, members_ in sorted(groups_by_id.items(), key=lambda kv: kv[0])
         ],
@@ -1163,7 +1270,9 @@ def merge_and_fit(
         "num_merged": num_merged,
         "num_too_few_points": sum(len(c) for c in too_few_points.values()),
         "num_size_corrected_tracks": size_stats["num_tracks"],
-        "num_orientation_corrected_boxes": size_stats["num_orientation_corrected"],
+        "num_orientation_corrected_boxes": num_orientation_corrected,
+        "num_box_merged_boxes": box_merge["num_merged_boxes"],
+        "box_diagnostics": box_merge["diagnostics"],
         "merge_selection_counts": dict(selection_counts),
         "diagnostics": diagnostics,
     }

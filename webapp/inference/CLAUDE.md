@@ -495,7 +495,7 @@ Depth Boxfittingは、以下のフローで行われます
             - 補正係数が求まらなかった場合（対応点が無い等）は、補正前のDepth点群のみをインスタンスごと点群とする（LiDAR点群とは混合しない）
         - インスタンスごとLiDAR点群の点数がMax LiDAR Points to use Depth以上（Max LiDAR Points to use Depth>0のとき）、またはフィルタ後のDepth点群が0点なら、Depth点群は使用せずにLiDAR点群のみをインスタンスごと点群として使用する
         - Depth点群・LiDAR点群がともに0点なら、そのインスタンスは`status="no_points"`として以降の処理を行わない
-- パス1が全キーフレームで終わったら（パス2）、以下手順でシーン全体を通して複数カメラ間での同一インスタンス結合を実施してglobal_track_idを割り当てる。なお結合を実施しない場合（Inter-cam Mergeタブの「カメラ間の結合を行う」がオフ）は照合を行わず、（カメラ, track_id）ごとに global_track_idを割り当てる（結合の有無に関わらず、以降のフィッティング・寸法補正はglobal_track_id単位で同じ流れで行う）
+- パス1が全キーフレームで終わったら（パス2）、以下手順でシーン全体を通して複数カメラ間での同一インスタンス結合を実施してhull_merged_track_idを割り当てる。なお結合を実施しない場合（Inter-cam Mergeタブの「カメラ間の結合を行う」がオフ）は照合を行わず、（カメラ, track_id）ごとに hull_merged_track_idを割り当てる（結合の有無に関わらず、以降のフィッティング・寸法補正はhull_merged_track_id単位で同じ流れで行う）
     - 各トラック（カメラ, track_id）のラベルを、トラック内の多数決（同数ならscore合計が大きい方）で決める
     - キーフレームごとに、別カメラのインスタンスごと点群の組み合わせについて、以下の条件で照合する（同一カメラ同士は照合しない）
         - 上から見たXY座標での凸包同士の隙間がMax Hull Gap以下（足切り。重なっていれば隙間は0）
@@ -503,14 +503,14 @@ Depth Boxfittingは、以下のフローで行われます
         - 凸包のIoS（小さい方に対する重なり率）がOverlap Threshold以上
         - 条件を満たす組み合わせを、カメラ対ごとにHungarian algorithmで1対1に対応付ける
             - 例外処理として、Label Match=category_groupの場合に結合候補が2つ以上存在する場合、IoSが閾値を超えている限りは、IoSの大小よりもlabelの一致を優先する（labelが異なる結合をされにくくするため）
-    - トラック対ごとに、対応付けられたキーフレーム数と最大IoSを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、ラベルが同じ対（Label Match=category_groupのとき）→ 最大IoSが大きい対の順に結合して、同一のglobal_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
+    - トラック対ごとに、対応付けられたキーフレーム数と最大IoSを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、ラベルが同じ対（Label Match=category_groupのとき）→ 最大IoSが大きい対の順に結合して、同一のhull_merged_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
         - 同一カメラで、存在するキーフレームが重なるトラック（同時に存在するなら別物体）
         - 同一カメラで、存在するキーフレームの隔たりがMax Same-Camera Gapを超えるトラック（Max Same-Camera Gap=0なら同一カメラのトラックは一切同居させない）
-    - 結合されなかったトラックには個別のglobal_track_idを割り振る
-    - global_track_idごとに全トラックのラベルを多数決し、それを全メンバーの最終ラベルとする
-    - 結合しなかった対も含め、却下理由などの診断情報を`merge_diagnostics`としてrunに残す
-- キーフレーム → global_track_idのループで、結合した点群に対して以下のようにバウンディングボックスをフィッティングする
-    - 以下の条件で、同一キーフレーム・同一global_track_idのメンバー（複数カメラのインスタンス）の点群を結合する。代表行（結合に使うメンバーのうち点数が最も多いもの）にのみボックスを持たせ、他のメンバーは`status="merged"`とする（点群を捨てたメンバーも`merged`。どのメンバーを使ったかは代表行の`fit_metrics["merge_selection"]`に`selection`（all / lidar / most_points）・`used`・`dropped`として記録する）
+    - 結合されなかったトラックには個別のhull_merged_track_idを割り振る
+    - hull_merged_track_idごとに全トラックのラベルを多数決し、それを全メンバーの最終ラベルとする
+    - 結合しなかった対も含め、却下理由などの診断情報を`hull_merge_diagnostics`としてrunに残す（トラック対ごとに、対としての結果と、全サンプル分の照合結果（matched / 落ちた理由と重なり率・隙間）を持つ。グループには、メンバー同士で対応付けられた対ごとにそのサンプルを残す）
+- キーフレーム → hull_merged_track_idのループで、結合した点群に対して以下のようにバウンディングボックスをフィッティングする
+    - 以下の条件で、同一キーフレーム・同一hull_merged_track_idのメンバー（複数カメラのインスタンス）の点群を結合する。代表行（結合に使うメンバーのうち点数が最も多いもの）にのみボックスを持たせ、他のメンバーは`status="merged"`とする（点群を捨てたメンバーも`merged`。どのメンバーを使ったかは代表行の`fit_metrics["merge_selection"]`に`selection`（all / lidar / most_points）・`used`・`dropped`として記録する）
         - 「LiDAR点群を持つ」は、当てはめへ渡す点群にLiDAR点が1点以上含まれること（フィルタ後）。深度の補正に失敗して補正前の深度点群だけを使うインスタンスは、LiDAR点があっても持たないとみなす
         - LiDAR点群を持つメンバーが1つ以上ある：LiDAR 点群を持つメンバーの点群だけを結合し、持たないメンバーの点群は捨てる（低精度の深度点群が結合されてボックス精度が下がるのを防ぐため）
         - どのメンバーもLiDAR点群を持たない：点数が最も多いメンバーの点群だけを残す
@@ -527,8 +527,7 @@ Depth Boxfittingは、以下のフローで行われます
             - Ground Height Method=least_squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
         - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: 基準ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
     - global_track点群のz座標の分位点（Top Estimationのz_percentileパラメータで指定）に基づき上面高さを決める（後で複数フレームを考慮して補正）
-- 同一フレーム同ラベル別カメラでボックスの重なりが大きいインスタンスを結合（基本は上で実施したInter-cam mergeと同様に）し、再度BoxFittingを実施（**未実装**）
-- 全キーフレームのボックス当てはめ・底面推定が終わったら、global_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施し、ボックスへ反映する（モデルの読み込みを1回で済ませるため、全フレーム分をまとめて推定する。後述の「ボックス角度再推定」参照）
+- 全キーフレームのボックス当てはめ・底面推定が終わったら、hull_merged_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施し、ボックスへ反映する（モデルの読み込みを1回で済ませるため、全フレーム分をまとめて推定する。後述の「ボックス角度再推定」参照）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
     - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法。webappのconfigで定義し、リクエストで渡す）に基づき、以下の角度推定を実施。（3方式とも推定は実装済み。orient_anything_combinedの推定はorient_anythingと同じで、ボックスへの反映方法だけが異なる）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時の回転方法は以下のようにする
@@ -542,24 +541,51 @@ Depth Boxfittingは、以下のフローで行われます
             - 未満のとき: Orient-Anything V1 Largeで補正。補正時の回転方法は"part_hoe"のときと同様
                 - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
-- 全キーフレームのボックスが揃ったら、global_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 角度補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）。幅・長さの共通値は角度補正の後の寸法から決める（角度補正で幅と長さが入れ替わることがあるため）
+- 全キーフレームのボックスが揃ったら、hull_merged_track_idごとに所属する全てのフレームを考慮し、ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
+    - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する（`BOX_ORIENTATION_ESTIMATIONS=None`で個別角度補正を実施していないラベルのボックスは補正の対象外とする）
+        - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
+        - 残りのフレームのボックス角度をグローバル座標に変換したのち、単位円上の2次元座標に変換してDBSCANクラスタリングを実施。パラメータは以下のように決める
+            - eps: `settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`パラメータを $\epsilon{}_d$ としたとき、 $\text{eps} = 2\sin(\frac{\epsilon{}_d}{2} \cdot \frac{\pi{}}{180})$ を使用
+            - min_samples: `settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`を使用
+        - フレーム数がmin_samples未満などで最大クラスタが無い場合は補正せずに処理を終了。最大クラスタが存在する場合は以降の処理に進む
+        - 最大クラスタ以外のフレーム（角度推定直角ずれフラグが立ったフレームを含む）のボックスを、以下の手順で補正する
+            - 補正後の角度として、前後方向の最寄りの最大クラスタフレームの角度で線形円周補間した値を採用する（片側にしか最大クラスタのフレームが無いときは最寄りの値をそのまま使う）
+            - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
+            - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
+    - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
+- 以下手順でシーン全体を通して複数カメラ間でのボックス規定長と方向に基づく同一インスタンス結合を実施し、global_track_idを割り当てる。なお結合を実施しない場合（Inter-cam Mergeタブの「カメラ間の結合を行う」がオフ）は照合を行わず、hull_merged_track_idをそのままglobal_track_idとして割り当てる
+    - 照合の単位は、hull_merged_track × キーフレームのボックス（代表行）。そのキーフレームで使っているカメラの集合が重なる組は照合しない（「同一カメラ同士は照合しない」の意味）。照合ではLiDAR点群の有無を問わない（凸包による結合と同じく、「LiDAR点群を持つものだけ結合」の規則は後述のボックスの合体でだけ適用する）
+    - キーフレームごとに、別カメラのインスタンスごと点群の組み合わせについて、以下の条件で照合する（同一カメラ同士は照合しない）
+        - Labelが`settings.BOX_ORIENT_MERGE_LABELS`に含まれる（足切り。基本的には車両系だけを含める想定）
+        - 上から見たXY座標での凸包同士の隙間がMax Hull Gap以下（足切り。重なっていれば隙間は0）
+        - Labelの一致（規定長を取得するためにラベルを特定する必要があるため）
+        - 方向の角度差がOrientation Diff Threshold以下（180度違う向きは同じとみなした軸の差、0〜90度。推定の無いラベルや部分観測では前後を取り違えることがあるため）
+        - 合体後の暫定ボックスを以下のように作る
+            - yaw: マージ前の点群数で重み付けした平均yaw
+            - XY: 両方の凸包をまとめ、そのyawの軸で囲む矩形
+            - z: 下面は低い方、上面は高い方
+        - 合体後のボックス長さが`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定長×Length Ratio Threshold以下
+        - 合体後のボックス幅が`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定幅×Width Ratio Threshold以下
+        - 条件を満たす組み合わせを、カメラ対（代表行のカメラ）ごとにHungarian algorithmで1対1に対応付ける（コストは凸包の隙間、同じなら向きの差）
+    - トラック対ごとに、対応付けられたキーフレーム数とHull Gapを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、Hull Gapが小さい対の順に結合して、同一のglobal_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
+        - 同一カメラで、存在するキーフレームが重なるトラック（同時に存在するなら別物体）
+        - 同一カメラで、存在するキーフレームの隔たりがMax Same-Camera Gapを超えるトラック（Max Same-Camera Gap=0なら同一カメラのトラックは一切同居させない）
+    - 結合されたトラックは、キーフレームごとに以下の条件で合体に使うボックス（代表行）を選ぶ（凸包による結合の点群の選び方と同じ。「LiDAR点群を持つ」は当てはめた点群にLiDAR点が1点以上含まれること）
+        - LiDAR点群を持つボックスが1つ以上ある：LiDAR点群を持つボックスだけを合体し、持たないボックスは捨てる
+        - どのボックスもLiDAR点群を持たない：点数が最も多いボックスだけを残す（合体しない）
+    - 合体に使うボックスが2つ以上なら、以下を新たなボックスとする（先程の暫定ボックスと同じ作り方）
+        - yaw: マージ前の点群数で重み付けした平均yaw
+        - XY: 両方の凸包をまとめ、そのyawの軸で囲む矩形
+        - z: 下面は低い方、上面は高い方
+    - 結合されなかったトラックには個別のglobal_track_idを割り振る
+    - 結合したキーフレームでは、合体に使うボックスのうち点数が最も多い行を代表行として新たなボックスを入れ、他の代表行（捨てたボックスを含む）は`status="merged"`・`is_primary=False`とする（結合前のボックスは残す）。代表行の`fit_metrics["box_merge"]`に`merged_from`（まとめた行）・`hull_merged_track_ids`・`selection`（all / lidar / most_points）・`used`・`dropped`・`before`（結合前のボックス）を、まとめられた行には`merged_into`を記録する
+    - 同一カメラの扱い（同時に存在 / Max Same-Camera Gap）は、グループ内の全トラック（カメラ, track_id）で判定する。Max Same-Camera Gapは凸包による結合と同じ値を使う
+    - 結合しなかった対も含め、却下理由などの診断情報を`box_merge_diagnostics`としてrunに残す（トラック対ごとに、対としての結果と、全サンプル分の照合結果（matched / 落ちた理由と隙間・向きの差・合体後の長さと幅）を持つ。結合したグループには、対応付けられた対ごとに結合が認められたサンプルを残す）
+- global_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
-    - ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
-        - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する（`BOX_ORIENTATION_ESTIMATIONS=None`で個別角度補正を実施していないラベルのボックスは補正の対象外とする）
-            - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
-            - 残りのフレームのボックス角度をグローバル座標に変換したのち、単位円上の2次元座標に変換してDBSCANクラスタリングを実施。パラメータは以下のように決める
-                - eps: `settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`パラメータを $\epsilon{}_d$ としたとき、 $\text{eps} = 2\sin(\frac{\epsilon{}_d}{2} \cdot \frac{\pi{}}{180})$ を使用
-                - min_samples: `settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`を使用
-            - フレーム数がmin_samples未満などで最大クラスタが無い場合は補正せずに処理を終了。最大クラスタが存在する場合は以降の処理に進む
-            - 最大クラスタ以外のフレーム（角度推定直角ずれフラグが立ったフレームを含む）のボックスを、以下の手順で補正する
-                - 補正後の角度として、前後方向の最寄りの最大クラスタフレームの角度で線形円周補間した値を採用する（片側にしか最大クラスタのフレームが無いときは最寄りの値をそのまま使う）
-                - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
-                - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
-        - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
-    - このタイミングでボックス同士のInter-cam mergeを実施し、マージ後のボックスをマージ前の点群数で重み付けした平均角度と凸包から作り直す。IoSではなく規定長と方向に基づく判定が良さそう。例えば「同ラベル かつ 別カメラ かつ 方向の角度差が閾値以下 かつ 合体後のボックス長さが規定長×`settings.BOX_MERGE_LENGTH_RATIO`以下かつ 合体後のボックス幅が規定幅×`settings.BOX_MERGE_WIDTH_RATIO`以下」で、条件を満たすボックスの組み合わせを中心間距離でHungarian matching。（未実装。ここまでのglobal_trackをhull_global_track_idとして、以降をglobal_track_idにするのがよさそう）
     - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを、幅・長さを動かす前の箱で2軸まとめて判定（センサー位置はフィッティング時のセンサー原点を使う。幅方向に中心を動かしても長さ方向のa = d·uは変わらないので、逐次判定と結果は同じ）
         - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
         - a = d·u（センサーがその軸の方向に中心からどれだけ離れているか）を求める
@@ -578,7 +604,7 @@ Depth Boxfittingは、以下のフローで行われます
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
-    - `fit_metrics["orientation_corrected"]`: global_track_id単位の補正のうち高さ補正・角度補正の後、幅補正・長さ補正の前
+    - `fit_metrics["orientation_corrected"]`: hull_merged_track_id単位の角度補正の後、ボックスの規定長と向きに基づく結合・global_track_id単位の寸法補正の前
 
 ### 推論に使用するパラメータ
 
@@ -628,12 +654,16 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Near Quantile [%]|LiDAR Pointcloud（L-shape Filter）|float|LiDAR点群のL-shape Filterで、各ビンの輪郭点とする距離の分位点|`settings.LIDAR_LSHAPE_QUANTILE_DEFAULT`（10.0）|0.0〜50.0|
 |Margin [m]|LiDAR Pointcloud（L-shape Filter）|float|LiDAR点群のL-shape Filterの除去閾値（LiDARは距離の誤差が小さいので固定値。Support Band未満なら判定に寄与しない）|`settings.LIDAR_LSHAPE_MARGIN_DEFAULT`（0.2）|0.05〜2.0|
 |カメラ間の結合を行う|Inter-cam Merge|bool|カメラ間の同一インスタンス結合を実施するかどうかを指定。オフなら（カメラ, track_id）ごとにglobal_track_idを割り当てる|True|-|
-|Match Method|Inter-cam Merge|str|カメラ間の同一インスタンス結合に使用する手法を選択。"BEV convex-hull"なら、XY平面での凸包の隙間がMax Hull Gap以下かつIoSがOverlap Threshold以上の対応がMin Match Frames以上のキーフレームで得られたトラック同士を、同一インスタンスと判定して結合|`settings.DEFAULT_MERGE_METHOD`（"BEV convex-hull"）|`settings.MERGE_METHODS`|
-|Label Match|Inter-cam Merge|"label", "category_group", or "none"|カメラ間同一インスタンス結合時に、トラックの多数決ラベル（"label"）またはそのカテゴリグループ（"category_group"）の一致も要求するか、問わないか（"none"）を指定|`settings.DEFAULT_MERGE_LABEL_MATCH`（"category_group"）|-|
-|Overlap Threshold|Inter-cam Merge|float|XY平面での凸包の重なり率（IoS: 小さい方の面積に対する重なり率）のしきい値|`settings.DEFAULT_MERGE_OVERLAP_THRESHOLD`（0.15）|0.0〜`settings.MERGE_OVERLAP_THRESHOLD_MAX`|
-|Max Hull Gap [m]|Inter-cam Merge|float|凸包同士の隙間の上限（足切り）。これを超える組は重なりを計算しない（重なっていれば隙間は0なので、結合結果には影響せず、計算量と診断に残す範囲に効く）|`settings.DEFAULT_MERGE_MAX_HULL_GAP`（0.5）|0.0〜`settings.MERGE_MAX_HULL_GAP_MAX`|
-|Max Same-Camera Gap|Inter-cam Merge|int|同一カメラの2トラックを同じグループに入れてよい時間的な隔たり（キーフレーム数）。これを超えて離れている場合、または同一キーフレームに同時に存在する場合は結合されない。0なら同一カメラのトラックは一切同居させない|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`（20）|0〜`settings.MERGE_MAX_SAME_CAMERA_GAP_MAX`|
-|Min Match Frames|Inter-cam Merge|int|トラック対を結合するのに必要な、対応付けられたキーフレーム数|`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`（1）|1〜`settings.MERGE_MIN_MATCH_FRAMES_MAX`|
+|Label Match|Inter-cam Merge（Hull Based Merge）|"label", "category_group", or "none"|カメラ間同一インスタンス結合時に、トラックの多数決ラベル（"label"）またはそのカテゴリグループ（"category_group"）の一致も要求するか、問わないか（"none"）を指定|`settings.DEFAULT_MERGE_LABEL_MATCH`（"category_group"）|-|
+|Overlap Threshold|Inter-cam Merge（Hull Based Merge）|float|XY平面での凸包の重なり率（IoS: 小さい方の面積に対する重なり率）のしきい値|`settings.DEFAULT_MERGE_OVERLAP_THRESHOLD`（0.15）|0.0〜`settings.MERGE_OVERLAP_THRESHOLD_MAX`|
+|Max Hull Gap [m]|Inter-cam Merge（Hull Based Merge）|float|凸包同士の隙間の上限（足切り）。これを超える組は重なりを計算しない（重なっていれば隙間は0なので、結合結果には影響せず、計算量と診断に残す範囲に効く）|`settings.DEFAULT_MERGE_MAX_HULL_GAP`（0.5）|0.0〜`settings.MERGE_MAX_HULL_GAP_MAX`|
+|Max Same-Camera Gap|Inter-cam Merge（Hull Based Merge）|int|同一カメラの2トラックを同じグループに入れてよい時間的な隔たり（キーフレーム数）。これを超えて離れている場合、または同一キーフレームに同時に存在する場合は結合されない。0なら同一カメラのトラックは一切同居させない|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`（20）|0〜`settings.MERGE_MAX_SAME_CAMERA_GAP_MAX`|
+|Min Match Frames|Inter-cam Merge（Hull Based Merge）|int|トラック対を結合するのに必要な、対応付けられたキーフレーム数|`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`（1）|1〜`settings.MERGE_MIN_MATCH_FRAMES_MAX`|
+|Orientation Diff Threshold [deg]|Inter-cam Merge（Box-Orient Based Merge）|float|ボックスどうしの向きの差の上限（180度違いは同じ向きとみなす）|`settings.DEFAULT_BOX_MERGE_ORIENTATION_DIFF`（15.0）|0.0〜`settings.BOX_MERGE_ORIENTATION_DIFF_MAX`（45.0）|
+|Length Ratio Threshold|Inter-cam Merge（Box-Orient Based Merge）|float|合体後のボックス長さの上限（`settings.DEFAULT_BOX_SIZES`の規定長に対する倍率）|`settings.DEFAULT_BOX_MERGE_LENGTH_RATIO`（1.1）|1.0〜`settings.BOX_MERGE_RATIO_MAX`（2.0）|
+|Width Ratio Threshold|Inter-cam Merge（Box-Orient Based Merge）|float|合体後のボックス幅の上限（規定幅に対する倍率）|`settings.DEFAULT_BOX_MERGE_WIDTH_RATIO`（1.1）|1.0〜`settings.BOX_MERGE_RATIO_MAX`（2.0）|
+|Max Hull Gap [m]|Inter-cam Merge（Box-Orient Based Merge）|float|凸包どうしの隙間の上限（足切り）|`settings.DEFAULT_BOX_MERGE_MAX_HULL_GAP`（0.5）|0.0〜`settings.MERGE_MAX_HULL_GAP_MAX`|
+|Min Match Frames|Inter-cam Merge（Box-Orient Based Merge）|int|トラック対を結合するのに必要な、対応付けられたキーフレーム数|`settings.DEFAULT_BOX_MERGE_MIN_MATCH_FRAMES`（1）|1〜`settings.MERGE_MIN_MATCH_FRAMES_MAX`|
 |Min Points to fit Box|Box Fitting（Common）|int|Box Fittingを行うための点数の下限しきい値。カメラ間結合後に、global_track_id単位・キーフレームごとに、実際にフィッティングへ渡す点群で判定する（下回ったキーフレームは3Dバウンディングボックスを推定しない）|`settings.BOXFIT_MIN_POINTS_DEFAULT`（10）|1〜`settings.BOXFIT_MIN_POINTS_MAX`|
 |Angle Step [deg]|Box Fitting（convex_hull_moa）|float|convex_hull_moaで最もフィットするyaw角度を探索するステップ|`settings.BOXFIT_ANGLE_STEP_DEG_DEFAULT`（0.5）|`settings.BOXFIT_ANGLE_STEP_DEG_MIN`〜`settings.BOXFIT_ANGLE_STEP_DEG_MAX`|
 |z_percentile|Box Fitting（Bottom Estimation）|float|底面の高さとして採用する、点群のz座標のパーセンタイル（percentile方式と、ground方式の切り替え先で使用）|`settings.BOXFIT_Z_PERCENTILE_LOW_DEFAULT`（1.0）|0.0〜50.0|
@@ -677,6 +707,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.BOX_ORIENTATION_DBSCAN_EPS_DEGREE`|float|角度補正のDBSCANのeps（角度の閾値 [度]）。$\text{eps} = 2\sin(\epsilon_d / 2 \cdot \pi / 180)$で単位円上の距離にする。`["correction"]["eps_deg"]`で渡す|20.0|2Hzのキーフレームで緩やかに曲がる物体が1つのクラスタに連鎖する幅|
 |`settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`|int|角度補正のDBSCANのmin_samples（自分自身を含む）。`["correction"]["min_samples"]`で渡す|3|-|
 |`settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES`|int|角度補正に必要なフレーム数（これ未満のトラックは補正しない）。`["correction"]["min_frames"]`で渡す|4|min_samples=3では3フレーム以下のトラックに補正の余地が無い|
+|`settings.BOX_ORIENT_MERGE_LABELS`|list[str]|ボックスの規定長と向きに基づく結合の対象ラベル。`merge_params["box_orient"]["labels"]`で渡す（Box-Orientのパラメータも同じ辞書に入れる）|car, truck, bus, trailer, construction_vehicle|歩行者は2人が極端に近いことが多く、誤結合が増えるため除外|
 |`settings.BOX_BOTTOM_ESTIMATIONS`|dict[str, str]|ラベルごとの底面の推定方式（"percentile" / "ground" / "ego"）。辞書に無いラベルは"percentile"|全ラベル"ground"|LiDARの上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすいため|
 |`settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS`|list[str]|Ground Height Methodパラメータの選択肢|`["percentile", "least_squares"]`|-|
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|
@@ -777,10 +808,12 @@ for camera_channel in CAMERA_CHANNELS:
 - LiDAR点群のマスク投影でインスタンスごとLiDAR点群を得る
 - インスタンスごとdepth点群、LiDAR点群にROR・DBSCAN、L-shape Filter、Distance Filter適用
 - インスタンスごとのdepth点群とLiDAR点群の混合
-- カメラ間同一インスタンス結合
+- カメラ間同一インスタンス結合（凸包のIoS。hull_merged_track_id）
 - Box Fitting（底面推定を含む）
 - ボックス角度再推定
-- global_track_idごとに所属する全てのフレームを考慮してボックスの高さ、方向、幅、長さ補正
+- hull_merged_track_idごとに所属する全てのフレームを考慮してボックスの方向補正
+- ボックスの規定長と向きに基づくカメラ間同一インスタンス結合（global_track_id）
+- global_track_idごとに所属する全てのフレームを考慮してボックスの高さ、幅、長さ補正
 
 は、以下のパイプラインで実装しています（実装は`webapp/inference/app/routers/depth_boxfitting.py`の`_run_boxfitting`、`webapp/inference/app/models_impl/boxfitting_pipeline.py`、`webapp/inference/app/services/`以下。関数の引数は実装より簡略化している）。点群はすべて、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で扱います。
 
@@ -977,8 +1010,29 @@ reestimate_orientation(fitted_rows, BOX_ORIENTATION_ESTIMATIONS)  # 後述の疑
 for row in fitted_rows:
     record_box_stage(row.box, "local_corrected")    # 1フレーム単位の補正（底面・向き）の後
 
+###### Orientation correction per hull_merged_track ######
+correct_orientations(fitted_rows, reference_ego_poses)   # 後述の correct_track_orientation
+for row in fitted_rows:
+    record_box_stage(row.box, "orientation_corrected")
+
+###### Box-orient merge（global_track_id。webapp/inference/app/services/box_orient_merge.py） ######
+# キーフレームごと: 対象ラベル・カメラ集合が重ならない・隙間 ≤ Max Hull Gap・同ラベル・
+# 軸の差 ≤ Orientation Diff Threshold・合体ボックスの長さ/幅 ≤ 規定値 × 倍率 の組を、
+# 代表行のカメラ対ごとにHungarian（コスト=隙間）で1対1に対応付ける
+# → Min Match Frames以上の対を隙間の小さい順にUnion-Find（同一カメラの衝突は却下）
+global_ids = assign_box_merged_ids(fitted_groups, track_members, merge_params)
+for (sample, global_id), rows in group_by(fitted_rows, key=(sample, global_ids)).items():
+    if len(rows) > 1:
+        # 合体に使うボックス: LiDAR点群を持つものがあればそれらだけ、無ければ点数最大の1つ
+        with_lidar = [r for r in rows if r.has_lidar]
+        used = with_lidar if with_lidar else [max(rows, key=num_points)]
+        keep = max(used, key=num_points)          # 代表行に入れ、他は status="merged"
+        if len(used) > 1:
+            # 点数で重み付けした平均yaw（180度違いは揃える）、凸包の和をそのyawで囲む矩形、z は下面最小・上面最大
+            keep.box = merged_box(used, weights=num_points)
+
 ###### Size correction per global track（全フレームのボックスが揃ってから） ######
-correct_box_sizes(fitted_rows, box_fitting_params)   # 後述の疑似コード参照
+correct_box_sizes(primary_rows, box_fitting_params)   # 後述の疑似コード参照（高さ → 幅 → 長さ）
 ```
 
 #### L-shape Filter
@@ -1168,12 +1222,7 @@ def correct_box_sizes(fitted_rows, box_fitting_params):
                 row.box.height = height
                 row.box.center_z = bottom + height / 2
 
-        # 2. 角度（BOX_ORIENTATION_CORRECTIONS。後述の correct_track_orientation）
-        correct_track_orientation(label, rows, reference_ego_poses)
-        for row in rows:
-            record_box_stage(row.box, "orientation_corrected")
-
-        # 3. 共通の幅・長さ（角度補正後の寸法から決める）
+        # 2. 共通の幅・長さ（角度補正・ボックスの結合の後の寸法から決める）
         targets = {dim: target_size(dim, label, rows) for dim in ("width", "length")}
         for row in rows:                       # 各フレームの箱に当て直す
             box, origin_xy = row.box, row.origin_xy

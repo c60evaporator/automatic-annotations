@@ -101,6 +101,7 @@ class DepthBoxFittingRepository:
         num_boxes: int = 0,
         inference_time: float | None = None,
         merge_diagnostics: dict[str, Any] | None = None,
+        box_merge_diagnostics: dict[str, Any] | None = None,
     ) -> None:
         values: dict[str, Any] = {
             "status": status,
@@ -112,6 +113,8 @@ class DepthBoxFittingRepository:
         if merge_diagnostics is not None:
             # 結合しなかった run では None のまま（列を上書きしない）
             values["merge_diagnostics"] = merge_diagnostics
+        if box_merge_diagnostics is not None:
+            values["box_merge_diagnostics"] = box_merge_diagnostics
         self.session.execute(
             update(DepthEstimationParams.__table__)
             .where(DepthEstimationParams.__table__.c.id == params_id)
@@ -197,6 +200,7 @@ class DepthBoxFittingRepository:
             "depth_align_scale": item.get("depth_align_scale"),
             "depth_align_shift": item.get("depth_align_shift"),
             "global_track_id": item.get("global_track_id"),
+            "hull_merged_track_id": item.get("hull_merged_track_id"),
             "is_primary": bool(item.get("is_primary", True)),
             "hull_xy": item.get("hull_xy"),
             "fit_metrics": item.get("fit_metrics"),
@@ -397,7 +401,8 @@ class DepthBoxFittingRepository:
             BoxFitting3D.num_points_depth_kept, BoxFitting3D.num_points_lidar_kept,
             BoxFitting3D.depth_align_scale, BoxFitting3D.depth_align_shift,
             BoxFitting3D.center_ego, BoxFitting3D.size_wlh, BoxFitting3D.yaw_ego,
-            BoxFitting3D.global_track_id, BoxFitting3D.is_primary,
+            BoxFitting3D.global_track_id, BoxFitting3D.hull_merged_track_id,
+            BoxFitting3D.is_primary,
             BoxFitting3D.depth_correction, BoxFitting3D.depth_used,
             BoxFitting3D.is_small_mask, BoxFitting3D.lshape_filter,
             BoxFitting3D.distance_filter,
@@ -576,6 +581,7 @@ def _run_to_dict(row: DepthEstimationParams) -> dict[str, Any]:
         "merge_params": row.merge_params,
         # 「なぜ結合されなかったか」を UI で確認するための記録
         "merge_diagnostics": row.merge_diagnostics,
+        "box_merge_diagnostics": row.box_merge_diagnostics,
         "status": row.status,
         "num_inferences": row.num_inferences,
         "num_boxes": row.num_boxes,
