@@ -32,7 +32,7 @@ from app.services.box_orientation_service import (
     ORIENTATION_STATUS_ESTIMATED,
     run_orientation_estimation,
 )
-from app.services.gt_bev import gt_boxes_in_ego
+from app.services.gt_bev import gt_boxes_in_ego, rebase_boxes_to_ego
 from app.services.label_service import all_labels
 from app.services.derived_file_service import load_depth_map, load_lidar_pointcloud
 from app.services.frame_image import get_keyframe_image  # noqa: F401  (将来の重ね表示用)
@@ -2786,9 +2786,15 @@ with cam_tab_view:
             calib = frame["calibrated_sensor"]
             width, height = frame["width"], frame["height"]
 
-            # そのカメラのフレームで推定されたボックスだけを描く。
-            # 他カメラのボックスは、画角内に入っても別インスタンスなので混ぜない
-            boxes = [f for f in shown if f["sample_data_token"] == frame["token"]]
+            # GT と同じ規則: どのカメラで推定したかに関わらず、中心がこのカメラの
+            # 画角に入るボックスを描く（結合したボックスは代表行のカメラにしか
+            # 属さないため）。基準 ego 座標からこのカメラの ego_pose へ移してから投影する
+            boxes = [
+                box for box in rebase_boxes_to_ego(
+                    shown, reference_ego_pose, frame.get("ego_pose"),
+                )
+                if box_center_in_fov(box, calib, width, height)
+            ]
 
             gt_boxes = []
             if cam_compare_gt and annotations:

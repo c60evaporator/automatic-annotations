@@ -582,6 +582,7 @@ Depth Boxfittingは、以下のフローで行われます
     - 同一カメラの扱い（同時に存在 / Max Same-Camera Gap）は、グループ内の全トラック（カメラ, track_id）で判定する。Max Same-Camera Gapは凸包による結合と同じ値を使う
     - 結合しなかった対も含め、却下理由などの診断情報を`box_merge_diagnostics`としてrunに残す（トラック対ごとに、対としての結果と、全サンプル分の照合結果（matched / 落ちた理由と隙間・向きの差・合体後の長さと幅）を持つ。結合したグループには、対応付けられた対ごとに結合が認められたサンプルを残す）
 - global_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
+    - カルマンフィルタ + マハラノビス距離で異常検知。異常判定されたフレームは、正常フレームからRTS Smootherでフィッティングして補完（未実装）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
