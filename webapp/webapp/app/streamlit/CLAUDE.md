@@ -221,8 +221,8 @@
             - none: ラベル・カテゴリグループの一致に関わらずマッチング対象とする
         - Box-Orient Based Mergeセクション: 角度補正の後、ボックスの規定長と向きに基づく結合（結合後のIDがglobal_track_id）。対象ラベル（`settings.BOX_ORIENT_MERGE_LABELS`）をキャプションで表示し、以下のスライダを横に並べる（同一カメラの扱いはHull Based MergeのMax Same-Camera Gapに従う）
             - Orientation Diff Threshold [deg]: ボックスどうしの向きの差の上限（180度違いは同じ向きとみなす）
-            - Length Ratio Threshold: 合体後のボックス長さの上限（`settings.DEFAULT_BOX_SIZES`の規定長に対する倍率）
-            - Width Ratio Threshold: 合体後のボックス幅の上限（規定幅に対する倍率）
+            - Length Ratio Threshold Ratio: ラベルごとの長さの倍率（`settings.LENGTH_RATIO_THRESHOLD`）に掛ける倍率（合体後のボックス長さの上限 = `settings.DEFAULT_BOX_SIZES`の規定長 × `LENGTH_RATIO_THRESHOLD[ラベル]` × これ）。スライダの下に、`settings.BOX_ORIENT_MERGE_LABELS`のラベルごとに最終的に適用する上限[m]をテーブル表示する
+            - Width Ratio Threshold: 合体後のボックス幅の上限（規定幅に対する倍率）。スライダの下に、ラベルごとに最終的に適用する上限[m]をテーブル表示する
             - Max Hull Gap [m]: 凸包どうしの隙間の上限（足切り）
             - Min Match Frames: 対応付けられたキーフレーム数がこれ以上なら結合する
     - Box Fittingタブ: 3Dバウンディングボックスのフィッティングに使用するパラメータ。フィッティング手法・底面推定方式・寸法補正方式はラベルごとにconfig（`settings.BOXFIT_METHODS`、`settings.BOX_BOTTOM_ESTIMATIONS`、`settings.BOX_HEIGHT_CORRECTIONS`等）で指定し、現在の割り当てをキャプションで表示する
@@ -322,7 +322,7 @@
         - Box-Orient Merge Diagnosticsエクスパンダー: runに`box_merge_diagnostics`（ボックスの規定長と向きに基づく結合の診断）がある場合に表示し、以下をテーブル表示する
             - 結合の条件（推論時のBox-Orient Based Mergeパラメータと対象ラベル）
             - 結合したグループ: global_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
-            - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
+            - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅とその上限[m]）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
     - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。view_colには推定ボックス数（・GT数）のキャプションも表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる

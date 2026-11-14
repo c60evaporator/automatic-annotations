@@ -299,6 +299,24 @@ def _sample_number(token: str | None) -> int | None:
     return next((i for i, s in enumerate(samples) if s["token"] == token), None)
 
 
+def box_merge_limits(dim: str, ratio: float) -> dict[str, float]:
+    """Box-Orient Based Merge で最終的に使う、ラベルごとの合体後の長さ・幅の上限 [m].
+
+    長さ: 規定長 × LENGTH_RATIO_THRESHOLD[ラベル] × ratio、幅: 規定幅 × ratio
+    """
+    limits = {}
+    for label in settings.BOX_ORIENT_MERGE_LABELS:
+        size = settings.DEFAULT_BOX_SIZES.get(label)
+        if not size:
+            continue
+        if dim == "length":
+            limits[label] = round(
+                size[0] * settings.LENGTH_RATIO_THRESHOLD.get(label, 1.0) * ratio, 2)
+        else:
+            limits[label] = round(size[1] * ratio, 2)
+    return limits
+
+
 def render_merge_diagnostics(run_info: dict | None) -> None:
     """凸包の IoS による結合の診断をエクスパンダーで出す.
 
@@ -450,7 +468,10 @@ def render_box_merge_diagnostics(run_info: dict | None) -> None:
                     "result": r["result"], "reason": r.get("reason", ""),
                     "gap [m]": values.get("gap"),
                     "orient diff [deg]": values.get("orientation_diff"),
-                    "length [m]": values.get("length"), "width [m]": values.get("width"),
+                    "length [m]": values.get("length"),
+                    "length limit [m]": values.get("length_limit"),
+                    "width [m]": values.get("width"),
+                    "width limit [m]": values.get("width_limit"),
                 })
         st.dataframe(rows, width="stretch", hide_index=True)
 
@@ -1031,13 +1052,17 @@ with param_col:
                     help="向きの差の上限（180 度違いは同じ向きとみなす）",
                 )
             with box_merge_cols[1]:
-                box_merge_length_ratio = st.slider(
-                    "Length Ratio Threshold", 1.0,
-                    settings.BOX_MERGE_RATIO_MAX,
-                    value=settings.DEFAULT_BOX_MERGE_LENGTH_RATIO, step=0.05,
+                box_merge_length_scale = st.slider(
+                    "Length Ratio Threshold Ratio",
+                    settings.BOX_MERGE_LENGTH_RATIO_SCALE_MIN,
+                    settings.BOX_MERGE_LENGTH_RATIO_SCALE_MAX,
+                    value=settings.DEFAULT_BOX_MERGE_LENGTH_RATIO_SCALE, step=0.05,
                     disabled=not enable_merge,
-                    help="合体後のボックス長さの上限（規定長に対する倍率）",
+                    help=("ラベルごとの長さの倍率（config の LENGTH_RATIO_THRESHOLD）に掛ける倍率。"
+                          "合体後のボックス長さの上限 = 規定長 × LENGTH_RATIO_THRESHOLD × これ"),
                 )
+                st.table({"length limit [m]": box_merge_limits("length", box_merge_length_scale)},
+                         border="horizontal", width="content")
             with box_merge_cols[2]:
                 box_merge_width_ratio = st.slider(
                     "Width Ratio Threshold", 1.0,
@@ -1046,6 +1071,8 @@ with param_col:
                     disabled=not enable_merge,
                     help="合体後のボックス幅の上限（規定幅に対する倍率）",
                 )
+                st.table({"width limit [m]": box_merge_limits("width", box_merge_width_ratio)},
+                         border="horizontal", width="content")
             with box_merge_cols[3]:
                 box_merge_hull_gap = st.slider(
                     "Max Hull Gap [m]", 0.0,
@@ -1242,7 +1269,10 @@ merge_params = {
     "box_orient": {
         "labels": list(settings.BOX_ORIENT_MERGE_LABELS),
         "orientation_diff_deg": float(box_merge_orient_diff),
-        "length_ratio": float(box_merge_length_ratio),
+        # 長さの上限 = 規定長 × length_ratios[ラベル] × length_ratio_scale
+        "length_ratios": {label: float(settings.LENGTH_RATIO_THRESHOLD.get(label, 1.0))
+                          for label in settings.BOX_ORIENT_MERGE_LABELS},
+        "length_ratio_scale": float(box_merge_length_scale),
         "width_ratio": float(box_merge_width_ratio),
         "max_hull_gap": float(box_merge_hull_gap),
         "min_match_frames": int(box_merge_min_frames),

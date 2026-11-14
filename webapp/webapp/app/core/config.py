@@ -461,7 +461,19 @@ class Settings(BaseSettings):
     ]
     DEFAULT_BOX_MERGE_ORIENTATION_DIFF: float = 20.0
     BOX_MERGE_ORIENTATION_DIFF_MAX: float = 45.0
-    DEFAULT_BOX_MERGE_LENGTH_RATIO: float = 1.4
+    # ラベルごとの合体後の長さの上限（DEFAULT_BOX_SIZES の length に対する倍率）。
+    # 長さがまちまちな車種（truck 等）は大きめ、差が小さい car は小さめにする。
+    # 実際の上限は これ × UI の Length Ratio Threshold Ratio。ここに無いラベルは 1.0
+    LENGTH_RATIO_THRESHOLD: dict[str, float] = {
+        "car": 1.3,
+        "truck": 1.6,
+        "bus": 1.4,
+        "trailer": 1.5,
+        "construction_vehicle": 1.5,
+    }
+    DEFAULT_BOX_MERGE_LENGTH_RATIO_SCALE: float = 1.0
+    BOX_MERGE_LENGTH_RATIO_SCALE_MIN: float = 0.5
+    BOX_MERGE_LENGTH_RATIO_SCALE_MAX: float = 2.0
     DEFAULT_BOX_MERGE_WIDTH_RATIO: float = 1.3
     BOX_MERGE_RATIO_MAX: float = 2.0
     DEFAULT_BOX_MERGE_MAX_HULL_GAP: float = 0.8

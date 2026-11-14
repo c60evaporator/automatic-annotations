@@ -564,7 +564,7 @@ Depth Boxfittingは、以下のフローで行われます
             - yaw: マージ前の点群数で重み付けした平均yaw
             - XY: 両方の凸包をまとめ、そのyawの軸で囲む矩形
             - z: 下面は低い方、上面は高い方
-        - 合体後のボックス長さが`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定長×Length Ratio Threshold以下
+        - 合体後のボックス長さが`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定長×`settings.LENGTH_RATIO_THRESHOLD`のそのラベルの値×Length Ratio Threshold Ratio以下（`LENGTH_RATIO_THRESHOLD`に無いラベルは1.0）
         - 合体後のボックス幅が`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定幅×Width Ratio Threshold以下
         - 条件を満たす組み合わせを、カメラ対（代表行のカメラ）ごとにHungarian algorithmで1対1に対応付ける（コストは凸包の隙間、同じなら向きの差）
     - トラック対ごとに、対応付けられたキーフレーム数とHull Gapを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、Hull Gapが小さい対の順に結合して、同一のglobal_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
@@ -660,8 +660,8 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Max Same-Camera Gap|Inter-cam Merge（Hull Based Merge）|int|同一カメラの2トラックを同じグループに入れてよい時間的な隔たり（キーフレーム数）。これを超えて離れている場合、または同一キーフレームに同時に存在する場合は結合されない。0なら同一カメラのトラックは一切同居させない|`settings.DEFAULT_MERGE_MAX_SAME_CAMERA_GAP`（20）|0〜`settings.MERGE_MAX_SAME_CAMERA_GAP_MAX`|
 |Min Match Frames|Inter-cam Merge（Hull Based Merge）|int|トラック対を結合するのに必要な、対応付けられたキーフレーム数|`settings.DEFAULT_MERGE_MIN_MATCH_FRAMES`（1）|1〜`settings.MERGE_MIN_MATCH_FRAMES_MAX`|
 |Orientation Diff Threshold [deg]|Inter-cam Merge（Box-Orient Based Merge）|float|ボックスどうしの向きの差の上限（180度違いは同じ向きとみなす）|`settings.DEFAULT_BOX_MERGE_ORIENTATION_DIFF`（15.0）|0.0〜`settings.BOX_MERGE_ORIENTATION_DIFF_MAX`（45.0）|
-|Length Ratio Threshold|Inter-cam Merge（Box-Orient Based Merge）|float|合体後のボックス長さの上限（`settings.DEFAULT_BOX_SIZES`の規定長に対する倍率）|`settings.DEFAULT_BOX_MERGE_LENGTH_RATIO`（1.1）|1.0〜`settings.BOX_MERGE_RATIO_MAX`（2.0）|
-|Width Ratio Threshold|Inter-cam Merge（Box-Orient Based Merge）|float|合体後のボックス幅の上限（規定幅に対する倍率）|`settings.DEFAULT_BOX_MERGE_WIDTH_RATIO`（1.1）|1.0〜`settings.BOX_MERGE_RATIO_MAX`（2.0）|
+|Length Ratio Threshold Ratio|Inter-cam Merge（Box-Orient Based Merge）|float|ラベルごとの長さの倍率（`settings.LENGTH_RATIO_THRESHOLD`）に掛ける倍率。合体後のボックス長さの上限 = 規定長 × `LENGTH_RATIO_THRESHOLD[ラベル]` × これ（スライダの下にラベルごとの上限[m]を表示）|`settings.DEFAULT_BOX_MERGE_LENGTH_RATIO_SCALE`（1.0）|`settings.BOX_MERGE_LENGTH_RATIO_SCALE_MIN`（0.5）〜`settings.BOX_MERGE_LENGTH_RATIO_SCALE_MAX`（2.0）|
+|Width Ratio Threshold|Inter-cam Merge（Box-Orient Based Merge）|float|合体後のボックス幅の上限（規定幅に対する倍率。スライダの下にラベルごとの上限[m]を表示）|`settings.DEFAULT_BOX_MERGE_WIDTH_RATIO`（1.1）|1.0〜`settings.BOX_MERGE_RATIO_MAX`（2.0）|
 |Max Hull Gap [m]|Inter-cam Merge（Box-Orient Based Merge）|float|凸包どうしの隙間の上限（足切り）|`settings.DEFAULT_BOX_MERGE_MAX_HULL_GAP`（0.5）|0.0〜`settings.MERGE_MAX_HULL_GAP_MAX`|
 |Min Match Frames|Inter-cam Merge（Box-Orient Based Merge）|int|トラック対を結合するのに必要な、対応付けられたキーフレーム数|`settings.DEFAULT_BOX_MERGE_MIN_MATCH_FRAMES`（1）|1〜`settings.MERGE_MIN_MATCH_FRAMES_MAX`|
 |Min Points to fit Box|Box Fitting（Common）|int|Box Fittingを行うための点数の下限しきい値。カメラ間結合後に、global_track_id単位・キーフレームごとに、実際にフィッティングへ渡す点群で判定する（下回ったキーフレームは3Dバウンディングボックスを推定しない）|`settings.BOXFIT_MIN_POINTS_DEFAULT`（10）|1〜`settings.BOXFIT_MIN_POINTS_MAX`|
@@ -708,6 +708,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES`|int|角度補正のDBSCANのmin_samples（自分自身を含む）。`["correction"]["min_samples"]`で渡す|3|-|
 |`settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES`|int|角度補正に必要なフレーム数（これ未満のトラックは補正しない）。`["correction"]["min_frames"]`で渡す|4|min_samples=3では3フレーム以下のトラックに補正の余地が無い|
 |`settings.BOX_ORIENT_MERGE_LABELS`|list[str]|ボックスの規定長と向きに基づく結合の対象ラベル。`merge_params["box_orient"]["labels"]`で渡す（Box-Orientのパラメータも同じ辞書に入れる）|car, truck, bus, trailer, construction_vehicle|歩行者は2人が極端に近いことが多く、誤結合が増えるため除外|
+|`settings.LENGTH_RATIO_THRESHOLD`|dict[str, float]|Box-Orient Based Mergeの合体後の長さの上限の、ラベルごとの規定長に対する倍率（UIのLength Ratio Threshold Ratioを掛けて使う。無いラベルは1.0）。`merge_params["box_orient"]["length_ratios"]`で渡す（`length_ratios`の無い古いrunは全ラベル共通の`length_ratio`を使う）|car: 1.3, truck: 1.6, bus: 1.4, trailer: 1.5, construction_vehicle: 1.6|長さがまちまちな車種（truck等）は大きめ、差が小さいcarは小さめにする（仮の値）|
 |`settings.BOX_BOTTOM_ESTIMATIONS`|dict[str, str]|ラベルごとの底面の推定方式（"percentile" / "ground" / "ego"）。辞書に無いラベルは"percentile"|全ラベル"ground"|LiDARの上下方向のビームは疎なので、分位点だと底面が高く（箱が低く）なりやすいため|
 |`settings.BOX_BOTTOM_GROUND_HEIGHT_METHODS`|list[str]|Ground Height Methodパラメータの選択肢|`["percentile", "least_squares"]`|-|
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|

@@ -46,6 +46,10 @@ def merge_settings(
         "labels": set(params.get("labels") or ()),
         "orientation_diff_deg": float(
             params.get("orientation_diff_deg", DEFAULT_ORIENTATION_DIFF_DEG)),
+        # 長さの上限の倍率 = length_ratios[ラベル] × length_ratio_scale。
+        # length_ratios の無い古い run は全ラベル共通の length_ratio を使う
+        "length_ratios": {k: float(v) for k, v in (params.get("length_ratios") or {}).items()},
+        "length_ratio_scale": float(params.get("length_ratio_scale", 1.0)),
         "length_ratio": float(params.get("length_ratio", DEFAULT_LENGTH_RATIO)),
         "width_ratio": float(params.get("width_ratio", DEFAULT_WIDTH_RATIO)),
         "max_hull_gap": float(params.get("max_hull_gap", DEFAULT_MAX_HULL_GAP)),
@@ -55,6 +59,13 @@ def merge_settings(
         # (length, width, height)
         "box_sizes": (box_fitting_params or {}).get("box_sizes") or {},
     }
+
+
+def length_ratio_for(settings: dict[str, Any], label: str | None) -> float:
+    """そのラベルの合体後の長さの上限の倍率（規定長に対する）."""
+    if settings["length_ratios"]:
+        return settings["length_ratios"].get(label or "", 1.0) * settings["length_ratio_scale"]
+    return settings["length_ratio"]
 
 
 def axis_diff_deg(yaw_a: float, yaw_b: float) -> float:
@@ -157,9 +168,11 @@ def _check_pair(
     if box is None or not size or len(size) < 2:
         return "too_long", values
     values["length"], values["width"] = box["size_wlh"][1], box["size_wlh"][0]
-    if box["size_wlh"][1] > float(size[0]) * settings["length_ratio"]:
+    values["length_limit"] = float(size[0]) * length_ratio_for(settings, a["label"])
+    values["width_limit"] = float(size[1]) * settings["width_ratio"]
+    if box["size_wlh"][1] > values["length_limit"]:
         return "too_long", values
-    if box["size_wlh"][0] > float(size[1]) * settings["width_ratio"]:
+    if box["size_wlh"][0] > values["width_limit"]:
         return "too_wide", values
     return None, values
 
@@ -431,7 +444,9 @@ def assign_box_merged_ids(
         "params": {
             "labels": sorted(settings["labels"]),
             "orientation_diff_deg": settings["orientation_diff_deg"],
-            "length_ratio": settings["length_ratio"],
+            **({"length_ratios": settings["length_ratios"],
+                "length_ratio_scale": settings["length_ratio_scale"]}
+               if settings["length_ratios"] else {"length_ratio": settings["length_ratio"]}),
             "width_ratio": settings["width_ratio"],
             "max_hull_gap": settings["max_hull_gap"],
             "min_match_frames": settings["min_match_frames"],
@@ -451,9 +466,11 @@ def _reason_text(reason: str, values: dict[str, float], settings: dict[str, Any]
         return (f"向きの差 {values.get('orientation_diff')} 度が上限"
                 f"（{settings['orientation_diff_deg']} 度）を超えた")
     if reason == "too_long":
-        return f"合体後の長さ {values.get('length', '-')} m が規定長 × {settings['length_ratio']} を超えた"
+        return (f"合体後の長さ {values.get('length', '-')} m が上限"
+                f"（{values.get('length_limit', '-')} m）を超えた")
     if reason == "too_wide":
-        return f"合体後の幅 {values.get('width', '-')} m が規定幅 × {settings['width_ratio']} を超えた"
+        return (f"合体後の幅 {values.get('width', '-')} m が上限"
+                f"（{values.get('width_limit', '-')} m）を超えた")
     return "1 対 1 の割り当てで別の相手に取られた"
 
 
