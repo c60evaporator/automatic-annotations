@@ -553,7 +553,7 @@ Depth Boxfittingは、以下のフローで行われます
             - 補正後の角度となるようボックス角度を回転させる。補正時の回転方法は先に実施した個々のボックスの角度補正の"part_hoe"のときと同様
             - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
     - `settings.BOX_ORIENTATION_CORRECTIONS=None`のとき: 補正しない
-- 以下手順でシーン全体を通して複数カメラ間でのボックス規定長と方向に基づく同一インスタンス結合を実施し、global_track_idを割り当てる。なお結合を実施しない場合（Inter-cam Mergeタブの「カメラ間の結合を行う」がオフ）は照合を行わず、hull_merged_track_idをそのままglobal_track_idとして割り当てる
+- 以下手順でシーン全体を通して複数カメラ間でのボックス規定長と方向に基づく同一インスタンス結合を実施し、box_merged_track_idを割り当てる。なお結合を実施しない場合（Inter-cam Mergeタブの「カメラ間の結合を行う」がオフ）は照合を行わず、hull_merged_track_idをそのままbox_merged_track_idとして割り当てる
     - 照合の単位は、hull_merged_track × キーフレームのボックス（代表行）。そのキーフレームで使っているカメラの集合が重なる組は照合しない（「同一カメラ同士は照合しない」の意味）。照合ではLiDAR点群の有無を問わない（凸包による結合と同じく、「LiDAR点群を持つものだけ結合」の規則は後述のボックスの合体でだけ適用する）
     - キーフレームごとに、別カメラのインスタンスごと点群の組み合わせについて、以下の条件で照合する（同一カメラ同士は照合しない）
         - Labelが`settings.BOX_ORIENT_MERGE_LABELS`に含まれる（足切り。基本的には車両系だけを含める想定）
@@ -567,7 +567,7 @@ Depth Boxfittingは、以下のフローで行われます
         - 合体後のボックス長さが`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定長×`settings.LENGTH_RATIO_THRESHOLD`のそのラベルの値×Length Ratio Threshold Ratio以下（`LENGTH_RATIO_THRESHOLD`に無いラベルは1.0）
         - 合体後のボックス幅が`settings.DEFAULT_BOX_SIZES`から取得したそのラベルの規定幅×Width Ratio Threshold以下
         - 条件を満たす組み合わせを、カメラ対（代表行のカメラ）ごとにHungarian algorithmで1対1に対応付ける（コストは凸包の隙間、同じなら向きの差）
-    - トラック対ごとに、対応付けられたキーフレーム数とHull Gapを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、Hull Gapが小さい対の順に結合して、同一のglobal_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
+    - トラック対ごとに、対応付けられたキーフレーム数とHull Gapを集計し、Min Match Frames以上のキーフレームで対応付けられたトラック対を、Hull Gapが小さい対の順に結合して、同一のbox_merged_track_idを割り振る。ただし、結合後のグループ内に以下の同一カメラのトラックが含まれることになる結合は却下する
         - 同一カメラで、存在するキーフレームが重なるトラック（同時に存在するなら別物体）
         - 同一カメラで、存在するキーフレームの隔たりがMax Same-Camera Gapを超えるトラック（Max Same-Camera Gap=0なら同一カメラのトラックは一切同居させない）
     - 結合されたトラックは、キーフレームごとに以下の条件で合体に使うボックス（代表行）を選ぶ（凸包による結合の点群の選び方と同じ。「LiDAR点群を持つ」は当てはめた点群にLiDAR点が1点以上含まれること）
@@ -577,12 +577,11 @@ Depth Boxfittingは、以下のフローで行われます
         - yaw: マージ前の点群数で重み付けした平均yaw
         - XY: 両方の凸包をまとめ、そのyawの軸で囲む矩形
         - z: 下面は低い方、上面は高い方
-    - 結合されなかったトラックには個別のglobal_track_idを割り振る
+    - 結合されなかったトラックには個別のbox_merged_track_idを割り振る
     - 結合したキーフレームでは、合体に使うボックスのうち点数が最も多い行を代表行として新たなボックスを入れ、他の代表行（捨てたボックスを含む）は`status="merged"`・`is_primary=False`とする（結合前のボックスは残す）。代表行の`fit_metrics["box_merge"]`に`merged_from`（まとめた行）・`hull_merged_track_ids`・`selection`（all / lidar / most_points）・`used`・`dropped`・`before`（結合前のボックス）を、まとめられた行には`merged_into`を記録する
     - 同一カメラの扱い（同時に存在 / Max Same-Camera Gap）は、グループ内の全トラック（カメラ, track_id）で判定する。Max Same-Camera Gapは凸包による結合と同じ値を使う
     - 結合しなかった対も含め、却下理由などの診断情報を`box_merge_diagnostics`としてrunに残す（トラック対ごとに、対としての結果と、全サンプル分の照合結果（matched / 落ちた理由と隙間・向きの差・合体後の長さと幅）を持つ。結合したグループには、対応付けられた対ごとに結合が認められたサンプルを残す）
-- global_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
-    - カルマンフィルタ + マハラノビス距離で異常検知。異常判定されたフレームは、正常フレームからRTS Smootherでフィッティングして補完（未実装）
+- box_merged_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
         - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
@@ -602,6 +601,39 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の長さを、そのglobal_track共通のボックス長さとする
         - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - 補正前の寸法（`before_wlh`）、見えている面（`visible`。+1 / -1 は+軸 / -軸側の面、0は見えていない）、固定の仕方（`anchors`）は`fit_metrics["size_correction"]`に記録する
+- 以下手順で各box_merged_trackごとに動き（静止 or カルマンフィルタ）に応じた補正を実施
+    - 以下の2条件を満たすトラックを静止と判定
+        - 寸法補正後の中心のグローバル座標で $\max_k \|\mathbf{p}_k - \mathrm{median}(\mathbf{p})\|_{\text{(外れ値を除いた90\%分位)}} < r_{static}\ (\approx 1\,\text{m})$
+        - 平滑化で推定した速さの中央値が 0.5 m/s 未満
+    - 静止判定で止まっているトラックは以下を実施
+        - ボックスのXY方向の中心位置を、全フレームグローバル座標での中央値に揃える
+        - ボックスの底面の高さは、全フレームグローバル座標の指定した分位点（25%分位点等の低めの値を採用）に揃える
+        - ボックスの角度は、以下の2条件両方を満たすフレームを、トラックの全フレームの角度の中央値で補正する
+            - トラックの全フレームの角度の中央値との差がTrack Orientation Diff Threshold以上
+            - トラックの全フレームに関して、前後方向（ボックスが向いている方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH`、左右方向（ボックス方向に垂直な方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH`以下の全てのボックスを集め、その中央値（当該フレームでの中央値ではなく全フレームから求めた中央値）との差がOrientation Diff Threshold以上（範囲内にボックスが1つもない場合、この条件は常に満たすものと見なす）
+        - 以下の条件を満たすトラック同士を結合
+            - 中央値の位置が近い（例: 1 m 以内）
+            - labelが同じ
+            - 同じフレームに出現しない
+    - 静止判定で動いている場合は以下を実施
+        - カルマンフィルタでトラックごとの位置の平滑化を実施し、端点の状態と共分散が得る
+        - 分割されたトラックの結合（ここで付けたトラックを新たなglobal_trackとします）
+        - 結合したトラックの平滑化をやり直す
+            - 平滑化した位置を ego 座標に戻したものとボックスの中心位置を比較し、マハラノビス距離が一定以上であれば平滑化した位置にボックス位置を修正
+            - 平滑後の速度の向きとボックス角度が一定以上ずれていれば、速度の向きにボックス角度を修正
+- box_merged_trackを2個以上結合したglobal_track_idに対して、所属する全てのフレームを考慮し、以下のように高さ補正 → 幅補正 → 長さ補正の順番でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
+    - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。
+        - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの中央値を用いる。補正時は底面を固定して上面の位置を動かす
+        - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: box_merged_trackで既に補正済のため、補正しない
+        - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
+    - ラベルごとに指定した`settings.BOX_WIDTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅補正を実施する
+        - `settings.BOX_WIDTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の中央値を用いる。補正時は中心を固定して対称に伸ばす（平滑化で直した中心が再度ずれないようにするため）
+        - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: box_merged_trackで既に補正済のため、補正しない
+        - `settings.BOX_WIDTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
+    - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する
+        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の中央値を用いる。補正時は中心を固定して対称に伸ばす（平滑化で直した中心が再度ずれないようにするため）
+        - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: box_merged_trackで既に補正済のため、補正しない
+        - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
