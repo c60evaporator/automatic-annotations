@@ -288,7 +288,8 @@
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
             - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
-            - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Box Merged: 複数フレームを考慮した補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Final Box: Box Smoother補正（中心位置補正＋角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
@@ -307,7 +308,8 @@
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
             - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
-            - Final Box: 複数フレームを考慮した補正（複数フレーム角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Box Merged: 複数フレームを考慮した補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Final Box: Box Smoother補正（中心位置補正＋角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Orientation Estimationチェックボックス: チェックすると、AIモデル（PartHOEまたはOrient-Anything V1 Large）で推定したボックスの向きを、Fitted Boxesで選んだボックスの中心から伸びる矢印（長さはボックス長の半分+1m、色はInstance Colorに従う）で描画する（デフォルトはオフ）。推定はBox Fittingの実行時に行い、ボックスへ反映済み（推定対象のラベルと方式はconfigの`settings.BOX_ORIENTATION_ESTIMATIONS`）。矢印の先端にホバーすると方式・推定角度・確率・使ったカメラと、ボックスへの反映方法（中心を固定してyawを差し替え / 長短辺を入れ替えてからyawを差し替え / 長辺の前後を選択）・反映前のyawと、角度推定直角ずれフラグが立っていればその旨を表示する（Orient-Anything-V2で推定した古い結果では対称性alphaも）。view_colに、このサンプルの推定件数のキャプションを表示する。向き推定を組み込む前のrun（`box_fitting_params`に`orientation`が無いもの）では、代わりに「Run Orientation Estimation」ボタン（推定済みのrunでは「Re-run Orientation Estimation」）を表示し、押すと表示中のrunに対して推論サーバーの向き推定ジョブを実行して、完了まで進捗バーを表示したうえで結果を保存する（ボックスには反映しない）
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
@@ -323,6 +325,34 @@
             - 結合の条件（推論時のBox-Orient Based Mergeパラメータと対象ラベル）
             - 結合したグループ: global_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
             - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅とその上限[m]）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
+    - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡とそれに基づく補正結果を表示する
+        - view_col部分には以下内容を表示
+            - 最上部に「Label」ラジオボタンを設置し、高さを取らないよう選択肢を横向きに並べる。選択したラベルのトラックのみを以下のように表示するようにする
+            - 移動トラック
+                - 平滑化した位置を実線の軌跡でつなぐ（Instance Color、少し薄め）。
+                - 観測（ボックス中心）は点で重ねる（軌跡と点のずれが、そのまま平滑化の効き方となる）
+                    - 非外れ値は塗りつぶしの丸、外れ値（平滑化で除外したもの）は×で表示。
+                    - 位置を修正したフレームは、修正前（×）→ 修正後（丸）を矢印で示す
+                - 結合した box_merged_track の間の隙間（観測が無く、予測だけで通過した区間）は破線にする
+            - 静止トラック
+                - 軌跡は引かない
+                - 中央値の位置に大きめのひし形（diamond）を置く
+                - その周りに半径 $r_{static}$ の点線の円を描く（観測点が円の中に収まっているかで、静止判定が妥当かを目で確認できる）
+                - 観測（ボックス中心）は点で重ねる
+                    - 非外れ値は塗りつぶしの丸、外れ値（平滑化で除外したもの）は×で表示。
+                    - 位置を修正したフレームは、修正前（×）→ 修正後（丸）を矢印で示す
+            - 短いトラック（Min Frames to Smooth 未満で、判定していないもの）
+                - 線も代表点も無しで、観測点を中抜きの丸（circle-open）にする
+        - opt_col部分には、以下ウィジェットを持つ
+            - Fitted Boxesラジオボタン: 以下の選択肢に応じて、表示されるバウンディングボックスを切り替える（色はInstance Colorの指定に従う。デフォルトはNone）
+                - None: ボックスを表示しない（デフォルト選択はこれにする）
+                - Before Correction: Box Smoother後のボックスサイズ補正（角度補正＋高さ補正＋幅補正＋長さ補正）適用前のボックスを表示
+                - Final Box: Box Smoother後のボックスサイズ補正（角度補正＋高さ補正＋幅補正＋長さ補正）適用後の最終ボックスを表示
+            - Instance Colorラジオボタン: 3Dバウンディングボックスと中心点の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
+                - Label: ラベルで色分け
+                - Box Merged: 結合前のTrack ID（box_merged_track_id）
+                - Global Track: 結合後のTrack ID（global_track_id）で色分け
+            - Global Trackマルチセレクト（st.multiselect）: チェックしたglobal_track_idのトラックのみをview_colに表示するようフィルタリング
     - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。GTと同じく、どのカメラで推定したかに関わらずボックス中心がそのカメラの画角に入るボックスを描く（複数カメラに写る物体は各カメラに描かれる）。推定ボックスは基準ego座標から各カメラのego_poseへ移してから投影する（`gt_bev.rebase_boxes_to_ego`）。view_colには推定ボックス数（・GT数。カメラごとの合計）のキャプションも表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる
