@@ -583,8 +583,8 @@ Depth Boxfittingは、以下のフローで行われます
     - 結合しなかった対も含め、却下理由などの診断情報を`box_merge_diagnostics`としてrunに残す（トラック対ごとに、対としての結果と、全サンプル分の照合結果（matched / 落ちた理由と隙間・向きの差・合体後の長さと幅）を持つ。結合したグループには、対応付けられた対ごとに結合が認められたサンプルを残す）
 - box_merged_track_idごとに所属する全てのフレームを考慮し、以下の順番（高さ補正 → 見えている面の判定 → 幅補正 → 長さ補正）でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。底面を固定して上面の位置を動かす
-        - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのglobal_track共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
-        - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのglobal_track共通のボックス高さとする
+        - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの分位点（Height Percentileパラメータで指定）をそのbox_merged_track_id共通のボックス高さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
+        - `settings.BOX_HEIGHT_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の高さを、そのbox_merged_track_id共通のボックス高さとする
         - `settings.BOX_HEIGHT_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - 以下手順で、長さ方向（向きyawの軸）と幅方向（それに直交する軸）それぞれの面が見えているかを、幅・長さを動かす前の箱で2軸まとめて判定（センサー位置はフィッティング時のセンサー原点を使う。幅方向に中心を動かしても長さ方向のa = d·uは変わらないので、逐次判定と結果は同じ）
         - 箱の中心からセンサーへのベクトルをd、その軸の単位ベクトルをu、軸の半分の長さをeとする
@@ -593,34 +593,69 @@ Depth Boxfittingは、以下のフローで行われます
             - |a| > e：その面（a > 0 なら +u 側、a < 0 なら −u 側）は見えている（センサーは、その軸の片側の面より外側にいる）
             - |a| ≤ e：その面は見えていない（センサーはその軸の2面の間、すなわち面を真横から見る位置にいる）。この軸の面はどちらも見えていないので、中心を固定して左右対称に伸ばします。
     - ラベルごとに指定した`settings.BOX_WIDTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の幅補正を実施する。幅方向の面（車両の場合両側面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は両側面の中心を固定して対称に両面を動かす
-        - `settings.BOX_WIDTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の分位点（Width Percentileパラメータで指定）をそのglobal_track共通のボックス幅とする。フレーム数がMin Frames for Size Correction未満なら補正しない
-        - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の幅を、そのglobal_track共通のボックス幅とする
+        - `settings.BOX_WIDTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の分位点（Width Percentileパラメータで指定）をそのbox_merged_track_id共通のボックス幅とする。フレーム数がMin Frames for Size Correction未満なら補正しない
+        - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の幅を、そのbox_merged_track_id共通のボックス幅とする
         - `settings.BOX_WIDTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する（幅補正で動かした後の箱に対して、判定済みの見えている面を使う）。長さ方向の面（車両の場合前面または後面のうちセンサに近い方）が見えている場合、その面を固定して反対側の面の位置を動かす。見えていない場合は前面と後面の中心を固定して対称に両面を動かす
-        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Length Percentileパラメータで指定）をそのglobal_track共通のボックス長さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
-        - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の長さを、そのglobal_track共通のボックス長さとする
+        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの分位点（Length Percentileパラメータで指定）をそのbox_merged_track_id共通のボックス長さとする。フレーム数がMin Frames for Size Correction未満なら補正しない
+        - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: そのラベルの`settings.DEFAULT_BOX_SIZES`の長さを、そのbox_merged_track_id共通のボックス長さとする
         - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - 補正前の寸法（`before_wlh`）、見えている面（`visible`。+1 / -1 は+軸 / -軸側の面、0は見えていない）、固定の仕方（`anchors`）は`fit_metrics["size_correction"]`に記録する
-- 以下手順で各box_merged_trackごとに動き（静止 or カルマンフィルタ）に応じた補正を実施
-    - 以下の2条件を満たすトラックを静止と判定
-        - 寸法補正後の中心のグローバル座標で $\max_k \|\mathbf{p}_k - \mathrm{median}(\mathbf{p})\|_{\text{(外れ値を除いた90\%分位)}} < r_{static}\ (\approx 1\,\text{m})$
+- 以下手順で各box_merged_trackごとに動き（静止 or カルマンスムーザー）に応じた補正を実施
+    - 以下のカルマンフィルタ＋RTSスムーザーによる平滑化を実施（平滑化はグローバル座標のXY平面だけで行い、zと寸法は対象外）。なおフレーム数がMin Frames to Smoothパラメータ以上のトラックのみを対象とする
+        - 観測の準備
+            - 各フレームのボックス中心（寸法補正後）を、そのサンプルの基準ego_pose（LIDAR_TOP）でグローバル座標に変換し、観測 $\mathbf{z}_k=(x_k, y_k)$ とする。時刻 $t_k$ はサンプルのtimestamp（秒）
+            - 観測ノイズは、ボックスの長さ方向と幅方向で大きさを変える: $R_k = \mathrm{Rot}(\psi_k)\,\mathrm{diag}(\sigma_{L,k}^2, \sigma_{W,k}^2)\,\mathrm{Rot}(\psi_k)^\top$（$\psi_k$ はグローバル座標でのボックスのyaw）
+            - $\sigma_{L}, \sigma_{W}$ は、当てはめた点群にLiDAR点を含むかどうかと、センサーからの距離 $d_k$ に応じて $\sigma = a + b\,d_k$ とする（$a, b$ はGTとの残差をボックスの軸に分解し、MADで推定してsettingsに持つ）
+        - 状態モデル（等速度モデル。フレーム間隔 $\Delta t = t_k - t_{k-1}$ は可変）
+            - 状態 $\mathbf{x}=[p_x, p_y, v_x, v_y]^\top$、遷移 $F(\Delta t)=\begin{bmatrix} I & \Delta t\, I \\ 0 & I \end{bmatrix}$、観測 $H=[I\ \ 0]$
+            - プロセスノイズ $Q(\Delta t)=q\begin{bmatrix} \frac{\Delta t^3}{3} I & \frac{\Delta t^2}{2} I \\ \frac{\Delta t^2}{2} I & \Delta t\, I \end{bmatrix}$（$q$ はラベルごとの加速度の強さ。GTの速度差から推定してsettingsに持つ）
+            - 初期状態: 最初の2観測の位置と差分速度。観測が1つしかなければ速度0とし、速度の分散を大きく取る
+        - トラックごとの平滑化（カルマンフィルタの前向き処理＋RTSスムーザーの後ろ向き処理）
+            - 1回目は全観測で平滑化し、各フレームの残差 $\mathbf{r}_k = \mathbf{z}_k - H\hat{\mathbf{x}}_{k|N}$ とマハラノビス距離 $d_k^2 = \mathbf{r}_k^\top S_k^{-1} \mathbf{r}_k$ を求める（平滑化に使った観測は $S_k = R_k$、除外した観測は $S_k = H P_{k|N} H^\top + R_k$）
+            - $d_k^2 > \chi^2_{2,0.99}=9.21$ の観測を外れ値として除外し、残りで平滑化し直す。外れ値の集合が変わらなくなるまで繰り返す（上限2〜3回）。除外したフレームは予測だけで通過する
+            - 結果として各フレームの平滑化状態 $\hat{\mathbf{x}}_{k|N}$ と共分散 $P_{k|N}$、および端点（最初と最後のフレーム）の状態と共分散を保持する
+    - 以下の2条件を満たすトラックを静止と判定。なおフレーム数がMin Frames to Smoothパラメータ以上のトラックのみを対象とする
+        - 寸法補正後の中心のグローバル座標で $\max_k \|\mathbf{p}_k - \mathrm{median}(\mathbf{p})\|_{\text{(平滑化で外れ値とされたフレームを除いた90\%分位)}} < r_{static}\ (\approx 1\,\text{m})$
         - 平滑化で推定した速さの中央値が 0.5 m/s 未満
-    - 静止判定で止まっているトラックは以下を実施
-        - ボックスのXY方向の中心位置を、全フレームグローバル座標での中央値に揃える
-        - ボックスの底面の高さは、全フレームグローバル座標の指定した分位点（25%分位点等の低めの値を採用）に揃える
-        - ボックスの角度は、以下の2条件両方を満たすフレームを、トラックの全フレームの角度の中央値で補正する
-            - トラックの全フレームの角度の中央値との差がTrack Orientation Diff Threshold以上
-            - トラックの全フレームに関して、前後方向（ボックスが向いている方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH`、左右方向（ボックス方向に垂直な方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH`以下の全てのボックスを集め、その中央値（当該フレームでの中央値ではなく全フレームから求めた中央値）との差がOrientation Diff Threshold以上（範囲内にボックスが1つもない場合、この条件は常に満たすものと見なす）
+    - 静止判定で止まっているトラックは以下を実施。なおフレーム数がMin Frames to Smoothパラメータ未満のトラック（静止判定は実施していない）はトラック結合のみ対象とし、結合されなかった場合以降の処理を飛ばす
+        - 短いトラックは、まずここで静止トラックとの結合を判定する（中央値の位置が近いという強い条件のため）。ここで結合されなかった短いトラックだけを、後述の移動トラックとの結合に回す（1つの短いトラックが静止・移動の両方の結合に入らないようにするため）
         - 以下の条件を満たすトラック同士を結合
             - 中央値の位置が近い（例: 1 m 以内）
             - labelが同じ
             - 同じフレームに出現しない
-    - 静止判定で動いている場合は以下を実施
-        - カルマンフィルタでトラックごとの位置の平滑化を実施し、端点の状態と共分散が得る
-        - 分割されたトラックの結合（ここで付けたトラックを新たなglobal_trackとします）
+        - 結合が連鎖したときの扱い: 上記の条件を満たす対を中央値の位置の距離が近い順に結合していき、結合後のグループ内に同じフレームに出現するトラックが含まれることになる結合は却下する（A・BとB・Cがそれぞれ条件を満たしても、AとCが同じフレームに出現するなら同一グループにしない）。結合したグループごとに同一のglobal_track_idを割り振り、結合されなかったトラックは単独でglobal_track_idを持つ
+        - ボックスのXY方向の中心位置を、全フレームグローバル座標での中央値に揃える
+        - ボックスのZ方向位置は、ボックスの高さを維持したまま、底面高さを全フレームグローバル座標の指定した分位点（25%分位点等の低めの値を採用）に揃える
+            - 各フレームの底面高さ（中心z − 高さ/2）を、そのサンプルの基準ego_pose（LIDAR_TOP）でグローバル座標のzに変換してから分位点を取る（ego座標のzは自車の上下動や坂でフレームごとに基準が変わるため）
+            - 揃えた底面のグローバル座標を各フレームの基準ego_poseでego座標に戻し、ボックス中心のzを「底面 + 高さ/2」に置き換える（XY・寸法・yawは変えない）
+        - ボックスの角度は、以下の2条件両方を満たすフレームを、トラックの全フレームの角度の中央値で補正する
+            - トラックの全フレームの角度の中央値との差がTrack Orientation Diff Threshold以上
+            - トラックの全フレームに関して、対象ボックス中心からの距離が前後方向（ボックスが向いている方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH`以下、左右方向（ボックス方向に垂直な方向）に`settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH`以下の全ての静止トラックのボックス（自分のトラックのボックスは除く）を集め、その中央値（当該フレームでの中央値ではなく全フレームから求めた中央値）との差がOrientation Diff Threshold以上（範囲内にボックスが1つもない場合、この条件は常に満たすものと見なす）
+    - 静止判定で止まっていないと判定されたトラックは以下を実施。なおフレーム数がMin Frames to Smoothパラメータ未満のトラックはトラック結合のみ対象とし（予測モデルを持たないため、相手の長いトラックの側から予測して判定する。後述）、結合されなかった場合以降の処理を飛ばす。静止トラックとの結合で既に結合された短いトラックは対象外
+        - 分割されたトラックの結合（ここで付けたトラックを新たなglobal_trackとする）
+            - 候補対: 先に終わるトラックAと後から始まるトラックBで、labelが同じ、同じフレームに出現しない、Bの開始とAの終了の時間差 $\tau$ が $\tau_{max}$（例: 3秒）以下
+            - Aの終端状態を $F(\tau)$ でBの開始時刻まで予測し（共分散は $F P F^\top + Q(\tau)$）、Bの始端状態との差 $\mathbf{e}$（位置と速度の4次元）と $S = P_{A,pred} + P_{B,start}$ から $D^2 = \mathbf{e}^\top S^{-1} \mathbf{e}$ を求める
+            - 両方とも長いトラックの対は、$D^2 \le \chi^2_{4,0.99}=13.28$ の対を候補とする
+            - 片方が短いトラック（平滑化しておらず速度が分からない）の対は、位置だけの2次元で判定する（速度の分散を大きく取って4次元で判定すると、実質位置だけを見ているのに自由度4の閾値で緩くなりすぎるため）
+                - Bが短いトラック: Aの終端状態をBの開始時刻まで予測し、差 $\mathbf{e} = H\hat{\mathbf{x}}_{A,pred} - \mathbf{z}_{B,first}$、$S = H P_{A,pred} H^\top + R_{B,first}$
+                - Aが短いトラック: Bの始端状態を $F(-\tau)$ でAの終了時刻まで後ろ向きに予測し（共分散は $F P F^\top + Q(\tau)$）、差 $\mathbf{e} = H\hat{\mathbf{x}}_{B,pred} - \mathbf{z}_{A,last}$、$S = H P_{B,pred} H^\top + R_{A,last}$
+                - $D^2 = \mathbf{e}^\top S^{-1} \mathbf{e} \le \chi^2_{2,0.99}=9.21$ の対を候補とする
+                - 両方とも短いトラックの対は、どちらも予測できないので判定しない
+            - $D^2$ が閾値以下の対を候補とし、$D^2$ をそれぞれの閾値（13.28 または 9.21）で割った値をコストにHungarian algorithmで1対1に対応付ける（自由度の異なる $D^2$ を同じ尺度で比べるため。1つのトラックの終端は1つの始端にだけつながる）。つながった鎖ごとに同一のglobal_track_idを割り振り、結合されなかったトラックは単独でglobal_track_idを持つ
+            - 静止トラックの端点を「位置は中央値、速度0、小さい共分散」の状態として同じ判定に含めると、停車→発進で分割されたトラックも結合できる（任意）
         - 結合したトラックの平滑化をやり直す
-            - 平滑化した位置を ego 座標に戻したものとボックスの中心位置を比較し、マハラノビス距離が一定以上であれば平滑化した位置にボックス位置を修正
-            - 平滑後の速度の向きとボックス角度が一定以上ずれていれば、速度の向きにボックス角度を修正
+            - 結合したglobal_trackの全観測を時刻順に並べ、上記と同じ手順（外れ値の反復除去を含む）でカルマンフィルタ＋RTSスムーザーによる平滑化を実施する。トラック間の隙間は予測だけで通過する（観測の無いフレームにボックスは作らない）
+        - 位置の修正
+            - 各フレームの残差 $\mathbf{r}_k$ と $d_k^2$ を、やり直した平滑化の結果で求め直す
+            - $d_k^2 > \gamma$（例: 9.21）かつ $\|\mathbf{r}_k\| > \delta_{min}$（例: 0.5 m。LiDAR付きで $R_k$ が小さいフレームの数cmのずれを直さないため）のフレームは、ボックス中心のXYを平滑化した位置 $H\hat{\mathbf{x}}_{k|N}$ に置き換える。置き換える位置はそのサンプルの基準ego_poseでego座標に戻す
+            - zと寸法とyawは変えない（中心だけ平行移動する）
+        - 角度の修正
+            - 平滑化した速度 $\hat{\mathbf{v}}_k$ から、速さ $s_k = \|\hat{\mathbf{v}}_k\|$ と進行方向 $\theta_k = \mathrm{atan2}(\hat{v}_{y,k}, \hat{v}_{x,k})$ を求める
+            - $s_k \ge v_{min}$（例: 2 m/s。低速では速度の向きが不安定なため）のフレームだけを対象とする
+            - ボックスのyaw（グローバル）$\psi_k$ と $\theta_k$ の差 $|\mathrm{wrap}_{(-\pi,\pi]}(\psi_k - \theta_k)|$ が閾値以上なら、yawを $\theta_k$ に置き換える（$v_{min}$ 以上の速さで後退する車両は稀なので、前後が逆のボックスも $\theta_k$ に揃える）
+            - 回転は中心を固定して行い、寸法は変えない（後段の寸法補正で中心を固定して対称に伸ばすため）
+        - 修正前の中心とyaw、平滑化した位置と速度、$d_k^2$、位置・角度を修正したかどうかを`fit_metrics["motion_correction"]`に記録する
 - box_merged_trackを2個以上結合したglobal_track_idに対して、所属する全てのフレームを考慮し、以下のように高さ補正 → 幅補正 → 長さ補正の順番でバウンディングボックスを補正する（寸法補正は`webapp/inference/app/services/box_size.py`）
     - ラベルごとに指定した`settings.BOX_HEIGHT_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の高さ補正を実施する。
         - `settings.BOX_HEIGHT_CORRECTIONS="percentile"`のとき: 全フレームのボックス高さの中央値を用いる。補正時は底面を固定して上面の位置を動かす
@@ -631,13 +666,14 @@ Depth Boxfittingは、以下のフローで行われます
         - `settings.BOX_WIDTH_CORRECTIONS="default"`のとき: box_merged_trackで既に補正済のため、補正しない
         - `settings.BOX_WIDTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
     - ラベルごとに指定した`settings.BOX_LENGTH_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の長さ補正を実施する
-        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス幅の中央値を用いる。補正時は中心を固定して対称に伸ばす（平滑化で直した中心が再度ずれないようにするため）
+        - `settings.BOX_LENGTH_CORRECTIONS="percentile"`のとき: 全フレームのボックス長さの中央値を用いる。補正時は中心を固定して対称に伸ばす（平滑化で直した中心が再度ずれないようにするため）
         - `settings.BOX_LENGTH_CORRECTIONS="default"`のとき: box_merged_trackで既に補正済のため、補正しない
         - `settings.BOX_LENGTH_CORRECTIONS=None`（辞書に無い場合を含む）のとき: 補正しない
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
     - `fit_metrics["orientation_corrected"]`: hull_merged_track_id単位の角度補正の後、ボックスの規定長と向きに基づく結合・global_track_id単位の寸法補正の前
+    - `fit_metrics["motion_corrected"]`: 動き（静止 / カルマンスムーザー）に応じた補正の後、global_track_id単位の寸法補正の前
 
 ### 推論に使用するパラメータ
 
