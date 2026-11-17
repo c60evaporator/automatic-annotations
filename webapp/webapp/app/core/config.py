@@ -656,6 +656,58 @@ class Settings(BaseSettings):
     BOXFIT_MIN_POINTS_DEFAULT: int = 10
     BOXFIT_MIN_POINTS_MAX: int = 100
 
+    # --- 動き（静止 / カルマンスムーザー）に応じた補正（Track Smoother タブ） ------
+    # box_merged_track ごとに、グローバル座標の XY でカルマンフィルタ＋RTS スムーザー
+    # による平滑化を行い、静止 / 移動を判定して補正する。分割されたトラックを結合した
+    # ものが global_track_id になる（詳細は inference/CLAUDE.md）
+    TRACK_SMOOTHER_ENABLED_DEFAULT: bool = True
+    # 平滑化・静止判定の対象にするトラックの最小フレーム数（未満は結合の候補にだけする）
+    TRACK_SMOOTHER_MIN_FRAMES_DEFAULT: int = 3
+    TRACK_SMOOTHER_MIN_FRAMES_MAX: int = 10
+    # 平滑化で外れ値とするマハラノビス距離の二乗（χ²(2, 0.99)）と、除去の反復回数の上限
+    TRACK_SMOOTHER_OUTLIER_THRESHOLD_DEFAULT: float = 9.21
+    TRACK_SMOOTHER_NUM_ITERS_DEFAULT: int = 3
+    TRACK_SMOOTHER_NUM_ITERS_MAX: int = 10
+    # 初期状態の速度の分散 [(m/s)²]（観測が 1 つのときも速度は分からないので大きく取る）
+    TRACK_SMOOTHER_INITIAL_VELOCITY_VAR: float = 100.0
+    # 観測ノイズ σ = a + b·d [m]（d はセンサーからの距離）。ボックスの長さ方向と
+    # 幅方向で別の値を持ち、当てはめた点群に LiDAR 点を含むか（lidar）/ 深度のみ（depth）
+    # で切り替える。TODO: GT との残差から推定して差し替える
+    TRACK_SMOOTHER_MEASUREMENT_NOISE: dict[str, dict[str, list[float]]] = {
+        "lidar": {"length": [0.3, 0.01], "width": [0.15, 0.005]},
+        "depth": {"length": [0.8, 0.03], "width": [0.4, 0.015]},
+    }
+    # 等速度モデルの加速度の強さ q [m²/s³]。辞書に無いラベルは default。
+    # TODO: GT の速度差から推定して差し替える
+    TRACK_SMOOTHER_PROCESS_NOISE: dict[str, float] = {
+        "default": 1.0, "pedestrian": 0.5, "traffic_cone": 0.1, "barrier": 0.1,
+    }
+    # 静止判定: 中心の中央値からのばらつき（この分位点）が Static Radius 未満、
+    # かつ平滑化した速さの中央値が Static Max Speed 未満
+    TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT: float = 1.0
+    TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE: float = 90.0
+    TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT: float = 0.5
+    # 静止トラックの補正
+    TRACK_SMOOTHER_STATIC_LINK_DISTANCE_DEFAULT: float = 1.0
+    TRACK_SMOOTHER_STATIC_BOTTOM_PERCENTILE_DEFAULT: float = 25.0
+    TRACK_SMOOTHER_TRACK_ORIENT_DIFF_DEFAULT: float = 15.0
+    TRACK_SMOOTHER_NEIGHBOR_ORIENT_DIFF_DEFAULT: float = 15.0
+    # 周囲の静止車両のボックスを集める範囲 [m]（対象ボックス中心から、その向きの
+    # 前後方向 / 左右方向）
+    STABLE_TRACK_ORIENT_SEARCH_LENGTH: float = 15.0
+    STABLE_TRACK_ORIENT_SEARCH_WIDTH: float = 3.0
+    # 移動トラックの結合: 時間差の上限 [s] と、D² の閾値（位置と速度の 4 次元 /
+    # 片方が短いトラックのときの位置だけの 2 次元。いずれも χ² の 99% 点）
+    TRACK_SMOOTHER_MAX_LINK_GAP_DEFAULT: float = 3.0
+    TRACK_SMOOTHER_LINK_THRESHOLD_4D: float = 13.28
+    TRACK_SMOOTHER_LINK_THRESHOLD_2D: float = 9.21
+    # 移動トラックの修正: 位置はマハラノビス距離の二乗がこれを超え、かつずれが
+    # Min Position Correction を超えたら平滑化した位置へ移す
+    TRACK_SMOOTHER_POSITION_GATE: float = 9.21
+    TRACK_SMOOTHER_MIN_POSITION_CORRECTION_DEFAULT: float = 0.5
+    TRACK_SMOOTHER_MIN_SPEED_HEADING_DEFAULT: float = 2.0
+    TRACK_SMOOTHER_HEADING_DIFF_DEFAULT: float = 20.0
+
     # --- L 字フィルタ（General タブ） --------------------------------------
     # 車両の手前 2 面（L 字）を検出し、それより手前へ突き出た点を落とす。
     # Convex-hull MOA は手前の輪郭で向きと大きさを決めるので、ROR / DBSCAN で

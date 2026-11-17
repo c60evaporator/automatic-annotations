@@ -647,9 +647,9 @@ with param_col:
         # 並びは実際の適用順。点群を作る → カメラ間で結合する →
         # 結合した点群にボックスを当てはめる
         (general_tab, depth_tab, lidar_tab, merge_tab,
-         fitting_tab) = st.tabs(
+         fitting_tab, smoother_tab) = st.tabs(
             ["General", "Depth Estimation", "LiDAR Pointcloud",
-             "Inter-cam Merge", "Box Fitting"]
+             "Inter-cam Merge", "Box Fitting", "Track Smoother"]
         )
 
         with general_tab:
@@ -1245,6 +1245,130 @@ with param_col:
                 help="全フレームの箱の長さの分位点。奥の面が見えないフレームは短く出るので高めにする",
             )
 
+        with smoother_tab:
+            st.caption(
+                "ボックスの規定長と向きで結合したトラック（box_merged_track）ごとに、"
+                "Kalman Smoother（Kalman Filter + RTS Smoother）で中心位置を平滑化し、"
+                "静止 / 移動に応じて補正する。分割されたトラックを結合したものが global_track。"
+                "観測ノイズ・プロセスノイズなどは config の TRACK_SMOOTHER_* で指定する"
+            )
+            smoother_cols = st.columns(2)
+            with smoother_cols[0]:
+                smoother_enabled = st.checkbox(
+                    "Motion Correction", value=settings.TRACK_SMOOTHER_ENABLED_DEFAULT,
+                    key="_w_smoother_enabled",
+                    help=("Kalman Smoother によるトラック追跡と、それに基づく補正を行うか。"
+                          "オフなら global_track_id は box_merged_track_id と同じ"),
+                )
+            with smoother_cols[1]:
+                smoother_min_frames = st.slider(
+                    "Min Frames to Smooth", 2, settings.TRACK_SMOOTHER_MIN_FRAMES_MAX,
+                    value=settings.TRACK_SMOOTHER_MIN_FRAMES_DEFAULT, step=1,
+                    key="_w_smoother_min_frames", disabled=not smoother_enabled,
+                    help=("平滑化・静止判定の対象にするトラックの最小フレーム数。"
+                          "これ未満のトラックは補正せず、結合の候補にだけする"),
+                )
+            st.markdown("**Kalman Smoother**")
+            ks_cols = st.columns(2)
+            with ks_cols[0]:
+                smoother_outlier = st.slider(
+                    "Outlier Threshold", 1.0, 30.0,
+                    value=settings.TRACK_SMOOTHER_OUTLIER_THRESHOLD_DEFAULT, step=0.01,
+                    key="_w_smoother_outlier", disabled=not smoother_enabled,
+                    help=("平滑化で外れ値として除外するマハラノビス距離の二乗の閾値"
+                          "（9.21 は自由度 2 の χ² の 99% 点）"),
+                )
+            with ks_cols[1]:
+                smoother_num_iters = st.slider(
+                    "Num Iters", 1, settings.TRACK_SMOOTHER_NUM_ITERS_MAX,
+                    value=settings.TRACK_SMOOTHER_NUM_ITERS_DEFAULT, step=1,
+                    key="_w_smoother_num_iters", disabled=not smoother_enabled,
+                    help="外れ値を除いて平滑化し直す回数の上限",
+                )
+            st.markdown("**Static Detection**")
+            sd_cols = st.columns(2)
+            with sd_cols[0]:
+                smoother_static_radius = st.slider(
+                    "Static Radius [m]", 0.1, 5.0,
+                    value=settings.TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT, step=0.1,
+                    key="_w_smoother_static_radius", disabled=not smoother_enabled,
+                    help=("中心の中央値からのばらつき（"
+                          f"{settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE:.0f}% 分位）の上限"),
+                )
+            with sd_cols[1]:
+                smoother_static_speed = st.slider(
+                    "Static Max Speed [m/s]", 0.0, 3.0,
+                    value=settings.TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT, step=0.1,
+                    key="_w_smoother_static_speed", disabled=not smoother_enabled,
+                    help="平滑化で推定した速さの中央値の上限",
+                )
+            st.markdown("**Stable Track Correction**")
+            stc_cols = st.columns(4)
+            with stc_cols[0]:
+                smoother_static_link = st.slider(
+                    "Static Link Distance [m]", 0.1, 5.0,
+                    value=settings.TRACK_SMOOTHER_STATIC_LINK_DISTANCE_DEFAULT, step=0.1,
+                    key="_w_smoother_static_link", disabled=not smoother_enabled,
+                    help="静止トラック同士を結合するときの、中央値の位置の距離の上限",
+                )
+            with stc_cols[1]:
+                smoother_static_bottom = st.slider(
+                    "Static Bottom Percentile [%]", 0.0, 100.0,
+                    value=settings.TRACK_SMOOTHER_STATIC_BOTTOM_PERCENTILE_DEFAULT, step=5.0,
+                    key="_w_smoother_static_bottom", disabled=not smoother_enabled,
+                    help=("静止トラックの底面の高さ（グローバル座標の z）として取る分位点。"
+                          "縦列駐車では周囲の地面判定が高く出て浮きがちなので低めにする"),
+                )
+            with stc_cols[2]:
+                smoother_track_orient = st.slider(
+                    "Track Orientation Diff Threshold [deg]", 0.0, 90.0,
+                    value=settings.TRACK_SMOOTHER_TRACK_ORIENT_DIFF_DEFAULT, step=1.0,
+                    key="_w_smoother_track_orient", disabled=not smoother_enabled,
+                    help="トラックの角度の中央値とのずれが、これ以上のフレームを補正の候補にする",
+                )
+            with stc_cols[3]:
+                smoother_neighbor_orient = st.slider(
+                    "Neighbor Orientation Diff Threshold [deg]", 0.0, 90.0,
+                    value=settings.TRACK_SMOOTHER_NEIGHBOR_ORIENT_DIFF_DEFAULT, step=1.0,
+                    key="_w_smoother_neighbor_orient", disabled=not smoother_enabled,
+                    help=("周囲の静止車両の角度の中央値（前後は区別しない）とのずれがこれ以上なら"
+                          "補正する（周囲の車と揃っているフレームは直さない）。範囲は"
+                          f"前後 {settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH} m・"
+                          f"左右 {settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH} m"),
+                )
+            st.markdown("**Moving Track Merge**")
+            smoother_max_gap = st.slider(
+                "Max Link Gap [s]", 0.0, 10.0,
+                value=settings.TRACK_SMOOTHER_MAX_LINK_GAP_DEFAULT, step=0.5,
+                key="_w_smoother_max_gap", disabled=not smoother_enabled,
+                help="先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限",
+            )
+            st.markdown("**Moving Track Correction**")
+            mtc_cols = st.columns(3)
+            with mtc_cols[0]:
+                smoother_min_shift = st.slider(
+                    "Min Position Correction [m]", 0.0, 3.0,
+                    value=settings.TRACK_SMOOTHER_MIN_POSITION_CORRECTION_DEFAULT, step=0.1,
+                    key="_w_smoother_min_shift", disabled=not smoother_enabled,
+                    help=("位置を修正する最小のずれ（ユークリッド距離）。マハラノビス距離の"
+                          f"二乗が {settings.TRACK_SMOOTHER_POSITION_GATE} を超え、かつこれを"
+                          "超えたフレームを平滑化した位置へ移す"),
+                )
+            with mtc_cols[1]:
+                smoother_min_speed = st.slider(
+                    "Min Speed for Heading [m/s]", 0.0, 10.0,
+                    value=settings.TRACK_SMOOTHER_MIN_SPEED_HEADING_DEFAULT, step=0.5,
+                    key="_w_smoother_min_speed", disabled=not smoother_enabled,
+                    help="速度の向きで角度を修正する最低の速さ（低速では速度の向きが不安定）",
+                )
+            with mtc_cols[2]:
+                smoother_heading_diff = st.slider(
+                    "Heading Diff Threshold [deg]", 0.0, 180.0,
+                    value=settings.TRACK_SMOOTHER_HEADING_DIFF_DEFAULT, step=1.0,
+                    key="_w_smoother_heading_diff", disabled=not smoother_enabled,
+                    help="速度の向きとボックスの角度の差が、これ以上なら速度の向きに修正する",
+                )
+
 mask_params = {
     "dilation": int(mask_dilation), "erosion": int(mask_erosion),
     # 小物体（短辺が閾値以下）は収縮を弱める
@@ -1314,6 +1438,33 @@ box_fitting_params = {
             "min_samples": int(settings.BOX_ORIENTATION_DBSCAN_MIN_SAMPLES),
             "min_frames": int(settings.BOX_ORIENTATION_CORRECTION_MIN_FRAMES),
         },
+    },
+    # 動き（静止 / カルマンスムーザー）に応じた補正（global_track_id を決める）
+    "track_smoother": {
+        "enabled": bool(smoother_enabled),
+        "min_frames": int(smoother_min_frames),
+        "outlier_threshold": float(smoother_outlier),
+        "num_iters": int(smoother_num_iters),
+        "initial_velocity_var": float(settings.TRACK_SMOOTHER_INITIAL_VELOCITY_VAR),
+        "measurement_noise": {k: {a: [float(x) for x in c] for a, c in v.items()}
+                              for k, v in settings.TRACK_SMOOTHER_MEASUREMENT_NOISE.items()},
+        "process_noise": {k: float(v) for k, v in settings.TRACK_SMOOTHER_PROCESS_NOISE.items()},
+        "static_radius": float(smoother_static_radius),
+        "static_spread_percentile": float(settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE),
+        "static_max_speed": float(smoother_static_speed),
+        "static_link_distance": float(smoother_static_link),
+        "static_bottom_percentile": float(smoother_static_bottom),
+        "track_orient_diff_deg": float(smoother_track_orient),
+        "neighbor_orient_diff_deg": float(smoother_neighbor_orient),
+        "search_length": float(settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH),
+        "search_width": float(settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH),
+        "max_link_gap": float(smoother_max_gap),
+        "link_threshold_4d": float(settings.TRACK_SMOOTHER_LINK_THRESHOLD_4D),
+        "link_threshold_2d": float(settings.TRACK_SMOOTHER_LINK_THRESHOLD_2D),
+        "position_gate": float(settings.TRACK_SMOOTHER_POSITION_GATE),
+        "min_position_correction": float(smoother_min_shift),
+        "min_speed_heading": float(smoother_min_speed),
+        "heading_diff_deg": float(smoother_heading_diff),
     },
     # L 字フィルタの共通設定（深度・LiDAR ごとの設定は各 params の lshape_*）
     "lshape": {

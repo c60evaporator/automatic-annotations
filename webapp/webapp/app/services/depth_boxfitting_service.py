@@ -270,6 +270,8 @@ def finalize_run(
             # 結合の診断情報。結合しなかった run では None のまま
             merge_diagnostics=(job.get("result") or {}).get("merge_diagnostics"),
             box_merge_diagnostics=(job.get("result") or {}).get("box_merge_diagnostics"),
+            track_smoother_diagnostics=(job.get("result") or {}).get(
+                "track_smoother_diagnostics"),
         )
 
     logger.info(

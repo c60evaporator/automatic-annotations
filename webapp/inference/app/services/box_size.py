@@ -245,3 +245,62 @@ def correct_box_sizes(
             }
             num_boxes += 1
     return {"num_tracks": num_tracks, "num_boxes": num_boxes}
+
+
+def correct_global_track_sizes(
+    fitted: list[tuple[str, str, str | None, dict[str, Any]]],
+    box_fitting_params: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """box_merged_track を 2 個以上結合した global_track の寸法を揃える.
+
+    結合前の各 box_merged_track は既に寸法補正済みなので、percentile 方式の
+    寸法だけを全フレームの中央値に揃える（default 方式は補正済み、None は補正しない）。
+    高さは底面を固定し、幅・長さは**中心を固定して対称に**伸ばす（平滑化で直した
+    中心が再びずれないようにするため）。
+
+    Args:
+        fitted: ``(global_track_id, box_merged_track_id, label, 代表行)``。行はその場で書き換える
+
+    Returns:
+        ``{"num_tracks", "num_boxes"}``（補正した数）
+    """
+    settings = correction_settings(box_fitting_params)
+    by_track: dict[str, list[tuple[str, str | None, dict[str, Any]]]] = {}
+    for global_id, box_merged_id, label, row in fitted:
+        by_track.setdefault(global_id, []).append((box_merged_id, label, row))
+
+    num_tracks = num_boxes = 0
+    for global_id, rows in by_track.items():
+        if len({box_merged_id for box_merged_id, _, _ in rows}) < 2:
+            continue
+        label = rows[0][1]
+        targets: dict[str, float] = {}
+        for dim in ("height", "width", "length"):
+            if settings[dim]["methods"].get(label or "") != SIZE_CORRECTION_PERCENTILE:
+                continue
+            values = [float(r["size_wlh"][_INDEX[dim]]) for _, _, r in rows]
+            targets[dim] = float(np.median(values))
+        if not targets:
+            continue
+        num_tracks += 1
+        for _, _, row in rows:
+            before = [float(x) for x in row["size_wlh"]]
+            if "height" in targets:
+                apply_height(row, targets["height"])
+            width, length, height = (float(v) for v in row["size_wlh"])
+            new_width = targets.get("width", width)
+            new_length = targets.get("length", length)
+            row["size_wlh"] = [round(new_width, 3), round(new_length, 3), round(height, 3)]
+            metrics = row.setdefault("fit_metrics", {})
+            if "corners_xy" in metrics:
+                metrics["corners_xy"] = _corners(
+                    np.asarray(row["center_ego"][:2], dtype=float),
+                    new_length, new_width, float(row["yaw_ego"]),
+                )
+            metrics["global_size_correction"] = {
+                "global_track_id": global_id,
+                "before_wlh": before,
+                "targets": {k: round(v, 3) for k, v in targets.items()},
+            }
+            num_boxes += 1
+    return {"num_tracks": num_tracks, "num_boxes": num_boxes}

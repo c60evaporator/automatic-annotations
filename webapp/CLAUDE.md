@@ -165,6 +165,7 @@ project-root/
                 ├── box_orientation.py       # AI モデルによるボックス向き推定の前後処理（カメラ選択・yaw 変換・ボックスへの反映）
                 ├── box_orientation_inference.py  # 向き推定モデルの実行（Box Fitting のパス 2 と向き推定ジョブで共有）
                 ├── box_orientation_correction.py # グローバルトラック単位の角度補正（dbscan_interp）
+                ├── track_smoother.py        # 動き（静止 / カルマンスムーザー）に応じた補正とトラックの結合（global_track_id）
                 └── box_fitting.py, box_fitting_moa.py, box_bottom.py, box_size.py  # 3D ボックス当てはめと補正
 ```
 

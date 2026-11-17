@@ -361,6 +361,8 @@ def _run_boxfitting(req: BoxFittingRequest, job: Job) -> dict:
         ),
         # ボックスの規定長と向きによる結合で、別のボックスへまとめた数
         "num_box_merged_boxes": merge_stats.get("num_box_merged_boxes", 0),
+        # 動き（静止 / カルマンスムーザー）に応じた補正の診断情報
+        "track_smoother_diagnostics": merge_stats.get("track_smoother_diagnostics"),
         "inference_time": round(time.perf_counter() - started_all, 3),
         "depth_estimations": depth_results,
         "lidar_pointclouds": lidar_results,

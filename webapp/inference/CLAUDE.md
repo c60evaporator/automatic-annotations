@@ -610,9 +610,9 @@ Depth Boxfittingは、以下のフローで行われます
         - 状態モデル（等速度モデル。フレーム間隔 $\Delta t = t_k - t_{k-1}$ は可変）
             - 状態 $\mathbf{x}=[p_x, p_y, v_x, v_y]^\top$、遷移 $F(\Delta t)=\begin{bmatrix} I & \Delta t\, I \\ 0 & I \end{bmatrix}$、観測 $H=[I\ \ 0]$
             - プロセスノイズ $Q(\Delta t)=q\begin{bmatrix} \frac{\Delta t^3}{3} I & \frac{\Delta t^2}{2} I \\ \frac{\Delta t^2}{2} I & \Delta t\, I \end{bmatrix}$（$q$ はラベルごとの加速度の強さ。GTの速度差から推定してsettingsに持つ）
-            - 初期状態: 最初の2観測の位置と差分速度。観測が1つしかなければ速度0とし、速度の分散を大きく取る
+            - 初期状態: 最初の（平滑化に使う）観測の位置と速度0。共分散は位置が $R$、速度が`settings.TRACK_SMOOTHER_INITIAL_VELOCITY_VAR`（大きく取るので、2観測目以降で速度が決まる）
         - トラックごとの平滑化（カルマンフィルタの前向き処理＋RTSスムーザーの後ろ向き処理）
-            - 1回目は全観測で平滑化し、各フレームの残差 $\mathbf{r}_k = \mathbf{z}_k - H\hat{\mathbf{x}}_{k|N}$ とマハラノビス距離 $d_k^2 = \mathbf{r}_k^\top S_k^{-1} \mathbf{r}_k$ を求める（平滑化に使った観測は $S_k = R_k$、除外した観測は $S_k = H P_{k|N} H^\top + R_k$）
+            - 1回目は全観測で平滑化し、各フレームの残差 $\mathbf{r}_k = \mathbf{z}_k - H\hat{\mathbf{x}}_{k|N}$ とマハラノビス距離 $d_k^2 = \mathbf{r}_k^\top S_k^{-1} \mathbf{r}_k$ を求める（平滑化に使った観測は残差の共分散 $S_k = R_k - H P_{k|N} H^\top$（正定値でなくなったら $R_k$ で代用）、除外した観測は $S_k = H P_{k|N} H^\top + R_k$。$R_k$ だけで測ると、平滑化が外れ値に引き寄せられた分だけ $d_k^2$ が小さく出て外れ値を見逃す）
             - $d_k^2 > \chi^2_{2,0.99}=9.21$ の観測を外れ値として除外し、残りで平滑化し直す。外れ値の集合が変わらなくなるまで繰り返す（上限2〜3回）。除外したフレームは予測だけで通過する
             - 結果として各フレームの平滑化状態 $\hat{\mathbf{x}}_{k|N}$ と共分散 $P_{k|N}$、および端点（最初と最後のフレーム）の状態と共分散を保持する
     - 以下の2条件を満たすトラックを静止と判定。なおフレーム数がMin Frames to Smoothパラメータ以上のトラックのみを対象とする
@@ -746,6 +746,20 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Height Percentile [%]|Box Fitting（Height Estimation）|float|percentile方式の高さ補正で、全フレームのボックス高さから取る分位点|`settings.BOX_HEIGHT_CORRECTION_PERCENTILE_DEFAULT`（80.0）|0.0〜100.0|
 |Width Percentile [%]|Box Fitting（Width Estimation）|float|percentile方式の幅補正で、全フレームのボックス幅から取る分位点|`settings.BOX_WIDTH_CORRECTION_PERCENTILE_DEFAULT`（70.0）|0.0〜100.0|
 |Length Percentile [%]|Box Fitting（Length Estimation）|float|percentile方式の長さ補正で、全フレームのボックス長さから取る分位点|`settings.BOX_LENGTH_CORRECTION_PERCENTILE_DEFAULT`（80.0）|0.0〜100.0|
+|Motion Correction|Track Smoother|bool|Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡と、それに基づく補正を行うか。オフならglobal_track_id = box_merged_track_id|`settings.TRACK_SMOOTHER_ENABLED_DEFAULT`（True）|-|
+|Min Frames to Smooth|Track Smoother|int|平滑化・静止判定の対象にするトラックの最小フレーム数。これ未満のトラックは補正せず、結合の候補にだけする|`settings.TRACK_SMOOTHER_MIN_FRAMES_DEFAULT`（3）|2〜`settings.TRACK_SMOOTHER_MIN_FRAMES_MAX`|
+|Outlier Threshold|Track Smoother（Kalman Smoother）|float|平滑化で外れ値として除外するマハラノビス距離の二乗の閾値|`settings.TRACK_SMOOTHER_OUTLIER_THRESHOLD_DEFAULT`（9.21）|1.0〜30.0|
+|Num Iters|Track Smoother（Kalman Smoother）|int|外れ値を除いて平滑化し直す回数の上限|`settings.TRACK_SMOOTHER_NUM_ITERS_DEFAULT`（3）|1〜`settings.TRACK_SMOOTHER_NUM_ITERS_MAX`|
+|Static Radius [m]|Track Smoother（Static Detection）|float|中心の中央値からのばらつき（`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`%分位）の上限|`settings.TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT`（1.0）|0.1〜5.0|
+|Static Max Speed [m/s]|Track Smoother（Static Detection）|float|平滑化で推定した速さの中央値の上限|`settings.TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT`（0.5）|0.0〜3.0|
+|Static Link Distance [m]|Track Smoother（Stable Track Correction）|float|静止トラック同士を結合するときの、中央値の位置の距離の上限|`settings.TRACK_SMOOTHER_STATIC_LINK_DISTANCE_DEFAULT`（1.0）|0.1〜5.0|
+|Static Bottom Percentile [%]|Track Smoother（Stable Track Correction）|float|静止トラックの底面の高さ（グローバル座標のz）として取る分位点|`settings.TRACK_SMOOTHER_STATIC_BOTTOM_PERCENTILE_DEFAULT`（25.0）|0.0〜100.0|
+|Track Orientation Diff Threshold [deg]|Track Smoother（Stable Track Correction）|float|トラックの角度の中央値とのずれが、これ以上のフレームを補正の候補にする|`settings.TRACK_SMOOTHER_TRACK_ORIENT_DIFF_DEFAULT`（15.0）|0.0〜90.0|
+|Neighbor Orientation Diff Threshold [deg]|Track Smoother（Stable Track Correction）|float|周囲の静止車両の角度の中央値（前後は区別しない）とのずれの閾値|`settings.TRACK_SMOOTHER_NEIGHBOR_ORIENT_DIFF_DEFAULT`（15.0）|0.0〜90.0|
+|Max Link Gap [s]|Track Smoother（Moving Track Merge）|float|先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限|`settings.TRACK_SMOOTHER_MAX_LINK_GAP_DEFAULT`（3.0）|0.0〜10.0|
+|Min Position Correction [m]|Track Smoother（Moving Track Correction）|float|位置を修正する最小のずれ（ユークリッド距離）|`settings.TRACK_SMOOTHER_MIN_POSITION_CORRECTION_DEFAULT`（0.5）|0.0〜3.0|
+|Min Speed for Heading [m/s]|Track Smoother（Moving Track Correction）|float|速度の向きで角度を修正する最低の速さ|`settings.TRACK_SMOOTHER_MIN_SPEED_HEADING_DEFAULT`（2.0）|0.0〜10.0|
+|Heading Diff Threshold [deg]|Track Smoother（Moving Track Correction）|float|速度の向きとボックスの角度の差が、これ以上なら速度の向きに修正する|`settings.TRACK_SMOOTHER_HEADING_DIFF_DEFAULT`（20.0）|0.0〜180.0|
 
 なお、ボックスのフィッティング手法（`settings.BOXFIT_METHODS`）、底面の推定方式（`settings.BOX_BOTTOM_ESTIMATIONS`）、寸法補正の方式（`settings.BOX_HEIGHT_CORRECTIONS`等）、Distance Filterの方式（`settings.DISTANCE_FILTER_METHODS`）はラベルごとに設定ファイルで指定し、UIでは選択できない（Box Fittingタブ・Generalタブに現在の割り当てが表示される）
 
@@ -784,6 +798,13 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.BOX_HEIGHT_CORRECTIONS`|dict[str, str \| None]|ラベルごとの高さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|各フレームの箱は隠れや疎なビームで小さめに出るため、全フレームから共通の寸法を決める|
 |`settings.BOX_WIDTH_CORRECTIONS`|dict[str, str \| None]|ラベルごとの幅補正の方式（"percentile" / "default" / None）|車両系（car, truck, bus, trailer, construction_vehicle）: "default", 他: "percentile"|幅は車種でそれほど変わらないので、車両系はdefaultに寄せる|
 |`settings.BOX_LENGTH_CORRECTIONS`|dict[str, str \| None]|ラベルごとの長さ補正の方式（"percentile" / "default" / None）|全ラベル"percentile"|長さは車種によってまちまちなのでpercentileに寄せる|
+|`settings.TRACK_SMOOTHER_MEASUREMENT_NOISE`|dict[str, dict[str, list[float]]]|Kalman Smootherの観測ノイズ σ = a + b·d [m]（dはセンサーからの距離）の係数 [a, b]。当てはめた点群にLiDAR点を含むか（"lidar"）/ 深度のみ（"depth"）× ボックスの長さ方向（"length"）/ 幅方向（"width"）。`box_fitting_params["track_smoother"]["measurement_noise"]`で渡す|lidar: length [0.3, 0.01], width [0.15, 0.005] / depth: length [0.8, 0.03], width [0.4, 0.015]|仮の値。GTとの残差をボックスの軸に分解し、MADで推定して差し替える|
+|`settings.TRACK_SMOOTHER_PROCESS_NOISE`|dict[str, float]|等速度モデルの加速度の強さ q [m²/s³]（ラベルごと。辞書に無いラベルは"default"）|default 1.0, pedestrian 0.5, traffic_cone / barrier 0.1|仮の値。GTの速度差から推定して差し替える|
+|`settings.TRACK_SMOOTHER_INITIAL_VELOCITY_VAR`|float|平滑化の初期状態の速度の分散 [(m/s)²]|100.0|初期速度は分からないので大きく取り、2観測目以降で決まるようにする|
+|`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`|float|静止判定で、中心の中央値からのばらつきを測る分位点 [%]|90.0|外れ値の数フレームでばらつきが大きく出ないように|
+|`settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH` / `settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH`|float|静止トラックの角度補正で、周囲の静止車両のボックスを集める範囲 [m]（対象ボックス中心から、その向きの前後方向 / 左右方向）|15.0 / 3.0|縦列駐車の前後数台を含み、隣の車線を含まない範囲|
+|`settings.TRACK_SMOOTHER_LINK_THRESHOLD_4D` / `settings.TRACK_SMOOTHER_LINK_THRESHOLD_2D`|float|移動トラックの結合のD²の閾値（長いトラック同士: 位置と速度の4次元 / 片方が短いトラック: 位置の2次元）|13.28 / 9.21|χ²(4, 0.99) / χ²(2, 0.99)|
+|`settings.TRACK_SMOOTHER_POSITION_GATE`|float|移動トラックの位置を修正するマハラノビス距離の二乗の閾値（ずれがMin Position Correctionも超えたときだけ修正）|9.21|χ²(2, 0.99)|
 |`settings.DEPTH_MAP_DOWNSCALE`|float|深度マップの保存解像度倍率（内部パラメータも同じ倍率で補正して保存する）。1/2にすると保存容量が1/4に削減できる|0.5|1 runあたり約565MB → 141MB|
 |`settings.DEPTH_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限。超えたら古いものから削除する|3|派生ファイルが1 runあたり約280MBあるため少なめにする|
 |`settings.BOXFIT_STORED_POINTS_MAX`|int|DBに保存するインスタンス点群の上限点数（ボクセル間引き後）。フィッティングには間引き前の点群を使う|500|-|
@@ -1106,7 +1127,17 @@ for (sample, global_id), rows in group_by(fitted_rows, key=(sample, global_ids))
 correct_box_sizes(primary_rows, box_fitting_params)   # 後述の疑似コード参照（高さ → 幅 → 長さ）
 for row in primary_rows:
     record_box_stage(row.box, "box_merged")
-# 動きに基づくトラックの結合は未実装のため、現状は global_track_id = box_merged_track_id
+
+###### Motion correction（global_track_id。webapp/inference/app/services/track_smoother.py） ######
+if box_fitting_params["track_smoother"]["enabled"]:
+    motion = correct_track_motion(primary_rows, reference_ego_poses, box_fitting_params, has_lidar)
+    # 静止 / 移動の判定 → 静止トラックの結合と補正 → 移動トラックの結合と補正（上記の手順）
+    for row in primary_rows:
+        row.global_track_id = motion["global_ids"][row.box_merged_track_id]
+        record_box_stage(row.box, "motion_corrected")
+    correct_global_track_sizes(primary_rows)   # box_merged_trackを2個以上結合したglobal_trackだけ
+else:
+    global_track_id = box_merged_track_id
 ```
 
 #### L-shape Filter

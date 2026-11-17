@@ -102,6 +102,7 @@ class DepthBoxFittingRepository:
         inference_time: float | None = None,
         merge_diagnostics: dict[str, Any] | None = None,
         box_merge_diagnostics: dict[str, Any] | None = None,
+        track_smoother_diagnostics: dict[str, Any] | None = None,
     ) -> None:
         values: dict[str, Any] = {
             "status": status,
@@ -115,6 +116,8 @@ class DepthBoxFittingRepository:
             values["merge_diagnostics"] = merge_diagnostics
         if box_merge_diagnostics is not None:
             values["box_merge_diagnostics"] = box_merge_diagnostics
+        if track_smoother_diagnostics is not None:
+            values["track_smoother_diagnostics"] = track_smoother_diagnostics
         self.session.execute(
             update(DepthEstimationParams.__table__)
             .where(DepthEstimationParams.__table__.c.id == params_id)

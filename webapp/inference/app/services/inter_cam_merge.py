@@ -860,9 +860,11 @@ def merge_and_fit(
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
     5. AI モデルによる向きの再推定と反映（orient_boxes）
     6. hull_merged_track 単位の角度補正
-    7. ボックスの規定長と向きに基づく結合（box_merged_track_id を割り当てる。
-       動きに基づく結合は未実装のため、global_track_id も同じ値）
+    7. ボックスの規定長と向きに基づく結合（box_merged_track_id を割り当てる）
     8. box_merged_track_id 単位の寸法補正（高さ → 幅 → 長さ）
+    9. 動き（静止 / カルマンスムーザー）に応じた補正と、それに基づくトラックの
+       結合（global_track_id を割り当てる）。結合した global_track の寸法を揃える
+    10. 診断情報
 
     ## 点数の下限をここで判定する理由
 
@@ -1148,7 +1150,7 @@ def merge_and_fit(
             if hull_id is not None:
                 box_merged_id = final_ids.get(hull_id, hull_id)
                 entry["box_merged_track_id"] = box_merged_id
-                # 動きに基づくトラックの結合（未実装）までは box_merged_track_id と同じ
+                # 動きに基づく結合（9）で決め直す
                 entry["global_track_id"] = box_merged_id
 
     # --- 8) box_merged_track_id 単位の寸法補正（高さ → 幅 → 長さ） -------------
@@ -1164,11 +1166,51 @@ def merge_and_fit(
         ],
         box_fitting_params,
     )
-    for _, _, member, _, _ in fitted_rows:
-        if member.get("is_primary") and member.get("status") == "fitted":
-            record_box_stage(member, BOX_STAGE_BOX_MERGED)
+    primary_rows = [
+        (final_ids.get(hull_id, hull_id), label, member, origin, sample)
+        for hull_id, label, member, origin, sample in fitted_rows
+        if member.get("is_primary") and member.get("status") == "fitted"
+    ]
+    for _, _, member, _, _ in primary_rows:
+        record_box_stage(member, BOX_STAGE_BOX_MERGED)
 
-    # --- 9) 診断情報 -----------------------------------------------------
+    # --- 9) 動き（静止 / カルマンスムーザー）に応じた補正と、global_track_id 単位の寸法補正
+    from app.services.track_smoother import smoother_settings
+
+    smoother_stats: dict[str, Any] = {}
+    if smoother_settings(box_fitting_params)["enabled"]:
+        from app.services.box_fitting import BOX_STAGE_MOTION_CORRECTED
+        from app.services.box_size import correct_global_track_sizes
+        from app.services.track_smoother import correct_track_motion
+
+        # 当てはめた点群に LiDAR 点を含むか（観測ノイズの切り替えに使う）
+        has_lidar: dict[tuple[str, str], bool] = {}
+        for group in fitted_groups:
+            key = (final_ids.get(group["hull_merged_track_id"], group["hull_merged_track_id"]),
+                   group["sample_token"])
+            has_lidar[key] = has_lidar.get(key, False) or bool(group.get("has_lidar"))
+        motion = correct_track_motion(
+            primary_rows, reference_ego_poses, box_fitting_params, has_lidar=has_lidar,
+        )
+        motion_ids = motion["global_ids"]
+        for entries in entries_by_sample.values():
+            for entry in entries:
+                box_merged_id = entry.get("box_merged_track_id")
+                if box_merged_id is not None:
+                    entry["global_track_id"] = motion_ids.get(box_merged_id, box_merged_id)
+        for _, _, member, _, _ in primary_rows:
+            record_box_stage(member, BOX_STAGE_MOTION_CORRECTED)
+        global_size_stats = correct_global_track_sizes(
+            [(motion_ids.get(bm_id, bm_id), bm_id, label, member)
+             for bm_id, label, member, _, _ in primary_rows],
+            box_fitting_params,
+        )
+        smoother_stats = {
+            "diagnostics": {**motion["diagnostics"],
+                            "num_size_corrected_tracks": global_size_stats["num_tracks"]},
+        }
+
+    # --- 10) 診断情報 ----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。
     # 閾値を緩めても結合されない場合、原因は閾値ではなく
     # 1 対 1 の割り当てやカメラ重複の保護であることが多い
@@ -1280,6 +1322,7 @@ def merge_and_fit(
         "num_size_corrected_tracks": size_stats["num_tracks"],
         "num_orientation_corrected_boxes": num_orientation_corrected,
         "num_box_merged_boxes": box_merge["num_merged_boxes"],
+        "track_smoother_diagnostics": smoother_stats.get("diagnostics"),
         "box_diagnostics": box_merge["diagnostics"],
         "merge_selection_counts": dict(selection_counts),
         "diagnostics": diagnostics,

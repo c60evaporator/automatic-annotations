@@ -299,6 +299,8 @@ class BoxFittingJobResult(BaseModel):
     # ボックスの規定長と向きによる結合の診断情報
     box_merge_diagnostics: dict[str, Any] | None = None
     num_box_merged_boxes: int = 0
+    # 動き（静止 / カルマンスムーザー）に応じた補正の診断情報
+    track_smoother_diagnostics: dict[str, Any] | None = None
     num_fitted: int
     inference_time: float
     depth_estimations: list[DepthEstimationResult]

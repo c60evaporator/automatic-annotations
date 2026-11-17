@@ -150,6 +150,8 @@ BOX_STAGE_LOCAL_CORRECTED = "local_corrected"  # 1 フレーム単位の補正�
 BOX_STAGE_ORIENTATION_CORRECTED = "orientation_corrected"
 # ボックスの規定長と向きによる結合と、box_merged_track_id 単位の寸法補正の後
 BOX_STAGE_BOX_MERGED = "box_merged"
+# 動き（静止 / カルマンスムーザー）に応じた補正の後、global_track_id 単位の寸法補正の前
+BOX_STAGE_MOTION_CORRECTED = "motion_corrected"
 
 
 def record_box_stage(fit: dict[str, Any], stage: str) -> dict[str, Any]:
