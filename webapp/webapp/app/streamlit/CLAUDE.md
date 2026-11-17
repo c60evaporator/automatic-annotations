@@ -250,7 +250,8 @@
             - Outlier Threshold: 平滑化で外れ値として除外するマハラノビス距離の二乗の閾値
             - Num Iters: 外れ値を除いて平滑化し直す回数の上限
         - Static Detection
-            - Static Radius: 中心の中央値からのばらつき（90%分位）の上限
+            - Static Radius: 中心の中央値からの幅方向（ボックスの向きに垂直）のばらつき（90%分位）の上限
+            - Static Max Displacement: 正味の移動量（最初と最後の3分の1の中央値の位置の差）の上限
             - Static Max Speed: 平滑化で推定した速さの中央値の上限
         - Stable Track Correction
             - Static Link Distance: 静止トラック同士を結合するときの、中央値の位置の距離の上限
@@ -260,6 +261,7 @@
         - Moving Track Merge
             - Max Link Gap: 先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限
         - Moving Track Correction
+            - Moving Position Correction: 移動トラックの中心を平滑化した位置へ修正するかどうか（既定はオフ。nuScenesでは修正したフレームの誤差が悪化したため）
             - Min Position Correction: 位置を修正する最小のずれ（ユークリッド距離）
             - Min Speed for Heading: 速度の向きで角度を修正する最低の速さ
             - Heading Diff Threshold: 速度の向きとボックスの角度の差が、これ以上なら修正する

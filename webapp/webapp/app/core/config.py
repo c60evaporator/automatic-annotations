@@ -682,11 +682,15 @@ class Settings(BaseSettings):
     TRACK_SMOOTHER_PROCESS_NOISE: dict[str, float] = {
         "default": 1.0, "pedestrian": 0.5, "traffic_cone": 0.1, "barrier": 0.1,
     }
-    # 静止判定: 中心の中央値からのばらつき（この分位点）が Static Radius 未満、
-    # かつ平滑化した速さの中央値が Static Max Speed 未満
+    # 静止判定: 中心の幅方向（ボックスの向きに垂直）のばらつき（この分位点）が
+    # Static Radius 未満、正味の移動量（最初と最後の 3 分の 1 の中央値の位置の差）が
+    # Static Max Displacement 未満、平滑化した速さの中央値が Static Max Speed 未満。
+    # 止まっている車両でも、見えている面が変わると中心が長さ方向に数 m 跳ぶので、
+    # 長さ方向のばらつきは見ない（nuScenes 6 シーンの GT 属性で決めた値）
     TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT: float = 1.0
     TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE: float = 90.0
-    TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT: float = 0.5
+    TRACK_SMOOTHER_STATIC_MAX_DISPLACEMENT_DEFAULT: float = 2.0
+    TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT: float = 1.0
     # 静止トラックの補正
     TRACK_SMOOTHER_STATIC_LINK_DISTANCE_DEFAULT: float = 1.0
     TRACK_SMOOTHER_STATIC_BOTTOM_PERCENTILE_DEFAULT: float = 25.0
@@ -697,10 +701,15 @@ class Settings(BaseSettings):
     STABLE_TRACK_ORIENT_SEARCH_LENGTH: float = 15.0
     STABLE_TRACK_ORIENT_SEARCH_WIDTH: float = 3.0
     # 移動トラックの結合: 時間差の上限 [s] と、D² の閾値（位置と速度の 4 次元 /
-    # 片方が短いトラックのときの位置だけの 2 次元。いずれも χ² の 99% 点）
+    # 片方が短いトラックのときの位置だけの 2 次元。いずれも χ² の 95% 点。
+    # 99% 点では誤った結合が 3 割を超えた）
     TRACK_SMOOTHER_MAX_LINK_GAP_DEFAULT: float = 3.0
-    TRACK_SMOOTHER_LINK_THRESHOLD_4D: float = 13.28
-    TRACK_SMOOTHER_LINK_THRESHOLD_2D: float = 9.21
+    TRACK_SMOOTHER_LINK_THRESHOLD_4D: float = 9.49
+    TRACK_SMOOTHER_LINK_THRESHOLD_2D: float = 5.99
+    # 移動トラックの位置の修正を行うか。nuScenes 6 シーンでは、修正したフレームの GT との
+    # 誤差が平均 1.3 m → 6 m に悪化した（外れ値とされた観測の多くは正しく、トラック内の
+    # 別物体の混入や、長さ方向の中心の跳びで平滑化の方がずれていた）ので既定はオフ
+    TRACK_SMOOTHER_CORRECT_MOVING_POSITION_DEFAULT: bool = False
     # 移動トラックの修正: 位置はマハラノビス距離の二乗がこれを超え、かつずれが
     # Min Position Correction を超えたら平滑化した位置へ移す
     TRACK_SMOOTHER_POSITION_GATE: float = 9.21

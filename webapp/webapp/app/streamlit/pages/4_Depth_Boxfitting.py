@@ -1286,16 +1286,24 @@ with param_col:
                     help="外れ値を除いて平滑化し直す回数の上限",
                 )
             st.markdown("**Static Detection**")
-            sd_cols = st.columns(2)
+            sd_cols = st.columns(3)
             with sd_cols[0]:
                 smoother_static_radius = st.slider(
                     "Static Radius [m]", 0.1, 5.0,
                     value=settings.TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT, step=0.1,
                     key="_w_smoother_static_radius", disabled=not smoother_enabled,
-                    help=("中心の中央値からのばらつき（"
-                          f"{settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE:.0f}% 分位）の上限"),
+                    help=("中心の中央値からの幅方向（ボックスの向きに垂直）のばらつき（"
+                          f"{settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE:.0f}% 分位）の上限。"
+                          "見えている面が変わると中心が長さ方向に跳ぶので、長さ方向は見ない"),
                 )
             with sd_cols[1]:
+                smoother_static_displacement = st.slider(
+                    "Static Max Displacement [m]", 0.1, 10.0,
+                    value=settings.TRACK_SMOOTHER_STATIC_MAX_DISPLACEMENT_DEFAULT, step=0.1,
+                    key="_w_smoother_static_displacement", disabled=not smoother_enabled,
+                    help="正味の移動量（最初と最後の 3 分の 1 の中央値の位置の差）の上限",
+                )
+            with sd_cols[2]:
                 smoother_static_speed = st.slider(
                     "Static Max Speed [m/s]", 0.0, 3.0,
                     value=settings.TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT, step=0.1,
@@ -1344,12 +1352,20 @@ with param_col:
                 help="先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限",
             )
             st.markdown("**Moving Track Correction**")
+            smoother_correct_position = st.checkbox(
+                "Moving Position Correction",
+                value=settings.TRACK_SMOOTHER_CORRECT_MOVING_POSITION_DEFAULT,
+                key="_w_smoother_correct_position", disabled=not smoother_enabled,
+                help=("移動トラックの中心を平滑化した位置へ修正するか。nuScenes では"
+                      "修正したフレームの誤差が悪化したので既定はオフ"),
+            )
             mtc_cols = st.columns(3)
             with mtc_cols[0]:
                 smoother_min_shift = st.slider(
                     "Min Position Correction [m]", 0.0, 3.0,
                     value=settings.TRACK_SMOOTHER_MIN_POSITION_CORRECTION_DEFAULT, step=0.1,
-                    key="_w_smoother_min_shift", disabled=not smoother_enabled,
+                    key="_w_smoother_min_shift",
+                    disabled=not (smoother_enabled and smoother_correct_position),
                     help=("位置を修正する最小のずれ（ユークリッド距離）。マハラノビス距離の"
                           f"二乗が {settings.TRACK_SMOOTHER_POSITION_GATE} を超え、かつこれを"
                           "超えたフレームを平滑化した位置へ移す"),
@@ -1451,6 +1467,7 @@ box_fitting_params = {
         "process_noise": {k: float(v) for k, v in settings.TRACK_SMOOTHER_PROCESS_NOISE.items()},
         "static_radius": float(smoother_static_radius),
         "static_spread_percentile": float(settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE),
+        "static_max_displacement": float(smoother_static_displacement),
         "static_max_speed": float(smoother_static_speed),
         "static_link_distance": float(smoother_static_link),
         "static_bottom_percentile": float(smoother_static_bottom),
@@ -1461,6 +1478,7 @@ box_fitting_params = {
         "max_link_gap": float(smoother_max_gap),
         "link_threshold_4d": float(settings.TRACK_SMOOTHER_LINK_THRESHOLD_4D),
         "link_threshold_2d": float(settings.TRACK_SMOOTHER_LINK_THRESHOLD_2D),
+        "correct_moving_position": bool(smoother_correct_position),
         "position_gate": float(settings.TRACK_SMOOTHER_POSITION_GATE),
         "min_position_correction": float(smoother_min_shift),
         "min_speed_heading": float(smoother_min_speed),

@@ -615,9 +615,11 @@ Depth Boxfittingは、以下のフローで行われます
             - 1回目は全観測で平滑化し、各フレームの残差 $\mathbf{r}_k = \mathbf{z}_k - H\hat{\mathbf{x}}_{k|N}$ とマハラノビス距離 $d_k^2 = \mathbf{r}_k^\top S_k^{-1} \mathbf{r}_k$ を求める（平滑化に使った観測は残差の共分散 $S_k = R_k - H P_{k|N} H^\top$（正定値でなくなったら $R_k$ で代用）、除外した観測は $S_k = H P_{k|N} H^\top + R_k$。$R_k$ だけで測ると、平滑化が外れ値に引き寄せられた分だけ $d_k^2$ が小さく出て外れ値を見逃す）
             - $d_k^2 > \chi^2_{2,0.99}=9.21$ の観測を外れ値として除外し、残りで平滑化し直す。外れ値の集合が変わらなくなるまで繰り返す（上限2〜3回）。除外したフレームは予測だけで通過する
             - 結果として各フレームの平滑化状態 $\hat{\mathbf{x}}_{k|N}$ と共分散 $P_{k|N}$、および端点（最初と最後のフレーム）の状態と共分散を保持する
-    - 以下の2条件を満たすトラックを静止と判定。なおフレーム数がMin Frames to Smoothパラメータ以上のトラックのみを対象とする
-        - 寸法補正後の中心のグローバル座標で $\max_k \|\mathbf{p}_k - \mathrm{median}(\mathbf{p})\|_{\text{(平滑化で外れ値とされたフレームを除いた90\%分位)}} < r_{static}\ (\approx 1\,\text{m})$
-        - 平滑化で推定した速さの中央値が 0.5 m/s 未満
+    - 以下の3条件を満たすトラックを静止と判定。なおフレーム数がMin Frames to Smoothパラメータ以上のトラックのみを対象とする。使う観測は、平滑化で外れ値とされたフレームを除いた寸法補正後の中心（グローバル座標）
+        - 幅方向（トラックの角度の中央値（前後は区別しない）に垂直な方向）の、中央値からのばらつきの`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`（90%）分位がStatic Radius（1 m）未満。止まっている車両でも、見えている面が変わると中心が長さ方向に数m跳ぶので、長さ方向のばらつきは見ない
+        - 正味の移動量（最初と最後の3分の1の観測の中央値の位置の差）がStatic Max Displacement（2 m）未満
+        - 平滑化で推定した速さの中央値がStatic Max Speed（1 m/s）未満
+        - 当初の「中心の中央値からの距離の90%分位 < 1 m かつ 速さ < 0.5 m/s」では、nuScenes 6シーンでGTがparked / stoppedのトラック149本のうち70本を移動と判定した（中心の長さ方向の跳びでばらつきが1.9〜3 mになる）。上の条件では39本に減る（GTがmovingのトラック129本のうち静止と判定するのは13本→26本。いずれも低速で、位置の誤差の悪化は小さい）
     - 静止判定で止まっているトラックは以下を実施。なおフレーム数がMin Frames to Smoothパラメータ未満のトラック（静止判定は実施していない）はトラック結合のみ対象とし、結合されなかった場合以降の処理を飛ばす
         - 短いトラックは、まずここで静止トラックとの結合を判定する（中央値の位置が近いという強い条件のため）。ここで結合されなかった短いトラックだけを、後述の移動トラックとの結合に回す（1つの短いトラックが静止・移動の両方の結合に入らないようにするため）
         - 以下の条件を満たすトラック同士を結合
@@ -636,23 +638,24 @@ Depth Boxfittingは、以下のフローで行われます
         - 分割されたトラックの結合（ここで付けたトラックを新たなglobal_trackとする）
             - 候補対: 先に終わるトラックAと後から始まるトラックBで、labelが同じ、同じフレームに出現しない、Bの開始とAの終了の時間差 $\tau$ が $\tau_{max}$（例: 3秒）以下
             - Aの終端状態を $F(\tau)$ でBの開始時刻まで予測し（共分散は $F P F^\top + Q(\tau)$）、Bの始端状態との差 $\mathbf{e}$（位置と速度の4次元）と $S = P_{A,pred} + P_{B,start}$ から $D^2 = \mathbf{e}^\top S^{-1} \mathbf{e}$ を求める
-            - 両方とも長いトラックの対は、$D^2 \le \chi^2_{4,0.99}=13.28$ の対を候補とする
+            - 両方とも長いトラックの対は、$D^2 \le \chi^2_{4,0.95}=9.49$ の対を候補とする（99%点の13.28では、nuScenes 6シーンで誤った結合（GTの別物体どうし）が3割を超えた）
             - 片方が短いトラック（平滑化しておらず速度が分からない）の対は、位置だけの2次元で判定する（速度の分散を大きく取って4次元で判定すると、実質位置だけを見ているのに自由度4の閾値で緩くなりすぎるため）
                 - Bが短いトラック: Aの終端状態をBの開始時刻まで予測し、差 $\mathbf{e} = H\hat{\mathbf{x}}_{A,pred} - \mathbf{z}_{B,first}$、$S = H P_{A,pred} H^\top + R_{B,first}$
                 - Aが短いトラック: Bの始端状態を $F(-\tau)$ でAの終了時刻まで後ろ向きに予測し（共分散は $F P F^\top + Q(\tau)$）、差 $\mathbf{e} = H\hat{\mathbf{x}}_{B,pred} - \mathbf{z}_{A,last}$、$S = H P_{B,pred} H^\top + R_{A,last}$
-                - $D^2 = \mathbf{e}^\top S^{-1} \mathbf{e} \le \chi^2_{2,0.99}=9.21$ の対を候補とする
+                - $D^2 = \mathbf{e}^\top S^{-1} \mathbf{e} \le \chi^2_{2,0.95}=5.99$ の対を候補とする
                 - 両方とも短いトラックの対は、どちらも予測できないので判定しない
-            - $D^2$ が閾値以下の対を候補とし、$D^2$ をそれぞれの閾値（13.28 または 9.21）で割った値をコストにHungarian algorithmで1対1に対応付ける（自由度の異なる $D^2$ を同じ尺度で比べるため。1つのトラックの終端は1つの始端にだけつながる）。つながった鎖ごとに同一のglobal_track_idを割り振り、結合されなかったトラックは単独でglobal_track_idを持つ
+            - $D^2$ が閾値以下の対を候補とし、$D^2$ をそれぞれの閾値（9.49 または 5.99）で割った値をコストにHungarian algorithmで1対1に対応付ける（自由度の異なる $D^2$ を同じ尺度で比べるため。1つのトラックの終端は1つの始端にだけつながる）。つながった鎖ごとに同一のglobal_track_idを割り振り、結合されなかったトラックは単独でglobal_track_idを持つ
             - 静止トラックの端点を「位置は中央値、速度0、小さい共分散」の状態として同じ判定に含めると、停車→発進で分割されたトラックも結合できる（任意）
         - 結合したトラックの平滑化をやり直す
             - 結合したglobal_trackの全観測を時刻順に並べ、上記と同じ手順（外れ値の反復除去を含む）でカルマンフィルタ＋RTSスムーザーによる平滑化を実施する。トラック間の隙間は予測だけで通過する（観測の無いフレームにボックスは作らない）
-        - 位置の修正
+        - 位置の修正（Moving Position Correctionがオンのときだけ。既定はオフ）
+            - nuScenes 6シーンでは、修正したフレーム75件のGTとの誤差が平均1.3 m → 6.1 mに悪化したため既定はオフにしている。外れ値とされた観測の多くはGTに近く、トラック内への別物体の混入や、長さ方向の中心の跳びで、平滑化した位置の方がずれていた
             - 各フレームの残差 $\mathbf{r}_k$ と $d_k^2$ を、やり直した平滑化の結果で求め直す
             - $d_k^2 > \gamma$（例: 9.21）かつ $\|\mathbf{r}_k\| > \delta_{min}$（例: 0.5 m。LiDAR付きで $R_k$ が小さいフレームの数cmのずれを直さないため）のフレームは、ボックス中心のXYを平滑化した位置 $H\hat{\mathbf{x}}_{k|N}$ に置き換える。置き換える位置はそのサンプルの基準ego_poseでego座標に戻す
             - zと寸法とyawは変えない（中心だけ平行移動する）
         - 角度の修正
             - 平滑化した速度 $\hat{\mathbf{v}}_k$ から、速さ $s_k = \|\hat{\mathbf{v}}_k\|$ と進行方向 $\theta_k = \mathrm{atan2}(\hat{v}_{y,k}, \hat{v}_{x,k})$ を求める
-            - $s_k \ge v_{min}$（例: 2 m/s。低速では速度の向きが不安定なため）のフレームだけを対象とする
+            - $s_k \ge v_{min}$（例: 2 m/s。低速では速度の向きが不安定なため）のフレームだけを対象とする。さらに、トラック全体の正味の速さ（外れ値を除いた最初と最後の3分の1の観測の中央値の位置の差 ÷ 時間差）も $v_{min}$ 以上のトラックに限る（止まっている車両は中心の跳びで平滑化した速さが出ることがあり、その速度の向きで角度を直すと悪化したため）
             - ボックスのyaw（グローバル）$\psi_k$ と $\theta_k$ の差 $|\mathrm{wrap}_{(-\pi,\pi]}(\psi_k - \theta_k)|$ が閾値以上なら、yawを $\theta_k$ に置き換える（$v_{min}$ 以上の速さで後退する車両は稀なので、前後が逆のボックスも $\theta_k$ に揃える）
             - 回転は中心を固定して行い、寸法は変えない（後段の寸法補正で中心を固定して対称に伸ばすため）
         - 修正前の中心とyaw、平滑化した位置と速度、$d_k^2$、位置・角度を修正したかどうかを`fit_metrics["motion_correction"]`に記録する
@@ -750,13 +753,15 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Min Frames to Smooth|Track Smoother|int|平滑化・静止判定の対象にするトラックの最小フレーム数。これ未満のトラックは補正せず、結合の候補にだけする|`settings.TRACK_SMOOTHER_MIN_FRAMES_DEFAULT`（3）|2〜`settings.TRACK_SMOOTHER_MIN_FRAMES_MAX`|
 |Outlier Threshold|Track Smoother（Kalman Smoother）|float|平滑化で外れ値として除外するマハラノビス距離の二乗の閾値|`settings.TRACK_SMOOTHER_OUTLIER_THRESHOLD_DEFAULT`（9.21）|1.0〜30.0|
 |Num Iters|Track Smoother（Kalman Smoother）|int|外れ値を除いて平滑化し直す回数の上限|`settings.TRACK_SMOOTHER_NUM_ITERS_DEFAULT`（3）|1〜`settings.TRACK_SMOOTHER_NUM_ITERS_MAX`|
-|Static Radius [m]|Track Smoother（Static Detection）|float|中心の中央値からのばらつき（`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`%分位）の上限|`settings.TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT`（1.0）|0.1〜5.0|
-|Static Max Speed [m/s]|Track Smoother（Static Detection）|float|平滑化で推定した速さの中央値の上限|`settings.TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT`（0.5）|0.0〜3.0|
+|Static Radius [m]|Track Smoother（Static Detection）|float|中心の中央値からの幅方向（ボックスの向きに垂直）のばらつき（`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`%分位）の上限|`settings.TRACK_SMOOTHER_STATIC_RADIUS_DEFAULT`（1.0）|0.1〜5.0|
+|Static Max Displacement [m]|Track Smoother（Static Detection）|float|正味の移動量（最初と最後の3分の1の観測の中央値の位置の差）の上限|`settings.TRACK_SMOOTHER_STATIC_MAX_DISPLACEMENT_DEFAULT`（2.0）|0.1〜10.0|
+|Static Max Speed [m/s]|Track Smoother（Static Detection）|float|平滑化で推定した速さの中央値の上限|`settings.TRACK_SMOOTHER_STATIC_MAX_SPEED_DEFAULT`（1.0）|0.0〜3.0|
 |Static Link Distance [m]|Track Smoother（Stable Track Correction）|float|静止トラック同士を結合するときの、中央値の位置の距離の上限|`settings.TRACK_SMOOTHER_STATIC_LINK_DISTANCE_DEFAULT`（1.0）|0.1〜5.0|
 |Static Bottom Percentile [%]|Track Smoother（Stable Track Correction）|float|静止トラックの底面の高さ（グローバル座標のz）として取る分位点|`settings.TRACK_SMOOTHER_STATIC_BOTTOM_PERCENTILE_DEFAULT`（25.0）|0.0〜100.0|
 |Track Orientation Diff Threshold [deg]|Track Smoother（Stable Track Correction）|float|トラックの角度の中央値とのずれが、これ以上のフレームを補正の候補にする|`settings.TRACK_SMOOTHER_TRACK_ORIENT_DIFF_DEFAULT`（15.0）|0.0〜90.0|
 |Neighbor Orientation Diff Threshold [deg]|Track Smoother（Stable Track Correction）|float|周囲の静止車両の角度の中央値（前後は区別しない）とのずれの閾値|`settings.TRACK_SMOOTHER_NEIGHBOR_ORIENT_DIFF_DEFAULT`（15.0）|0.0〜90.0|
 |Max Link Gap [s]|Track Smoother（Moving Track Merge）|float|先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限|`settings.TRACK_SMOOTHER_MAX_LINK_GAP_DEFAULT`（3.0）|0.0〜10.0|
+|Moving Position Correction|Track Smoother（Moving Track Correction）|bool|移動トラックの中心を平滑化した位置へ修正するか|`settings.TRACK_SMOOTHER_CORRECT_MOVING_POSITION_DEFAULT`（False）|-|
 |Min Position Correction [m]|Track Smoother（Moving Track Correction）|float|位置を修正する最小のずれ（ユークリッド距離）|`settings.TRACK_SMOOTHER_MIN_POSITION_CORRECTION_DEFAULT`（0.5）|0.0〜3.0|
 |Min Speed for Heading [m/s]|Track Smoother（Moving Track Correction）|float|速度の向きで角度を修正する最低の速さ|`settings.TRACK_SMOOTHER_MIN_SPEED_HEADING_DEFAULT`（2.0）|0.0〜10.0|
 |Heading Diff Threshold [deg]|Track Smoother（Moving Track Correction）|float|速度の向きとボックスの角度の差が、これ以上なら速度の向きに修正する|`settings.TRACK_SMOOTHER_HEADING_DIFF_DEFAULT`（20.0）|0.0〜180.0|
@@ -803,7 +808,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |`settings.TRACK_SMOOTHER_INITIAL_VELOCITY_VAR`|float|平滑化の初期状態の速度の分散 [(m/s)²]|100.0|初期速度は分からないので大きく取り、2観測目以降で決まるようにする|
 |`settings.TRACK_SMOOTHER_STATIC_SPREAD_PERCENTILE`|float|静止判定で、中心の中央値からのばらつきを測る分位点 [%]|90.0|外れ値の数フレームでばらつきが大きく出ないように|
 |`settings.STABLE_TRACK_ORIENT_SEARCH_LENGTH` / `settings.STABLE_TRACK_ORIENT_SEARCH_WIDTH`|float|静止トラックの角度補正で、周囲の静止車両のボックスを集める範囲 [m]（対象ボックス中心から、その向きの前後方向 / 左右方向）|15.0 / 3.0|縦列駐車の前後数台を含み、隣の車線を含まない範囲|
-|`settings.TRACK_SMOOTHER_LINK_THRESHOLD_4D` / `settings.TRACK_SMOOTHER_LINK_THRESHOLD_2D`|float|移動トラックの結合のD²の閾値（長いトラック同士: 位置と速度の4次元 / 片方が短いトラック: 位置の2次元）|13.28 / 9.21|χ²(4, 0.99) / χ²(2, 0.99)|
+|`settings.TRACK_SMOOTHER_LINK_THRESHOLD_4D` / `settings.TRACK_SMOOTHER_LINK_THRESHOLD_2D`|float|移動トラックの結合のD²の閾値（長いトラック同士: 位置と速度の4次元 / 片方が短いトラック: 位置の2次元）|9.49 / 5.99|χ²(4, 0.95) / χ²(2, 0.95)。99%点では誤った結合が3割を超えた|
 |`settings.TRACK_SMOOTHER_POSITION_GATE`|float|移動トラックの位置を修正するマハラノビス距離の二乗の閾値（ずれがMin Position Correctionも超えたときだけ修正）|9.21|χ²(2, 0.99)|
 |`settings.DEPTH_MAP_DOWNSCALE`|float|深度マップの保存解像度倍率（内部パラメータも同じ倍率で補正して保存する）。1/2にすると保存容量が1/4に削減できる|0.5|1 runあたり約565MB → 141MB|
 |`settings.DEPTH_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限。超えたら古いものから削除する|3|派生ファイルが1 runあたり約280MBあるため少なめにする|

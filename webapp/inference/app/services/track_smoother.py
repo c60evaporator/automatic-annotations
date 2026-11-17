@@ -32,7 +32,8 @@ KIND_MOVING = "moving"
 KIND_SHORT = "short"
 
 CHI2_2_99 = 9.21
-CHI2_4_99 = 13.28
+CHI2_2_95 = 5.99
+CHI2_4_95 = 9.49
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "enabled": False,
@@ -51,7 +52,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # 静止判定
     "static_radius": 1.0,
     "static_spread_percentile": 90.0,
-    "static_max_speed": 0.5,
+    "static_max_displacement": 2.0,
+    "static_max_speed": 1.0,
     # 静止トラックの補正
     "static_link_distance": 1.0,
     "static_bottom_percentile": 25.0,
@@ -61,9 +63,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "search_width": 3.0,
     # 移動トラックの結合
     "max_link_gap": 3.0,
-    "link_threshold_4d": CHI2_4_99,
-    "link_threshold_2d": CHI2_2_99,
+    "link_threshold_4d": CHI2_4_95,
+    "link_threshold_2d": CHI2_2_95,
     # 移動トラックの修正
+    "correct_moving_position": False,
     "position_gate": CHI2_2_99,
     "min_position_correction": 0.5,
     "min_speed_heading": 2.0,
@@ -326,14 +329,30 @@ def _smooth(observations: list[_Obs], label: str | None,
 # ── 静止トラック ─────────────────────────────────────────────────────────────
 
 
-def _is_static(track: _Track, settings: dict[str, Any]) -> tuple[bool, float, float]:
+def _is_static(track: _Track, settings: dict[str, Any]) -> tuple[bool, dict[str, float]]:
+    """静止の判定. (静止か, 判定に使った値).
+
+    止まっている車両でも、見えている面が変わると中心が長さ方向に数 m 跳ぶので、
+    ばらつきは**幅方向（ボックスの向きに垂直）だけ**で測る。長さ方向の跳びに
+    左右されない正味の移動量（最初と最後の 3 分の 1 の中央値の位置の差）と、
+    平滑化した速さの中央値も合わせて判定する。
+    """
     sm = track.smoothed
     zs = sm["zs"][sm["included"]]
-    spread = float(np.percentile(np.linalg.norm(zs - np.median(zs, axis=0), axis=1),
-                                 float(settings["static_spread_percentile"])))
+    median = np.median(zs, axis=0)
+    yaw = axial_median(np.array([o.yaw_global for o in track.obs]))
+    lateral_axis = np.array([-math.sin(yaw), math.cos(yaw)])
+    lateral = float(np.percentile(np.abs((zs - median) @ lateral_axis),
+                                  float(settings["static_spread_percentile"])))
+    third = max(1, len(zs) // 3)
+    displacement = float(np.linalg.norm(np.median(zs[-third:], axis=0)
+                                        - np.median(zs[:third], axis=0)))
     speed = float(np.median(np.linalg.norm(sm["xs"][:, 2:], axis=1)))
-    return (spread < float(settings["static_radius"])
-            and speed < float(settings["static_max_speed"])), spread, speed
+    static = (lateral < float(settings["static_radius"])
+              and displacement < float(settings["static_max_displacement"])
+              and speed < float(settings["static_max_speed"]))
+    return static, {"lateral_spread": round(lateral, 3), "displacement": round(displacement, 3),
+                    "median_speed": round(speed, 3)}
 
 
 class _UnionFind:
@@ -521,6 +540,16 @@ def link_moving_tracks(
     return chains, links
 
 
+def _net_speed(observations: list[_Obs], sm: dict[str, np.ndarray]) -> float:
+    """外れ値を除いた観測の、最初と最後の 3 分の 1 の中央値の位置の差 ÷ 時間差 [m/s]."""
+    zs, times = sm["zs"][sm["included"]], sm["times"][sm["included"]]
+    third = max(1, len(zs) // 3)
+    duration = float(np.median(times[-third:]) - np.median(times[:third]))
+    if duration <= 0:
+        return 0.0
+    return float(np.linalg.norm(np.median(zs[-third:], axis=0) - np.median(zs[:third], axis=0))) / duration
+
+
 def correct_moving(observations: list[_Obs], label: str | None,
                    settings: dict[str, Any]) -> dict[str, np.ndarray]:
     """平滑化し直して、位置と角度を修正する（行をその場で書き換える）."""
@@ -530,12 +559,18 @@ def correct_moving(observations: list[_Obs], label: str | None,
     min_shift = float(settings["min_position_correction"])
     min_speed = float(settings["min_speed_heading"])
     heading_thr = math.radians(float(settings["heading_diff_deg"]))
+    # トラック全体の正味の速さ（最初と最後の 3 分の 1 の中央値の位置の差 ÷ 時間差）。
+    # 止まっている車両は中心の跳びで平滑化した速さが出ることがあるので、
+    # 実際に移動しているトラックでだけ速度の向きを使う
+    net_speed = _net_speed(observations, sm)
     for k, o in enumerate(observations):
-        position = bool(sm["d2"][k] > gate and np.linalg.norm(sm["residuals"][k]) > min_shift)
+        position = bool(settings["correct_moving_position"] and sm["d2"][k] > gate
+                        and np.linalg.norm(sm["residuals"][k]) > min_shift)
         velocity = sm["xs"][k, 2:]
         speed = float(np.linalg.norm(velocity))
         heading = math.atan2(float(velocity[1]), float(velocity[0]))
-        yaw = bool(speed >= min_speed and abs(wrap_angle(o.yaw_global - heading)) >= heading_thr)
+        yaw = bool(speed >= min_speed and net_speed >= min_speed
+                   and abs(wrap_angle(o.yaw_global - heading)) >= heading_thr)
         center = None
         if position:
             center = np.array([sm["xs"][k, 0], sm["xs"][k, 1], o.center_global[2]])
@@ -607,9 +642,8 @@ def correct_track_motion(
         if len(t.obs) < int(settings["min_frames"]):
             continue
         t.smoothed = _smooth(t.obs, t.label, settings)
-        static, spread, speed = _is_static(t, settings)
+        static, track_info[t.id] = _is_static(t, settings)
         t.kind = KIND_STATIC if static else KIND_MOVING
-        track_info[t.id] = {"spread": round(spread, 3), "median_speed": round(speed, 3)}
 
     static = [t for t in tracks if t.kind == KIND_STATIC]
     short = [t for t in tracks if t.kind == KIND_SHORT]
