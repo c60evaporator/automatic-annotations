@@ -278,7 +278,7 @@
 - view_colに表示するrunは、推論実施前は最新の成功したrunとし、推論実施後は保存した推論結果のrunとする（「この run を表示」で切り替え可能）。表示するrunが無い場合、各タブには「保存済みの推論結果がありません。」と表示する
 - param_col最下部に、表示するsampleを選択するためのSelect Sampleスライダを設置し、全てのSampleを選択できるようにする（初期値は中央）
 - map_colにはDetection2Dページ・Instance Trackingページと同様、各sampleの位置をwaypointとして地図上にPlotlyで表示し、上記Select Sampleスライダで選択中のsampleの位置を強調表示する
-- 画面下部は、Depth Estimation, PointCloud, Box Fitting, Box on Camの4つのタブで分割した上で、view_col（8）, opt_col（1）で左右に分割する。view_colは各種推論結果をカメラ・LiDAR点群等のセンサデータと重ねて描画し、opt_colに配置した表示条件を指定するためのウィジェットに基づき表示を変化させる。点群・ボックスはパイプラインと同じく、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で表示する。各タブの詳細は以下
+- 画面下部は、Depth Estimation, PointCloud, Box Fitting, Track Smoother, Box on Camの5つのタブで分割した上で、view_col（8）, opt_col（1）で左右に分割する。view_colは各種推論結果をカメラ・LiDAR点群等のセンサデータと重ねて描画し、opt_colに配置した表示条件を指定するためのウィジェットに基づき表示を変化させる。点群・ボックスはパイプラインと同じく、そのsampleの基準ego座標（`settings.EGO_REFERENCE_CHANNEL`のego_pose）で表示する。各タブの詳細は以下
     - Depth Estimationタブ: 各カメラの単眼深度推定結果をヒートマップとして2列で表示する。opt_colには以下ウィジェットを持つ
         - Show masksラジオボタン: 深度画像に重ねて表示するインスタンスマスクの表示方法を指定する。以下の選択肢を持つ（デフォルトはNone）
             - None: インスタンスマスク表示なし
@@ -349,7 +349,7 @@
             - 結合の条件（推論時のBox-Orient Based Mergeパラメータと対象ラベル）
             - 結合したグループ: box_merged_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
             - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅とその上限[m]）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
-    - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡とそれに基づく補正結果を表示する
+    - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡とそれに基づく補正結果を表示する（描画は`components/track_smoother_viewer.py`の`build_track_smoother_figure`。観測点・平滑化した位置は`fit_metrics["motion_correction"]`、静止トラックの中央値・判定半径はrunの`track_smoother_diagnostics`から読む）
         - Motion Correctionを実行していない run（`fit_metrics`に`motion_correction`が無いもの）では、view_colにその旨のメッセージだけを表示する
         - 表示はBEV（上から見たXY）で、トラックは複数のsampleにまたがるため、全フレームの中心点・ボックスを**Select Sampleで選択したsampleの基準ego座標**に移して描く（各sampleの基準ego座標からの移し替えは`gt_bev.rebase_boxes_to_ego`と同じ）。表示範囲は表示対象のトラック全体が収まるように合わせ、自車（原点）も表示する
         - Select Sampleで選択したsampleのフレームは濃く（不透明度1.0、大きめのマーカー、黒い縁取り）、それ以外のフレームは薄く（不透明度0.25〜0.35）表示する。Plotlyの`marker.opacity`は点ごとに配列で指定できるので、トラックごとに1本のtraceで描く。線は区間ごとに濃さを変えられないので、軌跡・破線は全体を薄めの一定の濃さにする

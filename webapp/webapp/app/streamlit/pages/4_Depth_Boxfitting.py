@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import json
+import math
+from collections import Counter
 
 import numpy as np
 import streamlit as st
@@ -32,7 +34,13 @@ from app.services.box_orientation_service import (
     ORIENTATION_STATUS_ESTIMATED,
     run_orientation_estimation,
 )
+from app.services.geometry.pointcloud import transform_ego_to_global, transform_global_to_ego
+from app.services.geometry.transform import quaternion_to_yaw
 from app.services.gt_bev import gt_boxes_in_ego, rebase_boxes_to_ego
+from app.streamlit.components.track_smoother_viewer import (
+    KIND_TEXT as TS_KIND_TEXT,
+    build_track_smoother_figure,
+)
 from app.services.label_service import all_labels
 from app.services.derived_file_service import load_depth_map, load_lidar_pointcloud
 from app.services.frame_image import get_keyframe_image  # noqa: F401  (将来の重ね表示用)
@@ -1821,8 +1829,9 @@ reference_ego_pose = next(
     None,
 )
 
-depth_tab_view, pointcloud_tab_view, fitting_tab_view, cam_tab_view = st.tabs(
-    ["Depth Estimation", "PointCloud", "Box Fitting", "Box on Cam"]
+(depth_tab_view, pointcloud_tab_view, fitting_tab_view, smoother_tab_view,
+ cam_tab_view) = st.tabs(
+    ["Depth Estimation", "PointCloud", "Box Fitting", "Track Smoother", "Box on Cam"]
 )
 
 # ------------------------------------------------------------------
@@ -2884,6 +2893,186 @@ with fitting_tab_view:
                 render_bev(build_bev_figure(
                     instance_groups=bf_groups, boxes=est_boxes, hulls=hulls,
                     arrows=orientation_arrows, **common))
+
+# ------------------------------------------------------------------
+# Track Smoother タブ（トラックの平滑化と、動きに応じた補正の結果）
+# ------------------------------------------------------------------
+TS_FITTED_NONE = "None"
+TS_FITTED_BEFORE = "Before Correction"
+TS_FITTED_FINAL = "Final Box"
+TS_FITTED_MODES = (TS_FITTED_NONE, TS_FITTED_BEFORE, TS_FITTED_FINAL)
+TS_COLOR_MODES = (COLOR_MODE_LABEL, *TRACK_KEY_MODES[1:])
+OPT_TS_FITTED, W_TS_FITTED = "boxfit_ts_fitted", "_w_boxfit_ts_fitted"
+OPT_TS_COLOR, W_TS_COLOR = "boxfit_ts_color", "_w_boxfit_ts_color"
+
+
+def _ts_to_display(points_global: np.ndarray, display_pose: dict) -> np.ndarray:
+    """グローバル座標の XY を、表示する sample の基準 ego 座標の XY へ."""
+    points = np.column_stack([
+        np.asarray(points_global, dtype=float).reshape(-1, 2),
+        np.full(len(np.asarray(points_global).reshape(-1, 2)),
+                float(display_pose["translation"][2])),
+    ])
+    return transform_global_to_ego(points, display_pose["translation"],
+                                   display_pose["rotation"])[:, :2]
+
+
+def _ts_box(box: dict | None, pose: dict, display_pose: dict) -> tuple | None:
+    """その sample の基準 ego 座標のボックスを、表示する sample の座標の (中心 XY, 長さ, 幅, yaw) へ."""
+    if not box or not box.get("center_ego") or not box.get("size_wlh"):
+        return None
+    center = transform_ego_to_global(
+        np.asarray([box["center_ego"]], dtype=float), pose["translation"], pose["rotation"])
+    center_xy = transform_global_to_ego(
+        center, display_pose["translation"], display_pose["rotation"])[0, :2]
+    yaw = ((box.get("yaw_ego") or 0.0) + quaternion_to_yaw(pose["rotation"])
+           - quaternion_to_yaw(display_pose["rotation"]))
+    return center_xy, float(box["size_wlh"][1]), float(box["size_wlh"][0]), float(yaw)
+
+
+with smoother_tab_view:
+    ts_view_col, ts_opt_col = st.columns([8, 1])
+    ts_rows = []
+    if view_run_id:
+        ts_rows = [
+            f for items in load_box_fittings(view_run_id).values() for f in items
+            if has_box(f) and (f.get("fit_metrics") or {}).get("motion_correction")
+        ]
+    ts_run = (next((r for r in list_boxfitting_runs(dataset_id, scene_token)
+                    if r["id"] == view_run_id), None) if view_run_id else None)
+    ts_diag = (ts_run or {}).get("track_smoother_diagnostics") or {}
+
+    with ts_opt_col:
+        render_sample_token(selected_sample["token"])
+        S.init_sticky(W_TS_FITTED, OPT_TS_FITTED, TS_FITTED_NONE)
+        ts_fitted = st.radio(
+            "Fitted Boxes", TS_FITTED_MODES, key=W_TS_FITTED,
+            on_change=S.sync_sticky, args=(W_TS_FITTED, OPT_TS_FITTED),
+            help=("Before Correction: 動きに応じた補正（中心位置・角度）の後、global_track 単位の"
+                  "寸法補正の前。Final Box: 最終的なボックス。角度を直したフレームは"
+                  "修正前のボックスを点線で重ねる"),
+        )
+        S.init_sticky(W_TS_COLOR, OPT_TS_COLOR, COLOR_MODE_LABEL)
+        ts_color_mode = st.radio(
+            "Instance Color", TS_COLOR_MODES, key=W_TS_COLOR,
+            on_change=S.sync_sticky, args=(W_TS_COLOR, OPT_TS_COLOR),
+        )
+        ts_global_filter_slot = st.empty()
+
+    with ts_view_col:
+        if not view_run_id:
+            st.info("表示する run がありません。")
+        elif not ts_rows:
+            st.info("この run では Motion Correction（Track Smoother）を実行していません。"
+                    "Inference Parameters の Track Smoother タブでオンにして推論してください。")
+        else:
+            label_counts = Counter(
+                f["label"] for f in {
+                    f["fit_metrics"]["motion_correction"]["box_merged_track_id"]: f
+                    for f in ts_rows}.values())
+            ts_labels = [label for label, _ in label_counts.most_common()]
+            ts_label = st.radio(
+                "Label", ts_labels, horizontal=True, key=f"_w_ts_label_{view_run_id}",
+            )
+            label_rows = [f for f in ts_rows if f["label"] == ts_label]
+            global_ids = sorted({str(f["global_track_id"]) for f in label_rows},
+                                key=lambda g: (len(g), g))
+            with ts_global_filter_slot.container():
+                ts_selected_globals = st.multiselect(
+                    "Global Track", global_ids, key=f"_w_ts_global_{view_run_id}_{ts_label}",
+                    help="選んだ global_track_id のトラックだけを表示する（未選択なら全トラック）",
+                )
+            if ts_selected_globals:
+                label_rows = [f for f in label_rows
+                              if str(f["global_track_id"]) in ts_selected_globals]
+
+            scene_frames = list_frames_by_scene(dataset_id, scene_token)
+            sample_of = {f["token"]: f["sample_token"] for f in scene_frames}
+            pose_of = {f["sample_token"]: f["ego_pose"] for f in scene_frames
+                       if f["channel"] == settings.EGO_REFERENCE_CHANNEL and f.get("ego_pose")}
+            sample_number = {s_["token"]: i for i, s_ in enumerate(samples)}
+            display_pose = reference_ego_pose
+            params = ts_diag.get("params") or {}
+            outlier_thr = params.get("outlier_threshold")
+            static_radius = float(params.get("static_radius", 1.0))
+
+            observations = []
+            for f in label_rows:
+                mc = f["fit_metrics"]["motion_correction"]
+                sample = sample_of.get(f["sample_data_token"])
+                pose = pose_of.get(sample)
+                if pose is None or display_pose is None:
+                    continue
+                final_global = transform_ego_to_global(
+                    np.asarray([f["center_ego"]], dtype=float), pose["translation"],
+                    pose["rotation"])[0, :2]
+                observed = _ts_to_display(np.asarray(mc["observed_xy"]), display_pose)[0]
+                final = _ts_to_display(final_global, display_pose)[0]
+                smoothed = (_ts_to_display(np.asarray(mc["smoothed_xy"]), display_pose)[0]
+                            if mc.get("smoothed_xy") else None)
+                stage_box = None
+                if ts_fitted == TS_FITTED_BEFORE:
+                    stage_box = (f["fit_metrics"] or {}).get("motion_corrected")
+                elif ts_fitted == TS_FITTED_FINAL:
+                    stage_box = f
+                box = _ts_box(stage_box, pose, display_pose)
+                before_box = None
+                if box is not None and mc.get("yaw_corrected"):
+                    before_box = _ts_box({**mc["before"], "size_wlh": stage_box["size_wlh"]},
+                                         pose, display_pose)
+                yaw_shift = math.degrees(
+                    (f.get("yaw_ego") or 0.0) - mc["before"]["yaw_ego"] + math.pi
+                ) % 360.0 - 180.0
+                d2 = mc.get("d2")
+                hover = (
+                    f"sample {sample_number.get(sample, '?')}<br>"
+                    f"box_merged {mc['box_merged_track_id']} / global {mc['global_track_id']}<br>"
+                    f"{TS_KIND_TEXT.get(mc['kind'], mc['kind'])}"
+                    + (f"<br>d² {d2:.2f} {'>' if d2 > (outlier_thr or 0) else '≤'} "
+                       f"{outlier_thr}" if d2 is not None and outlier_thr is not None else "")
+                    + ("<br>外れ値" if mc.get("outlier") else "")
+                    + f"<br>位置の修正 {np.linalg.norm(final - observed):.2f} m"
+                    + f" / 角度の修正 {yaw_shift:.1f}°"
+                    + (f"<br>速さ {mc['speed']:.2f} m/s" if mc.get("speed") is not None else "")
+                )
+                observations.append({
+                    "global_id": str(f["global_track_id"]),
+                    "box_merged_id": str(mc["box_merged_track_id"]),
+                    "kind": mc["kind"],
+                    "order": sample_number.get(sample, 0),
+                    "color": instance_color(f, ts_color_mode),
+                    "selected": sample == selected_sample["token"],
+                    "observed_xy": observed, "final_xy": final, "smoothed_xy": smoothed,
+                    "outlier": bool(mc.get("outlier")),
+                    "position_corrected": bool(mc.get("position_corrected")),
+                    "yaw_corrected": bool(mc.get("yaw_corrected")),
+                    "hover": hover, "box": box, "before_box": before_box,
+                })
+
+            shown_globals = {o["global_id"] for o in observations}
+            color_of = {o["global_id"]: o["color"] for o in observations}
+            static_groups = []
+            for group in ts_diag.get("static_groups") or []:
+                gid = str(group["global_track_id"])
+                if gid in shown_globals and group.get("median_xy"):
+                    static_groups.append({
+                        "color": color_of[gid], "radius": static_radius,
+                        "median_xy": _ts_to_display(np.asarray(group["median_xy"]),
+                                                    display_pose)[0],
+                    })
+
+            kinds = Counter(
+                mc["kind"] for mc in {
+                    f["fit_metrics"]["motion_correction"]["box_merged_track_id"]:
+                    f["fit_metrics"]["motion_correction"] for f in label_rows}.values())
+            st.caption(
+                f"トラック: 移動 {kinds.get('moving', 0)} / 静止 {kinds.get('static', 0)} / "
+                f"短い {kinds.get('short', 0)}（box_merged_track 単位）。"
+                f"外れ値 {sum(o['outlier'] for o in observations)} / "
+                f"位置修正 {sum(o['position_corrected'] for o in observations)} / "
+                f"角度修正 {sum(o['yaw_corrected'] for o in observations)} フレーム"
+            )
+            render_bev(build_track_smoother_figure(observations, static_groups))
 
 # ------------------------------------------------------------------
 # Box on Cam タブ（3D ボックスをカメラ画像へ投影）

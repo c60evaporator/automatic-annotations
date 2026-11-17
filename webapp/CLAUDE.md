@@ -115,6 +115,7 @@ project-root/
     │               ├── pointcloud_viewer.py # 点群の 3D 表示（Plotly）
     │               ├── box3d_viewer.py      # 3D ボックスのカメラ画像への投影描画
     │               ├── bev_viewer.py        # BEV での 3D ボックス表示
+    │               ├── track_smoother_viewer.py # Track Smoother タブの BEV（平滑化した軌跡・静止の中央値・補正）
     │               └── sample_token.py      # 選択中 sample_token の表示
     └── inference/                           # 推論サーバー（コンテナの /workspace）
         ├── CLAUDE.md                        # 推論フロー・パラメータ・実行単位の仕様
