@@ -672,13 +672,18 @@ class Settings(BaseSettings):
     TRACK_SMOOTHER_INITIAL_VELOCITY_VAR: float = 100.0
     # 観測ノイズ σ = a + b·d [m]（d はセンサーからの距離）。ボックスの長さ方向と
     # 幅方向で別の値を持ち、当てはめた点群に LiDAR 点を含むか（lidar）/ 深度のみ（depth）
-    # で切り替える。TODO: GT との残差から推定して差し替える
+    # で切り替える。lidar は tools/estimate_track_noise.py で nuScenes 6 シーン
+    # （約 3100 ボックス）の GT との残差から推定した値。depth は深度のみのボックスが
+    # 無く推定できなかったので仮の値（LiDAR の 2〜3 倍）
     TRACK_SMOOTHER_MEASUREMENT_NOISE: dict[str, dict[str, list[float]]] = {
-        "lidar": {"length": [0.3, 0.01], "width": [0.15, 0.005]},
+        "lidar": {"length": [0.036, 0.0164], "width": [0.01, 0.0097]},
         "depth": {"length": [0.8, 0.03], "width": [0.4, 0.015]},
     }
     # 等速度モデルの加速度の強さ q [m²/s³]。辞書に無いラベルは default。
-    # TODO: GT の速度差から推定して差し替える
+    # tools/estimate_track_noise.py で GT（850 シーン、移動中）から推定した中央値は
+    # car / truck / bus 0.17〜0.18、pedestrian 0.007 だが、中央値は曲がる・加減速する
+    # 区間を拾わず小さすぎる（6 シーンで試すと速度の向きによる角度の修正が悪化し、
+    # 正しい結合も減った）。そのため経験的に決めた値を使う
     TRACK_SMOOTHER_PROCESS_NOISE: dict[str, float] = {
         "default": 1.0, "pedestrian": 0.5, "traffic_cone": 0.1, "barrier": 0.1,
     }

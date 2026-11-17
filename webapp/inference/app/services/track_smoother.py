@@ -44,7 +44,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "initial_velocity_var": 100.0,
     # σ = a + b·d [m]（d はセンサーからの距離）。LiDAR 点を含むか（lidar）/ 深度のみ（depth）
     "measurement_noise": {
-        "lidar": {"length": [0.3, 0.01], "width": [0.15, 0.005]},
+        "lidar": {"length": [0.036, 0.0164], "width": [0.01, 0.0097]},
         "depth": {"length": [0.8, 0.03], "width": [0.4, 0.015]},
     },
     # 等速度モデルの加速度の強さ q [m²/s³]。ラベルに無ければ default
