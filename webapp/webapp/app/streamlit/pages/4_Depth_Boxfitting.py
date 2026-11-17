@@ -61,6 +61,8 @@ from app.streamlit.components.instance_tracking_viewer import (
 )
 from app.streamlit.components.box3d_viewer import (
     BOX3D_TEXT_MODES,
+    TRACK_KEY_MODES,
+    track_key_of,
     box_center_in_fov,
     render_box3d_comparison_grid,
     render_box3d_grid,
@@ -242,28 +244,16 @@ OPT_BF_DEPTH_INST, W_BF_DEPTH_INST = (
 
 # カメラ跨ぎの結合を目で確かめるための色分け。
 # Hull Merged は凸包の IoS で結合した後の ID（hull_merged_track_id）、
-# Global Track はさらにボックスの規定長と向きで結合した後の ID（global_track_id）。
+# Box Merged はさらにボックスの規定長と向きで結合した後の ID（box_merged_track_id）、
+# Global Track はさらにトラックの動きで結合した後の ID（global_track_id）。
 # 結合されたインスタンスは別カメラでも同色になる
-COLOR_MODE_HULL = "Hull Merged"
-COLOR_MODE_GLOBAL = "Global Track"
-BOXFIT_COLOR_MODES = (*COLOR_MODES, COLOR_MODE_HULL, COLOR_MODE_GLOBAL)
-
-
-def _track_key(item: dict, color_mode: str) -> str:
-    """Hull Merged / Global Track の色分けのキー.
-
-    結合していない run には global_track_id が無いので track_id へ落とす。
-    hull_merged_track_id を導入する前の run では global_track_id が凸包の結合結果
-    """
-    if color_mode == COLOR_MODE_HULL:
-        return str(item.get("hull_merged_track_id") or item.get("global_track_id")
-                   or item.get("track_id", ""))
-    return str(item.get("global_track_id") or item.get("track_id", ""))
+BOXFIT_COLOR_MODES = (*COLOR_MODES, *TRACK_KEY_MODES)
+_track_key = track_key_of
 
 
 def instance_color(item: dict, color_mode: str) -> str:
     """インスタンスの表示色を決める（3D ボックスと点群で共通）."""
-    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+    if color_mode in TRACK_KEY_MODES:
         return color_for_track(_track_key(item, color_mode))
     if color_mode == COLOR_MODE_TRACK:
         return color_for_track(str(item.get("track_id", "")))
@@ -272,7 +262,7 @@ def instance_color(item: dict, color_mode: str) -> str:
 
 def instance_legend_key(item: dict, color_mode: str) -> str:
     """色分けの単位となるキー（凡例フィルタと揃える）."""
-    if color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+    if color_mode in TRACK_KEY_MODES:
         return _track_key(item, color_mode)
     if color_mode == COLOR_MODE_TRACK:
         return str(item.get("track_id", ""))
@@ -419,7 +409,7 @@ def render_merge_diagnostics(run_info: dict | None) -> None:
 
 
 def render_box_merge_diagnostics(run_info: dict | None) -> None:
-    """ボックスの規定長と向きによる結合（global_track_id）の診断をエクスパンダーで出す."""
+    """ボックスの規定長と向きによる結合（box_merged_track_id）の診断をエクスパンダーで出す."""
     diagnostics = (run_info or {}).get("box_merge_diagnostics")
     if not diagnostics:
         return
@@ -435,7 +425,7 @@ def render_box_merge_diagnostics(run_info: dict | None) -> None:
         st.markdown("**結合したグループ**")
         if groups:
             st.dataframe(
-                [{"global_track_id": g["global_track_id"],
+                [{"box_merged_track_id": g["global_track_id"],
                   "hull_merged_track_ids": ", ".join(g.get("members") or []),
                   # どの対がどのサンプルで結合されたか
                   "accepted pairs (samples)": _merged_pairs_text(g.get("accepted_pairs"))}
@@ -496,14 +486,17 @@ FITTED_BOX_NONE = "None"
 FITTED_BOX_FIRST = "First Fit"
 FITTED_BOX_LOCAL = "Local Corrected"
 FITTED_BOX_ORIENTATION = "Orientation Corrected"
+FITTED_BOX_BOX_MERGED = "Box Merged"
 FITTED_BOX_FINAL = "Final Box"
 FITTED_BOX_STAGES = (
-    FITTED_BOX_FIRST, FITTED_BOX_LOCAL, FITTED_BOX_ORIENTATION, FITTED_BOX_FINAL,
+    FITTED_BOX_FIRST, FITTED_BOX_LOCAL, FITTED_BOX_ORIENTATION,
+    FITTED_BOX_BOX_MERGED, FITTED_BOX_FINAL,
 )
 FITTED_BOX_METRICS_KEY = {
     FITTED_BOX_FIRST: "first_fit",
     FITTED_BOX_LOCAL: "local_corrected",
     FITTED_BOX_ORIENTATION: "orientation_corrected",
+    FITTED_BOX_BOX_MERGED: "box_merged",
 }
 OPT_PC_FITTED, W_PC_FITTED = "boxfit_pc_fitted", "_w_boxfit_pc_fitted"
 OPT_BF_FITTED, W_BF_FITTED = "boxfit_bf_fitted", "_w_boxfit_bf_fitted"
@@ -511,7 +504,8 @@ FITTED_BOX_HELP = (
     "First Fit: 当てはめた直後のボックス（convex_hull_moa 等）。"
     "Local Corrected: 1 フレーム単位の補正（底面の高さ・角度）後。"
     "Orientation Corrected: 複数フレームを考慮した補正のうち高さ・角度まで適用したボックス。"
-    "Final Box: 複数フレームを考慮した補正（高さ・角度・幅・長さ）後の最終的なボックス"
+    "Box Merged: ボックスの規定長と向きによる結合と、その単位の寸法補正（高さ・幅・長さ）後。"
+    "Final Box: 全ての補正を適用した最終的なボックス"
 )
 
 
@@ -2442,7 +2436,7 @@ with pointcloud_tab_view:
                     "この結果は保存されません（run の記録は実行時のまま）"
                 )
                 applied = st.session_state.get(PC_REFILTER_PARAMS)
-                if applied and pc_color_mode in (COLOR_MODE_HULL, COLOR_MODE_GLOBAL):
+                if applied and pc_color_mode in TRACK_KEY_MODES:
                     st.caption(
                         f"{pc_color_mode} の色分けは推論時のカメラ間結合の結果です"
                         "（再フィルタでは結合をやり直さないため、Apply した条件で"

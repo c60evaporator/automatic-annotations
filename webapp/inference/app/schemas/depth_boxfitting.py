@@ -168,7 +168,9 @@ class BoxFittingResult(BaseModel):
     depth_correction: dict[str, Any] | None = None
     # 凸包の IoS で結合した後のトラック ID
     hull_merged_track_id: str | None = None
-    # ボックスの規定長と向きでさらに結合した後のトラック ID（最終的なトラック）
+    # ボックスの規定長と向きでさらに結合した後のトラック ID
+    box_merged_track_id: str | None = None
+    # 動きに基づきさらに結合した後のトラック ID（最終的なトラック）
     global_track_id: str | None = None
     # グループの代表行か（ボックスは代表 1 行にだけ入る）
     is_primary: bool = True

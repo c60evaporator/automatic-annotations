@@ -639,6 +639,7 @@ def refilter_sample(
                 # （計算には結合前のラベルを使っており、ここは表示だけ）
                 "global_track_id": fit.get("global_track_id"),
                 "hull_merged_track_id": fit.get("hull_merged_track_id"),
+                "box_merged_track_id": fit.get("box_merged_track_id"),
                 "label": fit.get("label"),
                 "tracking_label": fit.get("tracking_label"),
                 "stored_raw": fit.get("num_points_depth"),

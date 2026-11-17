@@ -860,8 +860,9 @@ def merge_and_fit(
        （ボックスは代表 1 行にだけ入れ、他は status="merged"）
     5. AI モデルによる向きの再推定と反映（orient_boxes）
     6. hull_merged_track 単位の角度補正
-    7. ボックスの規定長と向きに基づく結合（global_track_id を割り当てる）
-    8. global_track_id 単位の寸法補正（高さ → 幅 → 長さ）
+    7. ボックスの規定長と向きに基づく結合（box_merged_track_id を割り当てる。
+       動きに基づく結合は未実装のため、global_track_id も同じ値）
+    8. box_merged_track_id 単位の寸法補正（高さ → 幅 → 長さ）
 
     ## 点数の下限をここで判定する理由
 
@@ -1128,7 +1129,7 @@ def merge_and_fit(
     for _, _, member, _, _ in fitted_rows:
         record_box_stage(member, BOX_STAGE_ORIENTATION_CORRECTED)
 
-    # --- 7) ボックスの規定長と向きに基づく結合（global_track_id） ------------
+    # --- 7) ボックスの規定長と向きに基づく結合（box_merged_track_id） --------
     # 角度を揃えた後に、凸包が重ならなかった同じ物体の部分どうしを結合する
     from app.services.box_orient_merge import assign_box_merged_ids
 
@@ -1145,9 +1146,13 @@ def merge_and_fit(
         for entry in entries:
             hull_id = entry.get("hull_merged_track_id")
             if hull_id is not None:
-                entry["global_track_id"] = final_ids.get(hull_id, hull_id)
+                box_merged_id = final_ids.get(hull_id, hull_id)
+                entry["box_merged_track_id"] = box_merged_id
+                # 動きに基づくトラックの結合（未実装）までは box_merged_track_id と同じ
+                entry["global_track_id"] = box_merged_id
 
-    # --- 8) global_track_id 単位の寸法補正（高さ → 幅 → 長さ） -----------------
+    # --- 8) box_merged_track_id 単位の寸法補正（高さ → 幅 → 長さ） -------------
+    from app.services.box_fitting import BOX_STAGE_BOX_MERGED
     from app.services.box_size import correct_box_sizes
 
     size_stats = correct_box_sizes(
@@ -1159,6 +1164,9 @@ def merge_and_fit(
         ],
         box_fitting_params,
     )
+    for _, _, member, _, _ in fitted_rows:
+        if member.get("is_primary") and member.get("status") == "fitted":
+            record_box_stage(member, BOX_STAGE_BOX_MERGED)
 
     # --- 9) 診断情報 -----------------------------------------------------
     # 「なぜ結合されなかったか」を後から確認できるようにする。

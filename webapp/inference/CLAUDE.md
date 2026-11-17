@@ -672,7 +672,8 @@ Depth Boxfittingは、以下のフローで行われます
 - 補正途中のボックス（`center_ego` / `size_wlh` / `yaw_ego`）を、UIのFitted Boxesで表示するため`fit_metrics`に記録する（`webapp/inference/app/services/box_fitting.py`の`record_box_stage`）。最終的なボックスは`box_fittings`の`center_ego` / `size_wlh` / `yaw_ego`列に入る
     - `fit_metrics["first_fit"]`: フィッティング直後（`settings.BOXFIT_METHODS`の手法で推定したもの）
     - `fit_metrics["local_corrected"]`: 1フレーム単位の補正（底面推定・AIモデルによる角度再推定）の後、global_track_id単位の補正の前
-    - `fit_metrics["orientation_corrected"]`: hull_merged_track_id単位の角度補正の後、ボックスの規定長と向きに基づく結合・global_track_id単位の寸法補正の前
+    - `fit_metrics["orientation_corrected"]`: hull_merged_track_id単位の角度補正の後、ボックスの規定長と向きに基づく結合・box_merged_track_id単位の寸法補正の前
+    - `fit_metrics["box_merged"]`: ボックスの規定長と向きに基づく結合・box_merged_track_id単位の寸法補正の後、動き（静止 / カルマンスムーザー）に応じた補正の前
     - `fit_metrics["motion_corrected"]`: 動き（静止 / カルマンスムーザー）に応じた補正の後、global_track_id単位の寸法補正の前
 
 ### 推論に使用するパラメータ
@@ -1085,7 +1086,7 @@ correct_orientations(fitted_rows, reference_ego_poses)   # 後述の correct_tra
 for row in fitted_rows:
     record_box_stage(row.box, "orientation_corrected")
 
-###### Box-orient merge（global_track_id。webapp/inference/app/services/box_orient_merge.py） ######
+###### Box-orient merge（box_merged_track_id。webapp/inference/app/services/box_orient_merge.py） ######
 # キーフレームごと: 対象ラベル・カメラ集合が重ならない・隙間 ≤ Max Hull Gap・同ラベル・
 # 軸の差 ≤ Orientation Diff Threshold・合体ボックスの長さ/幅 ≤ 規定値 × 倍率 の組を、
 # 代表行のカメラ対ごとにHungarian（コスト=隙間）で1対1に対応付ける
@@ -1101,8 +1102,11 @@ for (sample, global_id), rows in group_by(fitted_rows, key=(sample, global_ids))
             # 点数で重み付けした平均yaw（180度違いは揃える）、凸包の和をそのyawで囲む矩形、z は下面最小・上面最大
             keep.box = merged_box(used, weights=num_points)
 
-###### Size correction per global track（全フレームのボックスが揃ってから） ######
+###### Size correction per box_merged_track（全フレームのボックスが揃ってから） ######
 correct_box_sizes(primary_rows, box_fitting_params)   # 後述の疑似コード参照（高さ → 幅 → 長さ）
+for row in primary_rows:
+    record_box_stage(row.box, "box_merged")
+# 動きに基づくトラックの結合は未実装のため、現状は global_track_id = box_merged_track_id
 ```
 
 #### L-shape Filter

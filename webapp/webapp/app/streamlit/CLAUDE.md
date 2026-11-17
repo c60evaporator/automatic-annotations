@@ -308,13 +308,14 @@
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
             - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
-            - Box Merged: 複数フレームを考慮した補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Box Merged: ボックスの規定長と向きに基づく結合と、box_merged_track_id単位の寸法補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示（`fit_metrics`の`box_merged`。記録の無い古いrunでは表示しない）
             - Final Box: Box Smoother補正（中心位置補正＋角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Instance Colorラジオボタン: インスタンスごと点群の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
             - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id。導入前のrunではglobal_track_id、結合していないrunではtrack_id）で色分け
-            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（global_track_id。結合していないrunではtrack_id）で色分け
+            - Box Merged: ボックスの規定長と向きに基づく結合後のTrack ID（box_merged_track_id。導入前のrunではglobal_track_id、結合していないrunではtrack_id）で色分け
+            - Global Track: トラックの動きに基づく結合後のTrack ID（global_track_id。結合していないrunではtrack_id）で色分け
         - Camerasチェックボックス: カメラごとに設置し、チェックされているカメラに紐づくインスタンスごと点群のみを表示する
     - Box Fittingタブ: 3Dバウンディングボックスのフィッティング結果をBEV視点で表示する。現状は[こちらの論文](https://arxiv.org/abs/2302.01034)の手法（convex_hull_moa）を前提とした表示にしている。view_colには、インスタンス数・ボックス生成数（・GT数）のキャプションと、カメラ間結合の診断情報（後述のMerge Diagnostics）も表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
@@ -328,14 +329,15 @@
             - First Fit: 最初にフィッティングされたときのボックス（cenvex_hull_moa等で推定したボックス）を表示
             - Local Corrected: 個々のボックス単位の補正（底面高さの補正＋角度補正）適用後のボックスを表示
             - Orientation Corrected: 複数フレームを考慮した補正のうち、高さ補正＋角度補正まで適用したボックスを表示（`fit_metrics`の`orientation_corrected`。記録の無い古いrunでは表示しない）
-            - Box Merged: 複数フレームを考慮した補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
+            - Box Merged: ボックスの規定長と向きに基づく結合と、box_merged_track_id単位の寸法補正（高さ補正＋幅補正＋長さ補正）適用後のボックスを表示（`fit_metrics`の`box_merged`。記録の無い古いrunでは表示しない）
             - Final Box: Box Smoother補正（中心位置補正＋角度補正＋高さ補正＋幅補正＋長さ補正）適用後のボックスを表示
         - Orientation Estimationチェックボックス: チェックすると、AIモデル（PartHOEまたはOrient-Anything V1 Large）で推定したボックスの向きを、Fitted Boxesで選んだボックスの中心から伸びる矢印（長さはボックス長の半分+1m、色はInstance Colorに従う）で描画する（デフォルトはオフ）。推定はBox Fittingの実行時に行い、ボックスへ反映済み（推定対象のラベルと方式はconfigの`settings.BOX_ORIENTATION_ESTIMATIONS`）。矢印の先端にホバーすると方式・推定角度・確率・使ったカメラと、ボックスへの反映方法（中心を固定してyawを差し替え / 長短辺を入れ替えてからyawを差し替え / 長辺の前後を選択）・反映前のyawと、角度推定直角ずれフラグが立っていればその旨を表示する（Orient-Anything-V2で推定した古い結果では対称性alphaも）。view_colに、このサンプルの推定件数のキャプションを表示する。向き推定を組み込む前のrun（`box_fitting_params`に`orientation`が無いもの）では、代わりに「Run Orientation Estimation」ボタン（推定済みのrunでは「Re-run Orientation Estimation」）を表示し、押すと表示中のrunに対して推論サーバーの向き推定ジョブを実行して、完了まで進捗バーを表示したうえで結果を保存する（ボックスには反映しない）
         - Instance Colorラジオボタン: インスタンスごと点群・3Dバウンディングボックスの表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
             - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id）で色分け
-            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（最終的なInstance ID）で色分け
+            - Box Merged: ボックスの規定長と向きに基づく結合後のTrack ID（box_merged_track_id。導入前のrunではglobal_track_id）で色分け
+            - Global Track: トラックの動きに基づく結合後のTrack ID（global_track_id。最終的なInstance ID）で色分け
         - Hull Merge Diagnosticsエクスパンダー: runに`merge_diagnostics`（凸包のIoSによる結合の診断）がある場合に表示し、以下をテーブル表示する（閾値を緩めても結合されない場合に、原因を確認するため）
             - 結合の条件（推論時のInter-cam Mergeパラメータ）
             - グループ: hull_merged_track_idごとのメンバー（カメラ:track_id）、ラベル、フレーム数、どのトラック対がどのサンプル番号で結合されたか（merged pairs (samples)。`{CAM_FRONT:30 + CAM_FRONT_RIGHT:61: [7, 8], ...}`の形式）
@@ -343,7 +345,7 @@
             - トラック対の判定: トラック対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason・最大重なり率）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、重なり率、凸包の隙間）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
         - Box-Orient Merge Diagnosticsエクスパンダー: runに`box_merge_diagnostics`（ボックスの規定長と向きに基づく結合の診断）がある場合に表示し、以下をテーブル表示する
             - 結合の条件（推論時のBox-Orient Based Mergeパラメータと対象ラベル）
-            - 結合したグループ: global_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
+            - 結合したグループ: box_merged_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
             - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅とその上限[m]）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
     - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡とそれに基づく補正結果を表示する
         - Motion Correctionを実行していない run（`fit_metrics`に`motion_correction`が無いもの）では、view_colにその旨のメッセージだけを表示する
@@ -388,12 +390,14 @@
             - Label: ラベルで色分け
             - Track ID: Track IDで色分け
             - Hull Merged: 凸包のIoSによる結合後のTrack ID（hull_merged_track_id）で色分け
-            - Global Track: ボックスの規定長と向きに基づく結合後のTrack ID（最終的なInstance ID）で色分け
+            - Box Merged: ボックスの規定長と向きに基づく結合後のTrack ID（box_merged_track_id。導入前のrunではglobal_track_id）で色分け
+            - Global Track: トラックの動きに基づく結合後のTrack ID（global_track_id。最終的なInstance ID）で色分け
         - Instance textラジオボタン: 画像上でボックスの上に表示する文字の種類を指定する。以下の選択肢を持つ（デフォルトはTrack ID）
             - None: 何も表示しない
             - Label: ラベル文字を表示（文字色はボックスの色と一致）
             - Track ID: Track IDを表示（文字色はボックスの色と一致）
             - Hull Merged: hull_merged_track_idを表示
+            - Box Merged: box_merged_track_idを表示（導入前のrunではglobal_track_id）
             - Global Track: global_track_idを表示
         - チェックボックス付きlabel凡例: config（`settings.LABEL_TO_CATEGORY_GROUP`等）の全ラベルを件数付きで表示し、チェックしているlabelのボックスのみを表示する（検出結果に含まれるラベルだけを出すと、推論のたびに並びとチェック状態が変わるため）
 - PointCloudタブを選択しているとき、view_colには点群表示用のキャンバス以外にも、上から順番に以下のウィジェットを表示する（点群表示用のキャンバスが一番下）

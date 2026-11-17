@@ -148,6 +148,8 @@ BOX_STAGE_FIRST_FIT = "first_fit"            # 当てはめた直後
 BOX_STAGE_LOCAL_CORRECTED = "local_corrected"  # 1 フレーム単位の補正（底面・角度）の後
 # 複数フレームを考慮した補正のうち、高さ・角度まで（幅・長さの前）
 BOX_STAGE_ORIENTATION_CORRECTED = "orientation_corrected"
+# ボックスの規定長と向きによる結合と、box_merged_track_id 単位の寸法補正の後
+BOX_STAGE_BOX_MERGED = "box_merged"
 
 
 def record_box_stage(fit: dict[str, Any], stage: str) -> dict[str, Any]:
