@@ -346,8 +346,12 @@
             - 結合したグループ: global_track_idと、まとめたhull_merged_track_id、どのhull_merged_track_idの対がどのサンプル番号で結合されたか（accepted pairs (samples)。`{1 + 19: [26, 27]}`の形式）
             - トラック対の判定: hull_merged_track_idの対 × サンプルごとに1行。対としての結果（status（accepted / rejected / gated）・pair reason（Min Match Frames・同一カメラの保護など）・対応付けられたキーフレーム数）と、そのサンプルの照合結果（sample番号、result（matched / 落ちた理由）、reason、凸包の隙間・向きの差・合体後の長さ/幅とその上限[m]）を表示する。サンプルごとの結果を持たない古いrunでは対ごとに1行
     - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡とそれに基づく補正結果を表示する
+        - Motion Correctionを実行していない run（`fit_metrics`に`motion_correction`が無いもの）では、view_colにその旨のメッセージだけを表示する
+        - 表示はBEV（上から見たXY）で、トラックは複数のsampleにまたがるため、全フレームの中心点・ボックスを**Select Sampleで選択したsampleの基準ego座標**に移して描く（各sampleの基準ego座標からの移し替えは`gt_bev.rebase_boxes_to_ego`と同じ）。表示範囲は表示対象のトラック全体が収まるように合わせ、自車（原点）も表示する
+        - Select Sampleで選択したsampleのフレームは濃く（不透明度1.0、大きめのマーカー、黒い縁取り）、それ以外のフレームは薄く（不透明度0.25〜0.35）表示する。Plotlyの`marker.opacity`は点ごとに配列で指定できるので、トラックごとに1本のtraceで描く。線は区間ごとに濃さを変えられないので、軌跡・破線は全体を薄めの一定の濃さにする
         - view_col部分には以下内容を表示
-            - 最上部に「Label」ラジオボタンを設置し、高さを取らないよう選択肢を横向きに並べる。選択したラベルのトラックのみを以下のように表示するようにする
+            - 最上部に「Label」ラジオボタンを設置し、高さを取らないよう選択肢を横向きに並べる（`horizontal=True`）。選択肢はこのrunのトラックに含まれるラベルだけとし、ラジオボタンなので常にどれか1つが選ばれる（初期値は最もトラック数の多いラベル）。選択したラベルのトラックのみを以下のように表示するようにする
+            - その下に、表示中のトラック数（移動 / 静止 / 短い）と、外れ値・位置修正・角度修正のフレーム数のキャプションを表示する
             - 移動トラック
                 - 平滑化した位置を実線の軌跡でつなぐ（Instance Color、少し薄め）。
                 - 観測（ボックス中心）は点で重ねる（軌跡と点のずれが、そのまま平滑化の効き方となる）
@@ -363,16 +367,19 @@
                     - 位置を修正したフレームは、修正前（×）→ 修正後（丸）を矢印で示す
             - 短いトラック（Min Frames to Smooth 未満で、判定していないもの）
                 - 線も代表点も無しで、観測点を中抜きの丸（circle-open）にする
+            - 角度を修正したフレームは、Fitted Boxesでボックスを表示しているとき、修正前のボックスを点線で重ねる
+            - 凡例: 色はトラックごとなので、形と線の意味は灰色のダミーtrace（「● 非外れ値」「× 外れ値」「○ 短いトラック」「◆ 静止中央値」「─ 平滑化軌跡」「┄ 結合区間」）で凡例に出す
+            - 観測点にホバーすると、サンプル番号、box_merged_track_id / global_track_id、静止 / 移動 / 短い、マハラノビス距離の二乗 $d_k^2$ と閾値（例: 15.2 > 9.21）、外れ値かどうか、位置の修正量 [m]・角度の修正量 [deg]、平滑化した速さ [m/s] を表示する
         - opt_col部分には、以下ウィジェットを持つ
             - Fitted Boxesラジオボタン: 以下の選択肢に応じて、表示されるバウンディングボックスを切り替える（色はInstance Colorの指定に従う。デフォルトはNone）
                 - None: ボックスを表示しない（デフォルト選択はこれにする）
-                - Before Correction: Box Smoother後のボックスサイズ補正（角度補正＋高さ補正＋幅補正＋長さ補正）適用前のボックスを表示
-                - Final Box: Box Smoother後のボックスサイズ補正（角度補正＋高さ補正＋幅補正＋長さ補正）適用後の最終ボックスを表示
+                - Before Correction: Box Smoother（中心位置補正＋角度補正）適用後、global_track単位の寸法補正（高さ補正＋幅補正＋長さ補正）適用前のボックスを表示（`fit_metrics`の`motion_corrected`）
+                - Final Box: global_track単位の寸法補正（高さ補正＋幅補正＋長さ補正）適用後の最終ボックスを表示
             - Instance Colorラジオボタン: 3Dバウンディングボックスと中心点の表示色の決め方選択。以下の選択肢を持つ（デフォルトはLabel）
                 - Label: ラベルで色分け
-                - Box Merged: 結合前のTrack ID（box_merged_track_id）
+                - Box Merged: 結合前のTrack ID（box_merged_track_id）で色分け
                 - Global Track: 結合後のTrack ID（global_track_id）で色分け
-            - Global Trackマルチセレクト（st.multiselect）: チェックしたglobal_track_idのトラックのみをview_colに表示するようフィルタリング
+            - Global Trackマルチセレクト（st.multiselect）: チェックしたglobal_track_idのトラックのみをview_colに表示するようフィルタリング。選択肢はLabelラジオボタンで選んだラベルのglobal_track_idだけとし、何も選ばなければそのラベルの全トラックを表示する（ラベルを切り替えて選択肢から外れたIDは無視する）
     - Box on Camタブ: フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。GTと同じく、どのカメラで推定したかに関わらずボックス中心がそのカメラの画角に入るボックスを描く（複数カメラに写る物体は各カメラに描かれる）。推定ボックスは基準ego座標から各カメラのego_poseへ移してから投影する（`gt_bev.rebase_boxes_to_ego`）。view_colには推定ボックス数（・GT数。カメラごとの合計）のキャプションも表示する
         - Compare with GTチェックボックス: チェックの有無に応じて以下のように表示を変える
             - チェックしていない場合: 2列3行で6カメラを表示しフィッティングした3Dバウンディングボックスを重ねる
