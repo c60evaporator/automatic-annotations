@@ -243,6 +243,26 @@
         - Min Frames for Size Correction: percentile方式の寸法補正に必要なフレーム数
         - Height Estimation / Width Estimation / Length Estimation
             - Height Percentile [%] / Width Percentile [%] / Length Percentile [%]: percentile方式の寸法補正で、global_trackの全フレームのボックス寸法から取る分位点
+    - Track Smootherタブ: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡に使用するパラメータ
+        - Motion Correction: Kalman Smoother（Kalman Filter + RTS Smoother）によるトラック追跡を行うかどうか
+        - Min Frames to Smooth: 平滑化・静止判定の対象にするトラックの最小フレーム
+        - Kalman Smoother
+            - Outlier Threshold: 平滑化で外れ値として除外するマハラノビス距離の二乗の閾値
+            - Num Iters: 外れ値を除いて平滑化し直す回数の上限
+        - Static Detection
+            - Static Radius: 中心の中央値からのばらつき（90%分位）の上限
+            - Static Max Speed: 平滑化で推定した速さの中央値の上限
+        - Stable Track Correction
+            - Static Link Distance: 静止トラック同士を結合するときの、中央値の位置の距離の上限
+            - Static Bottom Percentile: 静止トラックの底面の高さ（グローバル座標の z）として取る分位点
+            - Track Orientation Diff Threshold: トラックの角度の中央値とのずれが、これ以上のフレームを補正の候補にする
+            - Neighbor Orientation Diff Threshold: 周囲の静止車両の角度の中央値とのずれの閾値
+        - Moving Track Merge
+            - Max Link Gap: 先に終わるトラックの終了から、後から始まるトラックの開始までの時間差の上限
+        - Moving Track Correction
+            - Min Position Correction: 位置を修正する最小のずれ（ユークリッド距離）
+            - Min Speed for Heading: 速度の向きで角度を修正する最低の速さ
+            - Heading Diff Threshold: 速度の向きとボックスの角度の差が、これ以上なら修正する
 - param_col中央上部の枠付きcontainerに、現在のパラメータの要約と「Run Inference」「Cancel」ボタン・進捗表示を設置（動作はDetection2D・Instance Tracking画面と同様）
     - 「Run Inference」ボタン: 他のステップと異なり、**推論を投げる前に`depth_estimation_params`のレコード（status='running'）を作成してrunのidを確定させる**（深度マップとLiDAR点群は推論サーバーが`DERIVED_ROOT`配下のrunごとのディレクトリへ直接書くため、書き込み先のディレクトリ名になるidを先に決める必要がある）。そのうえで上で選択したパラメータを渡して推論を実行する`POST /depth-boxfitting/jobs`リクエストを推論サーバーに送信し、1秒ごとに`GET /depth-boxfitting/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される（部分結果はdepth / lidar / boxの種別ごとに積む）
 - ポーリングで推論終了を検知（終了を2回検知して2回保存するのを防ぐため保存済みjob_idをsession_stateに持っておく）したら、以下の要件を満たすよう結果を作成済みのrunに書き込む
