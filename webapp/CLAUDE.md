@@ -29,6 +29,8 @@ project-root/
     ├── .env                                 # HOST_DATA_ROOT, HOST_UID/HOST_GID, GPU_DEVICE_ID 等（git管理外）
     ├── tools/                               # 調査用スクリプト（webapp コンテナで標準入力から実行）
     │   ├── check_depth_boxfitting.py        # Box Fitting の結果（深度補正・距離フィルタ等）を DB から確認
+    │   ├── check_track_mixing.py            # トラックへの GT の別物体の混入を数え、原因（トラッキング / カメラ間結合）に分ける
+    │   ├── check_det2d_errors.py            # Detection2D の検出を GT と比べ、誤検出・見逃し・ラベル違いを数える
     │   └── estimate_track_noise.py          # Track Smoother の観測ノイズ・プロセスノイズを GT から推定
     ├── common/                              # webapp・inference の共有モジュール（両コンテナの /opt/shared/common に :ro マウント）
     │   ├── box_ops.py                       # 2D ボックスの基本演算（IoU/IoS 等）
