@@ -93,6 +93,31 @@ class Siglip2Classifier:
                 results.append(candidate_labels[index])
         return results
 
+    def score_batch(
+        self, images: Sequence[Image.Image], candidate_labels: Sequence[str]
+    ) -> list[list[float]]:
+        """画像ごとに、全候補のスコア（sigmoid）を候補の順で返す.
+
+        閾値探索用のキャッシュ（tools/build_det2d_cache.py）で、判定の規則を
+        後から変えて評価できるように使う。
+        """
+        import torch
+
+        if not images or not candidate_labels:
+            return [[] for _ in images]
+
+        texts = [PROMPT_TEMPLATE.format(label=label) for label in candidate_labels]
+        inputs = self.processor(
+            text=texts, images=list(images), padding="max_length",
+            max_length=TEXT_MAX_LENGTH, truncation=True,
+            max_num_patches=MAX_NUM_PATCHES, return_tensors="pt",
+        ).to(self.model.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        return torch.sigmoid(outputs.logits_per_image).float().cpu().tolist()
+
     def classify(
         self,
         image: Image.Image,

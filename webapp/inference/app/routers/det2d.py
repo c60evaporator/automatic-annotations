@@ -201,6 +201,7 @@ def _run_detection(req: Detection2DRequest, job: Job) -> dict:
                             classifier, image, boxes,
                             req.re_classification_candidates,
                             margin_ratio=req.reclassification_crop_margin_ratio,
+                            keep_scores=req.return_reclassification_scores,
                         )
                     # 残ったボックスが 0 件なら、画像全体で救済を試みる。
                     # 視野いっぱいの車両は輪郭が画面に収まらず、

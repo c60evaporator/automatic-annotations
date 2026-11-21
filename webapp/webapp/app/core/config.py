@@ -247,7 +247,7 @@ class Settings(BaseSettings):
     # --- 2D Object Detection ---------------------------------------------
     # 4 だとインターバルの間に現れて消えるインスタンスを取りこぼす
     # （自車や対象の速度が速い場面）
-    DET2D_DEFAULT_SAMPLE_INTERVAL: int = 3
+    DET2D_DEFAULT_SAMPLE_INTERVAL: int = 2
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
         "vehicle": 0.3,
         "road_object": 0.25,

@@ -19,6 +19,7 @@ Detection2Dは、以下のフローで行われます
     - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
     - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、最もスコアの大きいラベルを採用
     - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
+    - リクエストの`return_reclassification_scores`がTrueのときは、全候補のスコアを各ボックスの`reclassification_scores`に入れて返す（閾値探索用のキャッシュ`tools/build_det2d_cache.py`で使う。通常の推論ではFalse）
 - 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
     - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
     - 閾値を超えた場合、ラベルごとに指定した`settings.DET2D_IOS_DELETE_DIRECTION`辞書（keyがラベル名、valueが削除条件）に基づき、以下のように削除するボックスを決める

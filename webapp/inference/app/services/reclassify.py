@@ -26,12 +26,15 @@ def reclassify_boxes(
     candidates: dict[str, dict[str, str | None]],
     *,
     margin_ratio: float = 0.1,
+    keep_scores: bool = False,
 ) -> int:
     """1 フレーム分のボックスを再判定し、label / is_deleted を書き換える.
 
     Args:
         candidates: ``{検出ラベル: {分類候補: 最終ラベル or None}}``
         margin_ratio: 切り出し時にボックスを広げる比率
+        keep_scores: True なら全候補のスコアを ``reclassification_scores`` に残す
+            （閾値探索用のキャッシュで、判定の規則を後から変えて評価するため）
 
     Returns:
         再判定したボックス数。
@@ -69,7 +72,18 @@ def reclassify_boxes(
             for box in targets
         ]
         try:
-            predictions = classifier.classify_batch(crops, candidate_labels)
+            if keep_scores:
+                scores = classifier.score_batch(crops, candidate_labels)
+                for box, row in zip(targets, scores):
+                    box["reclassification_scores"] = dict(zip(candidate_labels, row))
+                # classify_batch と同じく、スコアが最大の候補を選ぶ
+                predictions = [
+                    candidate_labels[max(range(len(row)), key=row.__getitem__)]
+                    if row else None
+                    for row in scores
+                ]
+            else:
+                predictions = classifier.classify_batch(crops, candidate_labels)
         except Exception as exc:  # noqa: BLE001
             # 1 ラベル分の失敗で全体を止めない。元のラベルを残す
             logger.warning("re-classification failed for %s: %s", target_label, exc)

@@ -41,6 +41,13 @@ class Siglip2ClassifierStub:
             results.append(candidate_labels[seed % len(candidate_labels)])
         return results
 
+    def score_batch(
+        self, images: Sequence[Image.Image], candidate_labels: Sequence[str]
+    ) -> list[list[float]]:
+        """classify_batch が選ぶ候補を 0.5、それ以外を 0.1 にする（決定的）."""
+        picks = self.classify_batch(images, candidate_labels)
+        return [[0.5 if c == pick else 0.1 for c in candidate_labels] for pick in picks]
+
     def classify(
         self,
         image: Image.Image,

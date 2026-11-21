@@ -68,6 +68,9 @@ class Detection2DRequest(BaseModel):
     )
     # 切り出し時にボックスを広げる比率
     reclassification_crop_margin_ratio: float = 0.1
+    # True なら再判定した全候補のスコアを返す（閾値探索用のキャッシュ作成。
+    # tools/build_det2d_cache.py）。通常の推論では使わない
+    return_reclassification_scores: bool = False
     # 検出 0 件のフレームを画像全体の分類で救済する。
     # {分類候補: 最終ラベル or None}。None は除外候補。空なら救済しない
     whole_image_candidates: dict[str, str | None] = Field(default_factory=dict)
@@ -97,6 +100,8 @@ class BBox2D(BaseModel):
     detection_label: str | None = None
     # SigLIP2 が返した候補ラベル（デバッグ・確認用）
     reclassified_as: str | None = None
+    # 再判定の全候補のスコア（return_reclassification_scores のときだけ入る）
+    reclassification_scores: dict[str, float] | None = None
     # 何によって削除されたか（reclassification / ios_small / ios_big / ios_multi_big）
     deleted_by: str | None = None
     # 再判定で「使わない」と判定されたか（論理削除）

@@ -20,3 +20,6 @@ ijson                   # Incremental JSON parser for large files such as trainv
 
 # --- Communication with inference server ---
 requests
+
+# --- Tools ---
+optuna                  # Detection2D threshold search (tools/tune_det2d_thresholds.py)
