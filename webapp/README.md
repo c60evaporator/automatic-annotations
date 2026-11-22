@@ -130,7 +130,7 @@ INFERENCE_BASE_URL=http://inference:8000 docker compose -f docker-compose.mac.ym
 
 Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカルホストの場合`http://localhost`。デフォルトではポート80=ポート番号指定不要）を開きます。
 
-画面は以下の6つのページ（左側のタブで切替）に分かれている。基本的には上から下のタブに向かって操作を実施していけばOK
+画面は以下の6つのページ（左側のタブで切替）に分かれています。基本的には上から下のタブに向かって操作を実施していけばOKです
 
 |ページ名|役割|
 |---|---|
@@ -142,58 +142,68 @@ Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカ�
 |Depth Bixfitting|Depth-Anything-3で単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングする|
 |Export|アノテーション結果を含むメタデータをJSON形式でエクスポートする|
 
-### mainページ
+#### mainページ
 
 データセットを選択するページ。中央のテーブルからアノテーションしたいデータセットを選んで「このデータセットを使う」で確定。
 ここで選択されたデータセットは、画面リロードされるまでセッションで維持される
 
-### Select Sceneページ
+#### Select Sceneページ
 
 シーンを選択するページ。中央のテーブルからアノテーションしたいシーンを選んで「このシーンをアノテーション」で確定
 ここで選択されたシーンは、画面リロードされるまでセッションで維持される
 
-### Detect BBoxesページ
+#### Detect BBoxesページ
 
 Grounding DINOで各物体のバウンディングボックスとラベルを推定するページ。
 
-#### Grounding DINOの推論フローとパラメータ
+##### Grounding DINOの推論フローとパラメータ
 
-- Sample Interval間隔のキーフレーム → カメラ → カテゴリグループ[^category_group]のループで以下を実施
-    - カテゴリグループ内の各ラベル[^nusc_label]に前処理[^groundingdino_preprocess]（アンダースコアをスペースに置き換える等）を実施してリスト化
-    - ラベルのリストをプロンプトとして渡してGrounding DINOで推論
+以下のフローで推論を実行しています。[推論フローの詳細はこちら](inference/CLAUDE.md#推論の実施フロー)を参照して下さい
 
-UI上では、「Inference Parameters」エクスパンダーで以下パラメータを変更可能
+- Detection2D: Sample Interval間隔のキーフレーム → カメラ → カテゴリグループ[^category_group]のループでGroundingDINOによる2D物体検出の推論を実施（カテゴリグループ内の各ラベル[^nusc_label]ごとに割り当てたすべてのサブラベル[^sub_label]、にアンダースコアをスペースに置き換える等の前処理[^groundingdino_preprocess]を適用してピリオド区切りで結合したプロンプトを使用）。これにより2Dバウンディングボックスとラベルを得る
+- Re-Classification: GroundingDINOで得られた各バウンディングボックスのうち指定したラベル[^siglip2_label]のものを、ボックス周囲の切り出し画像でSigLIP2により再判定。これにより各バウンディングボックスのラベル判定の精度を向上させる
+- Duplicate Suppression: 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士をIoS（Intersection over Smaller, 2つのボックスが重なった面積÷2つのうち小さい方の領域の面積）で閾値判定して結合[^2dbox_ios_deletion]。これにより同じ物体を重複検出したボックスを削除する
+- Whole-Image Fallback: そのカメラ・フレームのボックス検出数が0の場合、画像全体をリサイズ（Whole-Image Resize Ratioで割合指定）してSigLIP2で推論を実施。これにより画面全体を覆っていてGroundingDINOでは検出困難な物体を検出する
 
-|名称|内容|デフォルト値|
-|---|---|---|
-|Sample Interval|推論を実施するキーフレームの間隔|4（2秒）|
-|Score Threshold|推論したバウンディングボックスを採択するスコアの閾値（実際にはカテゴリグループごとの`DET2D_DEFAULT_SCORE_THRESHOLDS`に掛けた値が使用される）|1.0|
-|NMS Threshold|NMSでバウンディングボックスを合体するIoUの閾値（同一ラベルのNMSはカテゴリグループごとの`DET2D_NMS_SAME_CLASS_IOUS`に掛けた値が使用され、別ラベルのNMSは`DET2D_NMS_CROSS_CLASS_IOU`に掛けた値が使用される）|1.0|
+UI上では、「Inference Parameters」エクスパンダー内の以下のタブで区切られたパラメータを調整可能。[具体的なパラメータ一覧はこちら](inference/CLAUDE.md#uiで指定可能なパラメータ)を参照
+
+|タブ名|内容|
+|---|---|
+|Detection2D|GroundingDINOによる2D物体検出関係のパラメータ（実施フレーム間隔、スコア閾値、NMS閾値）|
+|Re-Classification|SigLIP2による再判定関係のパラメータ（ボックス周囲画像切り出し時のクロップ率）|
+|Duplicate Suppression|IoSによる重複ボックス削除関係のパラメータ（重複判定のIoS閾値）|
+|Whole-Image Fallback|ボックス未検出時の画像全体SigLIP2再判定関係のパラメータ（スコア閾値とリサイズ率）|
 
 「Run Inference」ボタンを押すと推論が実行される。初回実行時はモデルのロードに時間が掛かる（1分ほど）ことに注意
 
-[^category_group]: 似たラベルをグルーピングしてこのカテゴリグループごとに一括推論している。カテゴリグループは`nuscenes-annotator/webapp/app/core/config.py`の`LABEL_TO_CATEGORY_GROUP`で指定可能
+[^category_group]: 似たラベルをグルーピングしてこのカテゴリグループごとに一括推論している。カテゴリグループは`nuscenes-annotator/webapp/app/core/config.py`の`LABEL_TO_CATEGORY_GROUP`辞書で指定可能
 
-[^nusc_label]: 判定対象のラベルとnuScenesカテゴリとの変換は`nuscenes-annotator/webapp/app/core/config.py`の`NUSC_CATEGORY_TO_LABEL`、`LABEL_TO_NUSC_CATEGORY`で指定可能。
+[^nusc_label]: 判定対象のラベルとnuScenesカテゴリとの変換は`nuscenes-annotator/webapp/app/core/config.py`の`NUSC_CATEGORY_TO_LABEL`、`LABEL_TO_NUSC_CATEGORY`辞書で指定可能
+
+[^sub_label]: 各ラベルごとのサブラレベルは`nuscenes-annotator/webapp/app/core/config.py`の`LABEL_TO_SUBLABEL`辞書で指定可能
 
 [^groundingdino_preprocess]: GroundingDINOはトークナイザの扱いがシビアなので、実装上の工夫をいくつか加えている。詳細は`nuscenes-annotator/inference/app/models_impl/groundingdino_predict.py`参照
 
-#### バウンディングボックス推論結果の表示UI
+[^siglip2_label]: 入力するGroundingDINOのラベルと再判定時のラベル候補の変換は、`nuscenes-annotator/webapp/app/core/config.py`の`RE_CLASSIFICATION_CANDIDATES`辞書で指定可能。この辞書のvalueがさらに辞書となっており、その辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す。valueがNoneならそのボックスを削除
+
+[^2dbox_ios_deletion]: IoS閾値を超えた同ラベルのボックス同士を総当たりでマッチングし、`nuscenes-annotator/webapp/app/core/config.py`の`DET2D_IOS_DELETE_DIRECTION`に応じてラベルごとに大きい方または小さい方を残す
+
+##### バウンディングボックス推論結果の表示UI
 
 推論結果はDBに保存され、「保存済みの推論結果」エクスパンダーで選択可能。選択した推論結果がページ下部のカメラ画像上に表示される。右ペインで以下のように表示を変えられる
 
 |名称|内容|
 |---|---|
-|Show boxesチェックボックス|バウンディングボックスのカメラ画像上への表示有無|
 |Compare with GTチェックボックス|チェックするとGround Truthと推論ボックスのプロット画像が左右に並べて表示される。チェックしないと推論ボックスのみが表示される|
+|Show boxesチェックボックス|バウンディングボックスのカメラ画像上への表示有無|
 |Min scoreスライダー|このScoreを超えたバウンディングボックスのみが画像上に表示される|
-|Box textラジオボタン|バウンディングボックスの上にテキスト表示される内容（"Label"ならラベル、"Score"なら推論スコア、Noneなら表示なし）|
+|Box textラジオボタン|バウンディングボックスの上にテキスト表示される内容（"SubLabel"ならGroudingDINOで検出されたラベル、"Detection Label"ならSublabelを、"Label"ならラベル、"Score"なら推論スコア、Noneなら表示なし）|
 
-### Track Instancesページ
+#### Track Instancesページ
 
 SAM2で各物体のインスタンスマスクとトラッキングIDを推定するページ。プロンプトとして前のページで検出したバウンディングボックスを使用
 
-#### SAM2の推論フローとパラメータ
+##### SAM2の推論フローとパラメータ
 
 推論の流れは以下
 

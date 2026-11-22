@@ -901,7 +901,7 @@ with param_col:
                       "インスタンス単位では深度の範囲が狭いため、1 パラメータで足りる"),
             )
             num_lidar_sweeps = st.number_input(
-                "LiDAR Sweeps", min_value=1, max_value=settings.SWEEPS_PER_SAMPLE,
+                "LiDAR Sweeps", min_value=1, max_value=settings.LIDAR_SWEEPS_PER_SAMPLE,
                 value=settings.LIDAR_NUM_SWEEPS_DEFAULT, step=1,
             )
             min_lidar_points = st.slider(

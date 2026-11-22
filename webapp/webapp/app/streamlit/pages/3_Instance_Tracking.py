@@ -36,7 +36,6 @@ from app.services.instance_tracking_service import (
     save_tracking_run,
 )
 from app.services.sample_service import get_skipped_sample_indices
-from app.services.sweep_service import MAX_SWEEPS_PER_SAMPLE
 from app.streamlit import state as S
 from app.streamlit.components.sample_token import render_sample_token
 from app.streamlit.components.det2d_viewer import render_label_legend
@@ -158,7 +157,7 @@ with param_col:
             num_sweeps = st.number_input(
                 "Sweeps per Sample",
                 min_value=1,
-                max_value=min(settings.SWEEPS_PER_SAMPLE, MAX_SWEEPS_PER_SAMPLE),
+                max_value=settings.CAM_FRAMES_PER_SAMPLE,
                 value=settings.DEFAULT_TRACKING_NUM_SWEEPS,
                 step=1, label_visibility="collapsed",
             )

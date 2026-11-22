@@ -275,7 +275,9 @@ class Settings(BaseSettings):
     DET2D_MODEL_NAME: str = "IDEA-Research/grounding-dino-base"
 
     # --- Instance Tracking -----------------------------------------------
-    SWEEPS_PER_SAMPLE: int = 6
+    # キーフレームあたりのカメラフレーム数（カメラ12Hz÷キーフレーム2Hz）。
+    # Sweeps per Sample パラメータの最大値に使う
+    CAM_FRAMES_PER_SAMPLE: int = 6
     DEFAULT_TRACKING_NUM_SWEEPS: int = 2
     DEFAULT_TRACKING_IOU_THRESHOLD: float = 0.4
     DEFAULT_TRACKING_IOU_METHOD: str = "box"
@@ -354,6 +356,9 @@ class Settings(BaseSettings):
     DEPTH_LSHAPE_MARGIN_RATIO_DEFAULT: float = 0.03
 
     # LiDAR 点群のフィルタ（LiDAR Pointcloud タブ）
+    # キーフレームあたりの LiDAR sweep 数（LiDAR 20Hz÷キーフレーム2Hz）。
+    # LiDAR Sweeps パラメータの最大値に使う
+    LIDAR_SWEEPS_PER_SAMPLE: int = 10
     LIDAR_NUM_SWEEPS_DEFAULT: int = 5
     LIDAR_MIN_POINTS_DEFAULT: int = 6
     # インスタンスの LiDAR 点がこの数以上なら、**深度点群を使わない**。

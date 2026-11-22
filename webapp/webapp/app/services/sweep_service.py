@@ -17,9 +17,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-# 1 sample あたりの sweep 数の上限（UI の number_input の上限に使う）
-MAX_SWEEPS_PER_SAMPLE = 10
-
 
 def select_uniform_sweep_indices(num_frames: int, num_sweeps: int) -> list[int]:
     """sample 内フレームから使うものの index を返す.

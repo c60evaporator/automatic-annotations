@@ -105,7 +105,7 @@
 - param_col上部の「Inference Parameters」エクスパンダーに推論パラメータを選択するUIを設置
     - Box Prompt（タブの外）: プロンプトとして渡すDetection2Dのボックス。`detection_2d_params`テーブルの`status='succeeded'`のレコードを、開始時刻・ボックス数・Sample Intervalと共にラジオボタン付きでリスト表示する。デフォルトでは`started_at`が最新のものを選択
     - Instance Trackingタブ
-        - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。非キーフレームは伝播にのみ使う。デフォルト値`settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`settings.SWEEPS_PER_SAMPLE`と`MAX_SWEEPS_PER_SAMPLE`（=10）の小さい方を上限としたnumber_input
+        - Sweeps per Sample: トラッキングに使用する画像のSampleあたりsweep数（1ならキーフレームのみを使用。非キーフレームは伝播にのみ使う。デフォルト値`settings.DEFAULT_TRACKING_NUM_SWEEPS`）。`settings.CAM_FRAMES_PER_SAMPLE`を上限としたnumber_input
     - Track ID Inheritanceタブ
         - IoU Threshold: track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値。デフォルト値`settings.DEFAULT_TRACKING_IOU_THRESHOLD`
         - IoU Method: 上記IoUマッチングで使用するIoUの計算方法を、マスクの外接矩形同士のIoU（"box"）にするか、Mask IoU（"mask"）にするかを選択するSelectbox。デフォルト値`settings.DEFAULT_TRACKING_IOU_METHOD`

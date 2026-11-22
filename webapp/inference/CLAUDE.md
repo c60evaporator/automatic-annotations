@@ -246,7 +246,7 @@ UI（Instance Trackingページの画面上部の「Inference Parameters」エ�
 |パラメータ名|タブ|型|内容|デフォルト値|範囲|
 |---|---|---|---|---|---|
 |Box Prompt|（タブ外）|-|入力とするDetection2Dの結果を選択（`detection_2d_params`テーブルのレコードを、開始時刻・ボックス数・Sample Intervalとともにラジオボタン付きでリスト表示）|`started_at`が最新のレコード|-|
-|Sweeps per Sample|Instance Tracking|int|トラッキングに使用する画像のキーフレームあたりフレーム数（1ならキーフレームのみを使用。非キーフレームは伝播にのみ使い、結果は保存しない）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`（2）|1〜min(`settings.SWEEPS_PER_SAMPLE`, `MAX_SWEEPS_PER_SAMPLE`=10)|
+|Sweeps per Sample|Instance Tracking|int|トラッキングに使用する画像のキーフレームあたりフレーム数（1ならキーフレームのみを使用。非キーフレームは伝播にのみ使い、結果は保存しない）|`settings.DEFAULT_TRACKING_NUM_SWEEPS`（2）|1〜`settings.CAM_FRAMES_PER_SAMPLE`|
 |IoU Threshold|Track ID Inheritance|float|track_idのブロック間引き継ぎに使用するインスタンス同士のHungarian algorithmによるIoUマッチング後のIoU閾値|`settings.DEFAULT_TRACKING_IOU_THRESHOLD`（0.4）|0.0〜1.0|
 |IoU Method|Track ID Inheritance|"box" or "mask"|上記IoUマッチングで使用するIoUの計算方法を、マスクの外接矩形同士のIoU（"box"）にするか、Mask IoU（"mask"）にするかを選択|`settings.DEFAULT_TRACKING_IOU_METHOD`（"box"）|-|
 |IoU Label Match|Track ID Inheritance|"label", "category_group", or "none"|上記IoUマッチング時にラベル（"label"）またはカテゴリグループ（"category_group"）の一致も要求するか、ラベルを問わないか（"none"）を指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`（"category_group"）|-|
@@ -258,7 +258,8 @@ UI（Instance Trackingページの画面上部の「Inference Parameters」エ�
 
 |設定名|型|内容|公式nuScenesでの適正値|適正値の根拠|
 |---|---|---|---|---|
-|`settings.SWEEPS_PER_SAMPLE`|int|nuScenesのキーフレームあたりのsweep数（カメラ12Hz÷キーフレーム2Hz）。Sweeps per Sampleパラメータと、Depth BoxfittingのLiDAR Sweepsパラメータの最大値に使う|6|nuScenesのセンサー仕様（Sweeps per Sampleはさらに`sweep_service.MAX_SWEEPS_PER_SAMPLE`=10で頭打ち）|
+|`settings.CAM_FRAMES_PER_SAMPLE`|int|nuScenesのキーフレームあたりのカメラフレーム数（カメラ12Hz÷キーフレーム2Hz）。Sweeps per Sampleパラメータの最大値に使う|6|nuScenesのセンサー仕様|
+|`settings.LIDAR_SWEEPS_PER_SAMPLE`|int|nuScenesのキーフレームあたりのLiDAR sweep数（LiDAR 20Hz÷キーフレーム2Hz）。Depth BoxfittingのLiDAR Sweepsパラメータの最大値に使う|10|nuScenesのセンサー仕様|
 |`settings.DEFAULT_TRACKING_NUM_SWEEPS`|int|Sweeps per Sampleパラメータのデフォルト値|2|推論時間と伝播ミスのバランスをとるよう、実データで調整|
 |`settings.DEFAULT_TRACKING_IOU_THRESHOLD`|float|IoU Thresholdパラメータのデフォルト値|0.4|結合見逃しと誤結合のバランスをとるよう、実データで調整|
 |`settings.DEFAULT_TRACKING_IOU_METHOD`|"box" or "mask"|IoU Methodパラメータのデフォルト値|"box"|"mask"だと計算時間がネックとなるため|
@@ -716,7 +717,7 @@ UI（Depth Boxfittingページの画面上部の「Inference Parameters」エク
 |Margin Min [m]|Depth Estimation（L-shape Filter）|float|Depth点群のL-shape Filterの除去閾値`max(Margin Min, Margin Ratio × 基準距離)`の最小値|`settings.DEPTH_LSHAPE_MARGIN_MIN_DEFAULT`（0.3）|0.05〜2.0|
 |Margin Ratio|Depth Estimation（L-shape Filter）|float|Depth点群のL-shape Filterの除去閾値の、基準距離に対する比（単眼深度の誤差は距離とともに大きくなるため）|`settings.DEPTH_LSHAPE_MARGIN_RATIO_DEFAULT`（0.03）|0.0〜0.2|
 |Depth Correction|LiDAR Pointcloud|"scale", "shift", or "affine"|LiDARを基準にDepth点群の深さ方向座標を補正する方式（Use LiDARのときだけ有効）。scale: z' = s·z / shift: z' = z + o / affine: z' = a·z + b（対応点が5点未満ならscaleに切り替える）|`settings.DEFAULT_DEPTH_CORRECTION_METHOD`（"scale"）|`settings.DEPTH_CORRECTION_METHODS`|
-|LiDAR Sweeps|LiDAR Pointcloud|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.LIDAR_NUM_SWEEPS_DEFAULT`（5）|1〜`settings.SWEEPS_PER_SAMPLE`|
+|LiDAR Sweeps|LiDAR Pointcloud|int|キーフレームあたりで結合するLiDAR点群のsweep数（1ならキーフレームのみを使用）|`settings.LIDAR_NUM_SWEEPS_DEFAULT`（5）|1〜`settings.LIDAR_SWEEPS_PER_SAMPLE`|
 |Min LiDAR Points to use LiDAR|LiDAR Pointcloud|int|インスタンスごとLiDAR点群（ROR/DBSCAN後）を使用するための点数の下限しきい値（これを下回ったインスタンスはLiDAR点群を持たず、Depth点群のみ使用する）|`settings.LIDAR_MIN_POINTS_DEFAULT`（6）|1〜`settings.LIDAR_MIN_POINTS_MAX`|
 |Max LiDAR Points to use Depth|LiDAR Pointcloud|int|Depth点群を使用するためのLiDAR点数の上限しきい値（LiDAR点数がこれ以上のインスタンスはLiDAR点群のみ使用する）。0で無効（常にDepth点群も使う）|`settings.LIDAR_MAX_POINTS_FOR_DEPTH_DEFAULT`（100）|0〜`settings.LIDAR_MAX_POINTS_FOR_DEPTH_MAX`|
 |Min Correspondences for Pointwise Correction|LiDAR Pointcloud|int|Depth点群の最終補正で、点ごとの対応（LiDAR点とその周囲の残った深度点の予測深度の中央値）から補正係数を求めるのに必要な対応点の数。届かなければ「残ったLiDAR点の深度の中央値 ÷ 残った深度点の予測深度の中央値」で求める|`settings.LIDAR_MIN_CORRESPONDENCES_DEFAULT`（3）|1〜`settings.LIDAR_MIN_CORRESPONDENCES_MAX`|
