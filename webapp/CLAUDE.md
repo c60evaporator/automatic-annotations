@@ -32,7 +32,7 @@ project-root/
     │   ├── check_track_mixing.py            # トラックへの GT の別物体の混入を数え、原因（トラッキング / カメラ間結合）に分ける
     │   ├── check_det2d_errors.py            # Detection2D の検出を GT と比べ、誤検出・見逃し・ラベル違いを数える
     │   ├── build_det2d_cache.py             # Detection2D の閾値探索用に、後処理前の検出・再判定スコア・GT をシーンごとにキャッシュ（推論サーバーが必要）
-    │   ├── tune_det2d_thresholds.py         # 上のキャッシュに後処理をかけ直し、スコア閾値・NMS・IoS・再判定マージンを Optuna で探索
+    │   ├── tune_det2d_thresholds.py         # 上のキャッシュに後処理をかけ直し、スコア閾値・NMS・IoS・再判定マージンを Optuna で探索（--seeds 複数でパラメータの安定性をまとめる）
     │   └── estimate_track_noise.py          # Track Smoother の観測ノイズ・プロセスノイズを GT から推定
     ├── common/                              # webapp・inference の共有モジュール（両コンテナの /opt/shared/common に :ro マウント）
     │   ├── box_ops.py                       # 2D ボックスの基本演算（IoU/IoS 等）

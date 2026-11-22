@@ -58,12 +58,33 @@ GT が --min-label-gt 個以上あるラベルだけを平均する（数個し�
   --min-label-gt N     目的関数に入れるラベルの GT 数の下限（既定 20）
   --match-iou IOU      GT と対応付ける IoU の下限（既定 0.3）
   --min-visibility V   この visibility 未満の GT は無視（既定 2）
-  --seed N             シーンの分け方と Optuna の乱数の種（既定 0）
-  --study NAME         Optuna の study 名（既定はオプションから自動で決める）
+  --split-seed N       探索用と確認用にシーンを分けるときの乱数の種（既定 0）
+  --seeds N [N ...]    Optuna（TPE）の乱数の種。複数なら順に探索してまとめを出す
+                       （既定 0。0-9 のような範囲も書ける）
+  --stable-spread R    まとめの判定: シード間の最良値の範囲がパラメータの探索範囲の幅の
+                       この割合以下なら「安定」（既定 0.15）
+  --flat-tol D         まとめの判定: 目的関数の変化がこれ未満なら差なしとみなす（既定 0.003）
+  --study NAME         Optuna の study 名（既定はオプションから自動で決める。シードが複数なら
+                       末尾に _seed{N} を付ける）
   --log-interval SEC   進捗を表示する間隔（秒。既定 30）
+
+## 複数シードのまとめ（--seeds に 2 個以上）
+
+シードごとの結果を今まで通り出したあと、次をまとめて表示し、tune_..._split{S}_seeds{...}.json に保存する。
+
+  - シードごとの最良と、現行比の改善幅（探索用・確認用）の平均±標準偏差
+  - 合意の設定: パラメータごとに、各シードの最良の中央値をとった設定
+  - パラメータごとの、シード間のばらつきと効き方（合意の設定を基準に 1 つずつ動かす）
+      ばらつき       シード間の範囲 ÷ 探索範囲の幅
+      範囲内の影響   シード間の最小値・最大値にしたときの、探索用の目的関数の低下
+      現行に戻す     そのパラメータだけ現行の値に戻したときの目的関数の変化（探索用・確認用）
+    判定は「安定」（ばらつきが小さい）/「平坦」（ばらつくが目的関数は変わらない。どの値でもよい）/
+    「不安定」（ばらつき、値で結果も変わる）。現行に戻しても差が無ければ「現行と差なし」を付ける
+  - 合意の設定と現行の設定の比較（探索用・確認用）
 
 例:
     docker compose run --rm --no-deps -T webapp python - --max-scenes 10 < tools/tune_det2d_thresholds.py
+    docker compose run --rm --no-deps -T webapp python - --max-scenes 30 --seeds 0-4 < tools/tune_det2d_thresholds.py
 """
 from __future__ import annotations
 
@@ -76,6 +97,7 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -94,7 +116,7 @@ MULTI_BIG_MIN_CHILDREN = 2  # postprocess.MULTI_BIG_MIN_CHILDREN と同じ
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="tune_det2d_thresholds")
+    parser = argparse.ArgumentParser(prog="tune_det2d_thresholds", allow_abbrev=False)
     parser.add_argument("--name", default="default")
     parser.add_argument("--max-scenes", type=int, default=None)
     parser.add_argument("--holdout", type=float, default=0.3)
@@ -106,10 +128,27 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-label-gt", type=int, default=20)
     parser.add_argument("--match-iou", type=float, default=0.3)
     parser.add_argument("--min-visibility", type=int, default=2)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--split-seed", type=int, default=0)
+    parser.add_argument("--seeds", nargs="+", default=["0"])
+    parser.add_argument("--stable-spread", type=float, default=0.15)
+    parser.add_argument("--flat-tol", type=float, default=0.003)
     parser.add_argument("--study", default=None)
     parser.add_argument("--log-interval", type=float, default=30.0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    seeds: list[int] = []
+    for token in args.seeds:  # "0-9" は 0 から 9 まで
+        try:
+            if "-" in token:
+                a, b = token.split("-", 1)
+                seeds.extend(range(int(a), int(b) + 1))
+            else:
+                seeds.append(int(token))
+        except ValueError:
+            parser.error(f"--seeds の値が読めません: {token}（例: 0 1 2 / 0-9）")
+    args.seeds = list(dict.fromkeys(seeds))
+    if not args.seeds:
+        parser.error("--seeds が空です")
+    return args
 
 
 def _log(message: str) -> None:
@@ -391,6 +430,232 @@ def _print_compare(title: str, rows: list[tuple[str, dict]], label_names: list[s
     print("  （* は目的関数に入れたラベル。数字は GT 数）", flush=True)
 
 
+def _param_range(name: str) -> tuple[float, float]:
+    if name.startswith("score_"):
+        return SCORE_RANGE
+    if name.startswith("nms_same_"):
+        return NMS_SAME_RANGE
+    return {"nms_cross": NMS_CROSS_RANGE, "ios": IOS_RANGE, "margin": MARGIN_RANGE}[name]
+
+
+def _unflatten(flat: dict, space: str, group_names: list[str], current: dict) -> dict:
+    """_flatten の逆。探索しないパラメータは現行の値."""
+    p = {**current, "score": {g: flat[f"score_{g}"] for g in group_names}}
+    if space == "all":
+        p.update({"nms_same": {g: flat[f"nms_same_{g}"] for g in group_names},
+                  "nms_cross": flat["nms_cross"], "ios": flat["ios"], "margin": flat["margin"]})
+    return p
+
+
+def _print_config(p: dict, group_names: list[str]) -> None:
+    r2 = lambda v: round(float(v), 2)  # noqa: E731
+    print(f"    DET2D_DEFAULT_SCORE_THRESHOLDS = { {g: r2(p['score'][g]) for g in group_names} }")
+    print(f"    DET2D_NMS_SAME_CLASS_IOUS = { {g: r2(p['nms_same'][g]) for g in group_names} }")
+    print(f"    DET2D_NMS_CROSS_CLASS_IOU = {r2(p['nms_cross'])}")
+    print(f"    DET2D_IOS_DELETE_THRESHOLD = {r2(p['ios'])}")
+    print(f"    再判定の削除マージン（未実装） = {r2(p['margin'])}", flush=True)
+
+
+def _seed_spec(seeds: list[int]) -> str:
+    """ファイル名用のシード一覧（連番なら 0-9 の形）."""
+    if seeds == list(range(seeds[0], seeds[0] + len(seeds))):
+        return f"{seeds[0]}-{seeds[-1]}"
+    return ".".join(map(str, seeds))
+
+
+def _study_name(args: argparse.Namespace, n_scenes: int, seed_part: str) -> str:
+    return (f"s{n_scenes}_h{args.holdout}_b{args.beta}_p{args.min_precision}_{args.space}"
+            f"_{seed_part}_vis{args.min_visibility}_iou{args.match_iou}_min{args.min_label_gt}")
+
+
+def _run_seed(optuna, env: SimpleNamespace, seed: int) -> dict | None:
+    """1 つの Optuna シードで探索し、結果を表示・保存して返す（中断したら None）."""
+    args = env.args
+    if args.study:
+        study_name = args.study if len(args.seeds) == 1 else f"{args.study}_seed{seed}"
+    else:
+        # シーンの分け方と Optuna のシードが同じなら、分ける前（--seed 1 つ）の名前のまま（再開できる）
+        part = f"seed{seed}" if seed == args.split_seed else f"split{args.split_seed}_seed{seed}"
+        study_name = _study_name(args, env.n_scenes, part)
+    sampler = optuna.samplers.TPESampler(seed=seed, multivariate=True,
+                                         n_startup_trials=args.startup_trials)
+    study = optuna.create_study(study_name=study_name, direction="maximize", sampler=sampler,
+                                storage=f"sqlite:///{env.cache_dir / 'optuna.db'}", load_if_exists=True)
+    done = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    remaining = max(0, args.trials - done)
+    if done == 0:
+        # 1 試行目は現行の設定（比較の基準になる）
+        study.enqueue_trial(_flatten(env.current, args.space, env.group_names))
+    _log(f"study {study_name}: 完了 {done} 試行、今回 {remaining} 試行"
+         f"（見込み {_fmt(remaining * env.per_trial)}）")
+
+    base = env.baseline["objective"]
+    state = {"last_log": time.time(), "start": time.time(), "count": 0,
+             "best": study.best_value if done else None}
+
+    def objective(trial):
+        p = _suggest(trial, args.space, env.group_names, env.current)
+        s = env.score_tune(p)
+        trial.set_user_attr("precision", s["total"][0])
+        trial.set_user_attr("recall", s["total"][1])
+        return s["objective"]
+
+    def callback(study, trial):
+        state["count"] += 1
+        now = time.time()
+        n_done = done + state["count"]
+        if state["best"] is None or (trial.value is not None and trial.value > state["best"]):
+            state["best"] = trial.value
+            _log(f"  ★ 試行 {trial.number}: 最良を更新 {trial.value:.4f}（現行比 {trial.value - base:+.4f}、"
+                 f"P {trial.user_attrs['precision']:.3f} / R {trial.user_attrs['recall']:.3f}）")
+        if now - state["last_log"] >= args.log_interval or state["count"] == remaining:
+            state["last_log"] = now
+            elapsed = now - state["start"]
+            left = elapsed / state["count"] * (remaining - state["count"])
+            _log(f"  試行 {n_done}/{args.trials} ({n_done / args.trials:4.0%})"
+                 f"  最良 {study.best_value:.4f}（試行 {study.best_trial.number}）"
+                 f"  経過 {_fmt(elapsed)}  残り約 {_fmt(left)}")
+
+    if remaining:
+        try:
+            study.optimize(objective, n_trials=remaining, callbacks=[callback])
+        except KeyboardInterrupt:
+            _log("中断しました。同じオプションで実行すると続きから再開します")
+            return None
+
+    flat = study.best_params
+    best = _unflatten(flat, args.space, env.group_names, env.current)
+    best_tune = env.score_tune(best)
+    _print_compare(f"探索用 {len(env.tune)} シーンでの比較", [("現行", env.baseline), ("最良", best_tune)],
+                   env.label_names, env.label_ids, env.gt_tune)
+    result = {"study": study_name, "seed": seed, "trials": len(study.trials),
+              "best_trial": study.best_trial.number, "flat": flat, "params": best, "current": env.current,
+              "tune": {"current": base, "best": best_tune["objective"],
+                       "precision": best_tune["total"][0], "recall": best_tune["total"][1]}}
+    if env.holdout_frames:
+        best_hold = env.score_hold(best)
+        _print_compare(f"確認用 {len(env.holdout)} シーンでの比較（探索に使っていないシーン）",
+                       [("現行", env.baseline_hold), ("最良", best_hold)],
+                       env.label_names, env.hold_ids, env.gt_holdout)
+        result["holdout"] = {"current": env.baseline_hold["objective"], "best": best_hold["objective"],
+                             "precision": best_hold["total"][0], "recall": best_hold["total"][1]}
+    _log("最良の設定（config.py の形）:")
+    _print_config(best, env.group_names)
+    out = env.cache_dir / f"tune_{study_name}.json"
+    out.write_text(json.dumps(result, ensure_ascii=False, indent=1))
+    _log(f"結果を保存しました: {out}")
+    return result
+
+
+def _summarize(env: SimpleNamespace, results: list[dict]) -> None:
+    """複数シードの結果をまとめる: 改善幅の分布、パラメータごとのばらつきと効き方、合意の設定."""
+    args = env.args
+    has_hold = bool(env.holdout_frames)
+    seeds = [r["seed"] for r in results]
+    print()
+    _log(f"===== {len(results)} シード（{', '.join(map(str, seeds))}）のまとめ =====")
+
+    # 1. シードごとの改善幅
+    _log("シードごとの最良（Δ は現行比）")
+    head = f"  {'seed':>6}{'最良試行':>8}{'探索 目的関数':>14}{'Δ':>9}"
+    if has_hold:
+        head += f"{'確認 目的関数':>14}{'Δ':>9}{'確認 P':>8}{'確認 R':>8}"
+    print(head)
+    for r in results:
+        line = (f"  {r['seed']:>6}{r['best_trial']:>12}{r['tune']['best']:>16.4f}"
+                f"{r['tune']['best'] - r['tune']['current']:>+9.4f}")
+        if has_hold:
+            h = r["holdout"]
+            line += (f"{h['best']:>16.4f}{h['best'] - h['current']:>+9.4f}"
+                     f"{h['precision']:>8.3f}{h['recall']:>8.3f}")
+        print(line)
+    d_tune = np.array([r["tune"]["best"] - r["tune"]["current"] for r in results])
+    line = f"  {'平均±標準偏差':<14}{d_tune.mean():>+20.4f}±{d_tune.std(ddof=1):.4f}"
+    if has_hold:
+        d_hold = np.array([r["holdout"]["best"] - r["holdout"]["current"] for r in results])
+        line += f"{d_hold.mean():>+16.4f}±{d_hold.std(ddof=1):.4f}"
+    print(line)
+    best_values = np.array([r["tune"]["best"] for r in results])
+    print(f"  探索用の最良値の幅: {best_values.min():.4f}〜{best_values.max():.4f}"
+          f"（差 {np.ptp(best_values):.4f}。小さいのに設定がばらつくなら、目的関数の山が平らということ）")
+    if has_hold:
+        print(f"  確認用で現行より良くなったシード: {int((d_hold > 0).sum())}/{len(results)}", flush=True)
+
+    # 2. 合意の設定（シードごとの最良の中央値）
+    names = list(results[0]["flat"])
+    values = {n: np.array([r["flat"][n] for r in results]) for n in names}
+    cons_flat = {n: round(round(float(np.median(v)) / STEP) * STEP, 2) for n, v in values.items()}
+    cons = _unflatten(cons_flat, args.space, env.group_names, env.current)
+    cons_tune = env.score_tune(cons)
+    cons_hold = env.score_hold(cons) if has_hold else None
+    cur_flat = _flatten(env.current, args.space, env.group_names)
+
+    # 3. パラメータごとのばらつきと効き方（合意の設定を基準に 1 つずつ動かす）
+    _log("パラメータごとのばらつきと効き方（基準は合意の設定 = 各シードの最良の中央値）")
+    print("  ばらつき: シード間の範囲 ÷ 探索範囲の幅")
+    print("  範囲内の影響: そのパラメータだけシード間の最小値・最大値にしたとき、探索用の目的関数が最も下がる量")
+    print("  現行に戻す: そのパラメータだけ現行の値に戻したときの目的関数の変化（マイナスならそのパラメータの変更が効いている）")
+    head = (f"  {'パラメータ':<22}{'現行':>6}{'中央値':>7}{'平均±標準偏差':>15}{'最小〜最大':>13}"
+            f"{'ばらつき':>7}{'範囲内の影響':>10}{'現行に戻す 探索':>12}")
+    if has_hold:
+        head += f"{'確認':>8}"
+    print(head + f"  {'判定'}")
+    param_stats = {}
+    for n in names:
+        v = values[n]
+        lo, hi = _param_range(n)
+        spread = float(np.ptp(v)) / (hi - lo)
+        drops = []
+        for x in (float(v.min()), float(v.max())):
+            p = _unflatten({**cons_flat, n: x}, args.space, env.group_names, env.current)
+            drops.append(cons_tune["objective"] - env.score_tune(p)["objective"])
+        spread_drop = max(0.0, max(drops))
+        reverted = _unflatten({**cons_flat, n: cur_flat[n]}, args.space, env.group_names, env.current)
+        rev_tune = env.score_tune(reverted)["objective"] - cons_tune["objective"]
+        rev_hold = (env.score_hold(reverted)["objective"] - cons_hold["objective"]) if has_hold else None
+        if spread <= args.stable_spread:
+            verdict = "安定"
+        elif spread_drop < args.flat_tol:
+            verdict = "平坦（どの値でも同じ）"
+        else:
+            verdict = "不安定（値で結果が変わる）"
+        if abs(rev_tune) < args.flat_tol:
+            verdict += "・現行と差なし"
+        elif has_hold and rev_tune < 0 and rev_hold > -args.flat_tol:
+            verdict += "・確認用では効かない"
+        line = (f"  {n:<22}{cur_flat[n]:>6.2f}{cons_flat[n]:>7.2f}{v.mean():>9.2f}±{v.std(ddof=1):.2f}"
+                f"{v.min():>8.2f}〜{v.max():.2f}{spread:>8.0%}{-spread_drop:>+12.4f}{rev_tune:>+14.4f}")
+        if has_hold:
+            line += f"{rev_hold:>+10.4f}"
+        print(line + f"  {verdict}")
+        param_stats[n] = {"current": cur_flat[n], "median": cons_flat[n], "mean": float(v.mean()),
+                          "std": float(v.std(ddof=1)), "min": float(v.min()), "max": float(v.max()),
+                          "spread": spread, "spread_drop": spread_drop, "revert_tune": rev_tune,
+                          "revert_holdout": rev_hold, "verdict": verdict}
+    print(f"  判定: ばらつき {args.stable_spread:.0%} 以下 = 安定 / それ以外で範囲内の影響が {args.flat_tol} 未満 = 平坦"
+          f" / それ以外 = 不安定。現行に戻した差が {args.flat_tol} 未満なら「現行と差なし」、"
+          f"探索用では効くが確認用で効かなければ「確認用では効かない」", flush=True)
+
+    # 4. 合意の設定の評価
+    _print_compare(f"探索用 {len(env.tune)} シーンでの比較（合意の設定）",
+                   [("現行", env.baseline), ("合意", cons_tune)], env.label_names, env.label_ids, env.gt_tune)
+    summary = {"seeds": seeds, "split_seed": args.split_seed, "per_seed": results, "params": param_stats,
+               "consensus": {"params": cons, "tune": cons_tune["objective"]}}
+    if has_hold:
+        _print_compare(f"確認用 {len(env.holdout)} シーンでの比較（合意の設定）",
+                       [("現行", env.baseline_hold), ("合意", cons_hold)],
+                       env.label_names, env.hold_ids, env.gt_holdout)
+        mean_best = float(np.mean([r["holdout"]["best"] for r in results]))
+        _log(f"確認用: 合意の設定 {cons_hold['objective']:.4f} / 各シードの最良の平均 {mean_best:.4f}"
+             f" / 現行 {env.baseline_hold['objective']:.4f}")
+        summary["consensus"]["holdout"] = cons_hold["objective"]
+    _log("合意の設定（config.py の形）:")
+    _print_config(cons, env.group_names)
+    out = env.cache_dir / f"tune_{_study_name(args, env.n_scenes, f'split{args.split_seed}_seeds{_seed_spec(seeds)}')}.json"
+    out.write_text(json.dumps(summary, ensure_ascii=False, indent=1))
+    _log(f"まとめを保存しました: {out}")
+
+
 def main() -> None:
     args = _parse_args()
     try:
@@ -412,7 +677,7 @@ def main() -> None:
             sys.exit(f"キャッシュ済みのシーンが {len(scenes)} 件しかありません（--max-scenes {args.max_scenes}）")
         scenes = scenes[:args.max_scenes]
     shuffled = scenes[:]
-    random.Random(args.seed).shuffle(shuffled)
+    random.Random(args.split_seed).shuffle(shuffled)
     num_holdout = int(round(len(scenes) * args.holdout))
     holdout, tune = shuffled[:num_holdout], shuffled[num_holdout:]
     if not tune:
@@ -433,7 +698,8 @@ def main() -> None:
     candidates = meta["re_classification_candidates"]
 
     started = time.time()
-    _log(f"キャッシュ: {cache_dir}（探索 {len(tune)} シーン / 確認 {len(holdout)} シーン）を読み込み中")
+    _log(f"キャッシュ: {cache_dir}（探索 {len(tune)} シーン / 確認 {len(holdout)} シーン、"
+         f"分け方のシード {args.split_seed}）を読み込み中")
     tune_frames = _load_frames([cache_dir / f"{t}.json.gz" for t in tune], labels, groups, candidates, args)
     holdout_frames = _load_frames([cache_dir / f"{t}.json.gz" for t in holdout], labels, groups,
                                   candidates, args)
@@ -442,102 +708,48 @@ def main() -> None:
     label_ids = sorted(l for l, c in gt_tune.items() if c >= args.min_label_gt and l >= 0)
     if not label_ids:
         sys.exit(f"GT が {args.min_label_gt} 個以上のラベルがありません")
+    # 確認用のシーンに GT が無いラベルは、Fβ が 0 になって平均を下げるだけなので外す
+    hold_ids = [lab for lab in label_ids if gt_holdout[lab]]
     label_names = list(labels)  # 読み込みで増えたラベルも含める
     _log(f"読み込み完了 {_fmt(time.time() - started)}: 探索 {len(tune_frames)} 枚 GT {sum(gt_tune.values())} 個"
          f" / 確認 {len(holdout_frames)} 枚 GT {sum(gt_holdout.values())} 個")
     _log(f"目的関数: Fβ(β={args.beta}) の平均（{', '.join(label_names[l] for l in label_ids)}）"
          + (f"、全体の precision が {args.min_precision} 未満なら減点" if args.min_precision else ""))
 
+    def score_tune(p):
+        return _scores(*_evaluate(tune_frames, p, ctx), label_ids, args.beta, args.min_precision)
+
+    def score_hold(p):
+        return _scores(*_evaluate(holdout_frames, p, ctx), hold_ids, args.beta, args.min_precision)
+
     t0 = time.time()
-    baseline = _scores(*_evaluate(tune_frames, current, ctx), label_ids, args.beta, args.min_precision)
+    baseline = score_tune(current)
     per_trial = time.time() - t0
     _log(f"現行の設定: 目的関数 {baseline['objective']:.4f}"
          f"（P {baseline['total'][0]:.3f} / R {baseline['total'][1]:.3f}）  1 試行 {per_trial:.2f} 秒")
+    env = SimpleNamespace(
+        args=args, cache_dir=cache_dir, n_scenes=len(scenes), tune=tune, holdout=holdout,
+        tune_frames=tune_frames, holdout_frames=holdout_frames, gt_tune=gt_tune, gt_holdout=gt_holdout,
+        label_ids=label_ids, hold_ids=hold_ids, label_names=label_names, group_names=group_names,
+        current=current, baseline=baseline, baseline_hold=score_hold(current) if holdout_frames else None,
+        per_trial=per_trial, score_tune=score_tune, score_hold=score_hold)
 
-    study_name = args.study or (f"s{len(scenes)}_h{args.holdout}_b{args.beta}_p{args.min_precision}_{args.space}"
-                                f"_seed{args.seed}_vis{args.min_visibility}_iou{args.match_iou}"
-                                f"_min{args.min_label_gt}")
     optuna.logging.set_verbosity(optuna.logging.WARNING)
-    sampler = optuna.samplers.TPESampler(seed=args.seed, multivariate=True,
-                                         n_startup_trials=args.startup_trials)
-    study = optuna.create_study(study_name=study_name, direction="maximize", sampler=sampler,
-                                storage=f"sqlite:///{cache_dir / 'optuna.db'}", load_if_exists=True)
-    done = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
-    remaining = max(0, args.trials - done)
-    if done == 0:
-        # 1 試行目は現行の設定（比較の基準になる）
-        study.enqueue_trial(_flatten(current, args.space, group_names))
-    _log(f"study {study_name}: 完了 {done} 試行、今回 {remaining} 試行"
-         f"（見込み {_fmt(remaining * per_trial)}）")
-
-    state = {"last_log": time.time(), "start": time.time(), "count": 0,
-             "best": study.best_value if done else None}
-
-    def objective(trial):
-        p = _suggest(trial, args.space, group_names, current)
-        s = _scores(*_evaluate(tune_frames, p, ctx), label_ids, args.beta, args.min_precision)
-        trial.set_user_attr("precision", s["total"][0])
-        trial.set_user_attr("recall", s["total"][1])
-        return s["objective"]
-
-    def callback(study, trial):
-        state["count"] += 1
-        now = time.time()
-        n_done = done + state["count"]
-        if state["best"] is None or (trial.value is not None and trial.value > state["best"]):
-            state["best"] = trial.value
-            _log(f"  ★ 試行 {trial.number}: 最良を更新 {trial.value:.4f}"
-                 f"（現行比 {trial.value - baseline['objective']:+.4f}、"
-                 f"P {trial.user_attrs['precision']:.3f} / R {trial.user_attrs['recall']:.3f}）")
-        if now - state["last_log"] >= args.log_interval or state["count"] == remaining:
-            state["last_log"] = now
-            elapsed = now - state["start"]
-            left = elapsed / state["count"] * (remaining - state["count"])
-            _log(f"  試行 {n_done}/{args.trials} ({n_done / args.trials:4.0%})"
-                 f"  最良 {study.best_value:.4f}（試行 {study.best_trial.number}）"
-                 f"  経過 {_fmt(elapsed)}  残り約 {_fmt(left)}")
-
-    if remaining:
-        try:
-            study.optimize(objective, n_trials=remaining, callbacks=[callback])
-        except KeyboardInterrupt:
-            _log("中断しました。同じオプションで実行すると続きから再開します")
+    if len(args.seeds) > 1:
+        _log(f"Optuna のシード {len(args.seeds)} 個（{', '.join(map(str, args.seeds))}）で順に探索する"
+             f"（全体の見込み 最大 {_fmt(len(args.seeds) * args.trials * per_trial)}）")
+    results = []
+    for k, seed in enumerate(args.seeds, 1):
+        if len(args.seeds) > 1:
+            print()
+            _log(f"===== Optuna のシード {seed}（{k}/{len(args.seeds)}）=====")
+        result = _run_seed(optuna, env, seed)
+        if result is None:
             return
-
-    best_flat = study.best_params
-    best = {**current, "score": {g: best_flat[f"score_{g}"] for g in group_names}}
-    if args.space == "all":
-        best.update({
-            "nms_same": {g: best_flat[f"nms_same_{g}"] for g in group_names},
-            "nms_cross": best_flat["nms_cross"], "ios": best_flat["ios"],
-            "margin": best_flat["margin"]})
-
-    rows = [("現行", baseline), ("最良", _scores(*_evaluate(tune_frames, best, ctx), label_ids, args.beta, args.min_precision))]
-    _print_compare(f"探索用 {len(tune)} シーンでの比較", rows, label_names, label_ids, gt_tune)
-    result = {"study": study_name, "trials": len(study.trials), "best_trial": study.best_trial.number,
-              "params": best, "current": current,
-              "tune": {"current": baseline["objective"], "best": rows[1][1]["objective"]}}
-    if holdout_frames:
-        # 確認用のシーンに GT が無いラベルは、Fβ が 0 になって平均を下げるだけなので外す
-        hold_ids = [lab for lab in label_ids if gt_holdout[lab]]
-        hold_rows = [("現行", _scores(*_evaluate(holdout_frames, current, ctx), hold_ids, args.beta, args.min_precision)),
-                     ("最良", _scores(*_evaluate(holdout_frames, best, ctx), hold_ids, args.beta, args.min_precision))]
-        _print_compare(f"確認用 {len(holdout)} シーンでの比較（探索に使っていないシーン）",
-                       hold_rows, label_names, hold_ids, gt_holdout)
-        result["holdout"] = {"current": hold_rows[0][1]["objective"], "best": hold_rows[1][1]["objective"]}
-
-    _log("最良の設定（config.py の形）:")
-    r2 = lambda v: round(float(v), 2)  # noqa: E731
-    score = {g: r2(best["score"][g]) for g in group_names}
-    nms_same = {g: r2(best["nms_same"][g]) for g in group_names}
-    print(f"    DET2D_DEFAULT_SCORE_THRESHOLDS = {score}")
-    print(f"    DET2D_NMS_SAME_CLASS_IOUS = {nms_same}")
-    print(f"    DET2D_NMS_CROSS_CLASS_IOU = {r2(best['nms_cross'])}")
-    print(f"    DET2D_IOS_DELETE_THRESHOLD = {r2(best['ios'])}")
-    print(f"    再判定の削除マージン（未実装） = {r2(best['margin'])}", flush=True)
-    out = cache_dir / f"tune_{study_name}.json"
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=1))
-    _log(f"結果を保存しました: {out}（経過 {_fmt(time.time() - started)}）")
+        results.append(result)
+    if len(results) > 1:
+        _summarize(env, results)
+    _log(f"完了（経過 {_fmt(time.time() - started)}）")
 
 
 main()
