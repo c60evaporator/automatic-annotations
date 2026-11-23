@@ -130,6 +130,8 @@ INFERENCE_BASE_URL=http://inference:8000 docker compose -f docker-compose.mac.ym
 
 Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカルホストの場合`http://localhost`。デフォルトではポート80=ポート番号指定不要）を開きます。
 
+## 画面の見方
+
 画面は以下の6つのページ（左側のタブで切替）に分かれています。基本的には上から下のタブに向かって操作を実施していけばOKです
 
 |ページ名|役割|
@@ -142,21 +144,27 @@ Chrome, Firefox等のブラウザで、サーバーのアドレス（ローカ�
 |Depth Bixfitting|Depth-Anything-3で単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングする|
 |Export|アノテーション結果を含むメタデータをJSON形式でエクスポートする|
 
-#### mainページ
+### mainページ
 
 データセットを選択するページ。中央のテーブルからアノテーションしたいデータセットを選んで「このデータセットを使う」で確定。
 ここで選択されたデータセットは、画面リロードされるまでセッションで維持される
 
-#### Select Sceneページ
+<img src=webapp/docs/images/0_main.png width=50%>
+
+### Select Sceneページ
 
 シーンを選択するページ。中央のテーブルからアノテーションしたいシーンを選んで「このシーンをアノテーション」で確定
 ここで選択されたシーンは、画面リロードされるまでセッションで維持される
 
-#### Detect BBoxesページ
+<img src=webapp/docs/images/1_scene_selection.png width=50%>
+
+### Detect BBoxesページ
 
 Grounding DINOで各物体のバウンディングボックスとラベルを推定するページ。
 
-##### Grounding DINOの推論フローとパラメータ
+<img src=webapp/docs/images/2_detection2d.png width=50%>
+
+#### Grounding DINOの推論フローとパラメータ
 
 以下のフローで推論を実行しています。[推論フローの詳細はこちら](inference/CLAUDE.md#推論の実施フロー)を参照して下さい
 
@@ -188,7 +196,7 @@ UI上では、「Inference Parameters」エクスパンダー内の以下のタ�
 
 [^2dbox_ios_deletion]: IoS閾値を超えた同ラベルのボックス同士を総当たりでマッチングし、`nuscenes-annotator/webapp/app/core/config.py`の`DET2D_IOS_DELETE_DIRECTION`に応じてラベルごとに大きい方または小さい方を残す
 
-##### バウンディングボックス推論結果の表示UI
+#### バウンディングボックス推論結果の表示UI
 
 推論結果はDBに保存され、「保存済みの推論結果」エクスパンダーで選択可能。選択した推論結果がページ下部のカメラ画像上に表示される。右ペインで以下のように表示を変えられる
 
@@ -197,30 +205,33 @@ UI上では、「Inference Parameters」エクスパンダー内の以下のタ�
 |Compare with GTチェックボックス|チェックするとGround Truthと推論ボックスのプロット画像が左右に並べて表示される。チェックしないと推論ボックスのみが表示される|
 |Show boxesチェックボックス|バウンディングボックスのカメラ画像上への表示有無|
 |Min scoreスライダー|このScoreを超えたバウンディングボックスのみが画像上に表示される|
-|Box textラジオボタン|バウンディングボックスの上にテキスト表示される内容（"SubLabel"ならGroudingDINOで検出されたラベル、"Detection Label"ならSublabelを、"Label"ならラベル、"Score"なら推論スコア、Noneなら表示なし）|
+|Box textラジオボタン|バウンディングボックスの上にテキスト表示される内容（"SubLabel"ならGroudingDINOで検出された生のラベルであるサブラベル、"Detection Label"ならSublabelを辞書変換したラベル、"Re-Classification"ならSigLIP2再判定後のラベル、"Label"なら最終的なラベル、"Score"なら推論スコア、Noneなら表示なし）|
+|Labelsチェックボックス|チェックしたラベルのバウンディングボックスのみが表示される|
 
-#### Track Instancesページ
+### Track Instancesページ
 
-SAM2で各物体のインスタンスマスクとトラッキングIDを推定するページ。プロンプトとして前のページで検出したバウンディングボックスを使用
+SAM2で各物体のインスタンスマスクとトラッキングIDを推定するページ。プロンプトとして前のページで検出したバウンディングボックスを使用する
 
-##### SAM2の推論フローとパラメータ
+<img src=webapp/docs/images/3_instance_tracking.png width=50%>
 
-推論の流れは以下
+#### SAM2の推論フローとパラメータ
 
-- カメラ → Sample Interval間隔のキーフレームのループで以下を実施
-    - 入力データにはDetect BBoxesページで指定したSample Interval分のキーフレームに加え、キーフレーム間を後述の`Sweeps per Sample`で当分割した非キーフレーム画像も挿入して使用。
-    - 入力データの最初の画像に、Detect BBoxesページで検出した各物体のバウンディングボックスをプロンプトとして渡す
-    - 全入力データに対してトラッキング推論（伝播）を実施し、インスタンスマスクと暫定トラッキングIDを得る
-    - 今回の推論の最初の画像のインスタンスマスクと、前回の推論（今回の推論がSample4～8のデータを用いている場合、前回の推論はSample0～4のデータを用いた推論が該当）の最後のキーフレームに伝播されたインスタンスマスクを比較し、IoUが一定以上であればトラッキングIDを引き継いで割り振りなおす。IoUが一定以上のインスタンスマスクが存在しなければ新たなトラッキングIDを割り振る
+以下のフローで推論を実行しています。[推論フローの詳細はこちら](inference/CLAUDE.md#推論の実施フロー-1)を参照して下さい
 
-「Inference Parameters」エクスパンダーで以下パラメータを変更可能
+- 入力とするDetection2Dの結果を選択
+- Instance Tracking: カメラ → Sample Interval間隔のキーフレームのループで、Detection2Dのバウンディングボックスをプロンプトとして与え、SAM2によるインスタンスマスクのトラッキングを実施。トラッキングの入力データ（ブロックと呼ぶ）はSample Interval分のキーフレームに加え、キーフレーム間をSweeps per Sampleで等分割したフレームも挿入して使用。これにより各物体ごとのインスタンスマスクと、複数フレーム間でのインスタンスの一致を保持するtrack_idを得る。推論方法はTrack ID Inheritanceパラメータに応じて以下のように変わる
+    - Track ID Inheritance="continuous_id"のとき: 最初のフレームにボックスプロンプトを与えるForward方向トラッキングのみ実施
+    - Track ID Inheritance="forward_backward_matching"のとき: Forward方向トラッキングと、最後のフレームにボックスプロンプトを与えたBackward方向トラッキング両方を実施
+- Track ID Inheritance: 以下のように前後のブロック間で検出されたインスタンスマスクのIoUマッチングを実施。これによりブロックの枠を超えて、シーン全体でtrack_idを紐付けられる
+    - Track ID Inheritance="continuous_id"のとき: Forward方向トラッキングの最後のフレームのインスタンスマスクと、次のブロックの最初のフレームのインスタンスマスクをIoUマッチング
+    - Track ID Inheritance="forward_backward_matching"のとき: Forward方向トラッキングとBackward方向トラッキングの各フレームの時空間IoUマッチングを実施
 
-|名称|内容|デフォルト値|
-|---|---|---|
-|Sweeps per Sample|トラッキングの入力データに使用するキーフレームあたりのフレーム数（キーフレーム自身も含む）|2|
-|IoU Threshold|前回の推論と比較してトラッキングIDを引き継ぐためのIoUの下限|0.5|
-|IoU Method|上記トラッキングID引継ぎIoU計算にマスクと外接バウンディングボックスどちらを用いるか|"box"（外接バウンディングボックス）|
-|IoU Label Match|上記トラッキングID引継ぎIoU判定に、ラベルの一致を条件として加えるか（"label"ならラベル一致必須、"category_group"ならカテゴリグループ一致が条件、"none"ならラベル一致は見ずIoUのみで判定）|"label"|
+UI上では、「Inference Parameters」エクスパンダー内の以下のタブで区切られたパラメータを調整可能。[具体的なパラメータ一覧はこちら](inference/CLAUDE.md#uiで指定可能なパラメータ-1)を参照
+
+|タブ名|内容|
+|---|---|
+|Instance Tracking|SAM2によるインスタンスマスクのトラッキング関係のパラメータ（Sweep per Sample）|
+|Track ID Inheritance|IoUマッチングによるブロック間のtrack_id引き継ぎ処理関係のパラメータ（IoU閾値、IoU計算方法、ラベル一致の有無、Track IDの引き継ぎ）|
 
 「Run Inference」ボタンを押すと推論が実行される。初回実行時はモデルのロードに時間が掛かる（1分ほど）ことに注意
 
@@ -234,48 +245,52 @@ SAM2で各物体のインスタンスマスクとトラッキングIDを推定�
 |Show boxesラジオボタン|画像上に表示するバウンディングボックスの種類（"Prompt"なら与えたボックスプロンプト、"Instance"ならインスタンスマスクの外接矩形、Noneなら表示なし）|
 |Colorラジオボタン|インスタンスマスク・バウンディングボックスの表示色の決め方（"Label"ならラベル、"Track ID"ならトラッキングID）|
 |Instance textラジオボタン|インスタンスマスクの上にテキスト表示される内容（"Label"ならラベル、"Track ID"ならトラッキングID、Noneなら表示なし）|
+|Labelsチェックボックス|チェックしたラベルのマスクのみが表示される|
 
-### Estimate Depthページ
+### Depth Boxfittingページ
 
-Depth-Anything-3で単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングするページ
+Depth-Anything-3やMapAnythingで単眼深度推定を実施してインスタンスごとの点群を取得し、この点群に3Dバウンディングボックスをフィッティングする
 
-#### Depth-Anything-3＆Box Fittingの推論フローとパラメータ
+<img src=webapp/docs/images/4_depth_boxfitting.png width=50%>
 
-推論の流れは以下
+#### Depth Boxfittingの推論フローとパラメータ
 
-- カメラ → キーフレームのループで以下の単眼深度推定を実施
-    - キーフレーム画像を入力してDepth-Anything-3で推論し、深度画像（DA3モデルによりリサイズされている）を得る
-    - 得た深度画像を元の画像のサイズのスケールに変換する
-- キーフレーム → カメラのループで以下のBox Fittingを実施
-    - 各インスタンスマスクに前処理（クロージング処理）を実施
-    - 深度画像を各インスタンスマスクで切り出す
-    - 切り出した深度画像をカメラパラメータを用いて点群に変換し、インスタンスごとの点群を得る
-    - インスタンスごとの点群に対してROR → DBSCAN（最大クラスタ以外を削除）を適用してノイズ除去
-    - [こちらの方法](https://arxiv.org/pdf/2302.01034)でインスタンスごと点群に3D bounding boxをフィッティング
-    - 3D bounding boxの高さは、インスタンスごと点群のz_percentilesパラメータで指定したZ軸の上位・下位パーセント点で決める
+以下のフローで推論を実行しています。[推論フローの詳細はこちら](inference/CLAUDE.md#推論の実施フロー-2)を参照して下さい
 
-「Inference Parameters」エクスパンダーで以下パラメータを変更可能（タブで分けられている）
+- 入力とするInstance Trackingの結果を選択
+- Depth Estimation: カメラ → キーフレームのループで、単眼モデル（da3metric-large）またはPose-conditionedモデルによる深度推定を実施し、深度画像を得る
+- LiDAR Pointcloud: キーフレームのループで、LiDAR点群の読み込みとPatchwork++による地面点群の除去を実施
+- Mask Closing: インスタンスマスクにクロージング処理を適用し、境界部を削除
+- Instance Mask Projection: 深度画像をマスク投影してカメラパラメータで点群化したインスタンスごとDepth点群、およびLiDAR点群をマスク投影したインスタンスごとLiDAR点群を得る
+- Noise Removal: インスタンスごとDepth点群およびインスタンスごとLiDAR点群に、それぞれROR, DBSCAN, L-shape Filter, Distance Filterによるノイズ除去処理を適用する
+- Depth LiDAR Merge: インスタンスごとDepth点群とインスタンスごとLiDAR点群をマージ（条件によってはどちらかのみを用いることもある）し、インスタンスごと点群を得る
+- Hull Based Inter-cam Merge: 同フレームで異なるカメラのインスタンスごと点群間で、凸包の重なり率が高いものに新たなtrack_id（hull_merged_track_id）を割り当てる。これによりカメラを跨いで同一インスタンスを結合する
+- Box Fitting: [こちらの方法](https://arxiv.org/pdf/2302.01034)でインスタンスごと点群に3D bounding boxをフィッティングし、ボックスの高さと底面も分位点等の方法で推定する。
+- Orientation Estimation: hull_merged_track_id＆フレームごとに[PartHOE](https://github.com/zhaojieting/Part_HOE)または[OrientAnything](https://github.com/SpatialVision/Orient-Anything)を用いて物体の向きを推定し、Box Fittingで推定していたボックス角度を補正する
+- Orientation Correction: hull_merged_track_idごとに所属する全てのフレームで角度のクラスタリングを実施し、最大クラスタ以外のフレームの角度を最大クラスタのフレームに基づき補正する。これにより周囲フレームからの角度ずれが大きい（角度推定が間違っている可能性が高い）フレームを補正できる
+- Box Based Inter-cam Merge: hull_merged_track_id＆フレームごとに、カメラが異なる＆角度が近い＆合体後のボックスの長さと幅が規定サイズの一定比率以下となるインスタンス同士に、新たなtrack_id（box_merged_track_id）を割り当てる。これによりカメラを跨いだ同一インスタンスのうち、Hull Based Inter-cam Mergeで結合し損ねたものを結合する
+- Height/Width/Length Estimation: box_merged_track_idごとに所属する全てのフレームを考慮し、分位点および見えている面に基づくボックス補正を実施する。これにより同一インスタンスのボックスサイズをフレーム間で一定に揃える
+- Track Smoother: box_merged_trackごとに、インスタンスの動作予測に基づくボックス中心位置の補正（静止 or カルマンスムーザー）を実施する。これにより周囲フレームから推定される動きと整合しないボックスの位置を補正する。また動きの整合性に基づき、途中フレームが抜けたインスタンス同士の結合を実施し、新たなtrack_id（global_track_id）を割り当てる
+- Global Height/Width/Length Estimation: box_merged_trackを2個以上結合したglobal_track_idに対して、所属する全てのフレームを考慮し、分位点に基づくボックス補正を実施する。これによりTrack Smootherの結果を考慮した上で同一インスタンスのボックスサイズをフレーム間で一定に揃える
 
-|タブ|名称|内容|デフォルト値|
-|---|---|---|---|
-|General|Dilation|インスタンスマスクのクロージング処理の膨張カーネルサイズ|5|
-|General|Erosion|インスタンスマスクのクロージング処理の収縮カーネルサイズ|5|
-|Depth Estimation|ROR nb_points|RORノイズ除去処理のnb_pointsパラメータ（大きいほど削除される点群が増える）|8|
-|Depth Estimation|ROR Radius|RORノイズ除去処理のradiusパラメータ（小さいほど削除される点群が増える）|0.8|
-|Depth Estimation|DBSCAN eps|DBSCANノイズ除去処理のepsパラメータ（小さいほど削除される点群が増える）|1.0|
-|Depth Estimation|DBSCAN min_samples|DBSCANノイズ除去処理のmin_samplesパラメータ（大きいほど削除される点群が増える）|12|
-|LiDAR Pointcloud|LiDAR Sweeps|表示するLiDAR点群のキーフレームあたりsweep数（LiDAR点群は表示にのみ使用しておりアノテーションには使用していない）|5|
-|BOX Fitting|Method|Box Fittingに使用する手法（現状1種類しかない）|"convex_hull_moa"|
-|BOX Fitting|angle_step_deg|Box Fittingアルゴリズムでyaw角度推定する際の損失計算の間隔（小さいほど精度上がるが所要時間が増える）|0.5|
-|BOX Fitting|z_percentiles|Boxの高さ推定に使用するパーセント点（上下両方指定）|[1.0, 99.0]|
+UI上では、「Inference Parameters」エクスパンダー内の以下のタブで区切られたパラメータを調整可能。[具体的なパラメータ一覧はこちら](inference/CLAUDE.md#uiで指定可能なパラメータ-2)を参照
+
+|タブ名|内容|
+|---|---|
+|General|インスタンスごと点群に対する処理（Mask Closing、Noise Removal）のうち、Depth点群とLiDAR点群共通で適用するパラメータ|
+|Depth Estimation|Depth点群に関する処理（Depth Estimation, Mask Closing, Noise Removal）に適用するパラメータ|
+|LiDAR Pointcloud|LiDAR点群に関する処理（LiDAR Pointcloud, Mask Closing, Noise Removal, Depth LiDAR Merge）に適用するパラメータ|
+|Inter-cam Merge|カメラを跨いだ同一インスタンス結合（Hull Based Inter-cam Merge, Box Based Inter-cam Merge）に適用するパラメータ|
+|Box Fitting|3D bounding boxのフィッティング（Box Fitting, Orientation Estimation, Orientation Correction, Height/Width/Length Estimation）に適用するパラメータ|
+|Track Smoother|インスタンスの動作予測に基づくボックス中心位置の補正（Track Smoother）に適用するパラメータ|
 
 「Run Inference」ボタンを押すと推論が実行される。初回実行時はモデルのロードに時間が掛かる（1分ほど）ことに注意
 
-#### Depth-Anything-3＆Box Fitting結果の表示UI
+#### Depth Boxfitting結果の表示UI
 
 推論結果はDBに保存され、「保存済みの推論結果」エクスパンダーで選択可能。選択した推論結果がページ下部のUI表示部に表示される。
 
-UI表示部は以下の3つのタブで切り替えられる
+UI表示部は以下の5つのタブで切り替えられる
 
 ##### Depth Estimationタブ
 
@@ -286,8 +301,8 @@ UI表示部は以下の3つのタブで切り替えられる
 |名称|内容|
 |---|---|
 |Show masksラジオボタン|深度画像上にインスタンスマスクを重ねるかどうかを指定（"None"ならマスク表示なし、"Orignal"ならクロージング処理前のマスクを表示、"Closed"ならクロージング処理後のマスクを表示）|
-|Mask Colorラジオボタン|インスタンスマスクの表示色の決め方。Show Masksが"None"以外のとき有効（"Label"ならラベル、"Track ID"ならトラッキングID）|
-|Mask textラジオボタン|インスタンスマスクの上にテキスト表示される内容。Show Masksが"None"以外のとき有効（"Label"ならラベル、"Track ID"ならトラッキングID、Noneなら表示なし）|
+|Mask Colorラジオボタン|インスタンスマスクの表示色の決め方。Show Masksが"None"以外のとき有効（"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID）|
+|Instance textラジオボタン|インスタンスマスクの上にテキスト表示される内容。Show Masksが"None"以外のとき有効（"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID、Noneなら表示なし）|
 
 ##### PointCloudタブ
 
@@ -301,13 +316,14 @@ UI表示部は以下の3つのタブで切り替えられる
 |LiDAR Groundチェックボックス|LiDAR点群の地面判定（Patchwork++）された部分を茶色で重ねて表示するかどうか|
 |Raw Depthチェックボックス|深度画像からプロジェクションした全点群を水色で重ねて表示するかどうか|
 |Depth Instacnesチェックボックス|深度画像からプロジェクションしたインスタンスごと点群を表示するかどうか（このビューの表示のメインとなる）|
-|Instance Pointsラジオボタン|インスタンスごと点群の表示対象。Filter ParamsエクスパンダーでROR/DBSCANを再実行したときのみ有効※（"Raw"なら元のインスタンスごと点群、"ROR/DBSCAN"ならROR/DBSCAN適用後の点群）|
-|Instance Colorラジオボタン|インスタンスごと点群の表示色の決め方（"Label"ならラベル、"Track ID"ならトラッキングID）|
+|Instance Pointsラジオボタン|インスタンスごと点群の表示対象。Filter ParamsエクスパンダーでROR/DBSCANを再実行したときのみ有効※（"Raw"なら元のインスタンスごと点群、"ROR/DBSCAN"ならROR/DBSCAN適用後の点群、"L-shape Filter"ならL-shape Filter適用後の点群、"Distance Filter"ならDistance Filter適用後の点群）|
+|Depth Instanceラジオボタン|インスタンスごとDepth点群の表示位置（"raw"なら元々のDepth点群、"LiDAR corrected"ならLiDAR点群で位置補正した後の点群。後者はMax LiDAR Points to use Depth条件で削除されたDepth点群は表示されない）|
+|L-shape Filterチェックボックス|L-shape Filterの点群削除に使用されるL字平面を表示するかどうか|
+|Fitted Boxesラジオボタン|点群上に重ねて表示する3Dバウンディングボックスの種類（Noneなら表示しない、"First Fit"ならBox Fittingでフィッティングした直後のボックス、"Local Corrected"なら高さ・底面補正とOrientation Estimationでの角度補正後、"Orientation Corrected"ならOrientation Correctionによる複数フレームクラスタリングでの角度補正後、"Box Merged"ならBox Based Inter-cam MergeとHeight/Width/Length Estimationによる複数フレームを考慮したボックスサイズ補正後、"Final Box"ならTrack Smoother適用後の最終的なボックス）|
+|Instance Colorラジオボタン|インスタンスごと点群およびバウンディングボックスの表示色の決め方（"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID、"Hull Merged"ならHull Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のhull_merged_track_id、"Box Merged"ならBox Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のbox_merged_track_id、"Global Track"ならTrack Smootherによる分断トラック結合後の最終的なglobal_track_id）|
 |Camerasチェックボックス|チェックしたカメラのインスタンスごと点群のみが表示される|
 
-※ROR/DBSCANを再実行していないときは、推論時パラメータでのROR/DBSCANが適用された点群が表示される
-
-以下の3つのボタンで、視点を切り替えられる
+画面中央上部の3つのボタンで、以下のように視点を切り替えられます
 
 |名称|視点|
 |---|---|
@@ -315,11 +331,11 @@ UI表示部は以下の3つのタブで切り替えられる
 |Top Viewボタン|車両の真上から見たBEV視点（恐らくこれが一番使いやすい）|
 |Forward Viewボタン|車両の前方向に向かってみた視点|
 
-また、Filter Paramsエクスパンダー内のパラメータを切り替えて「Apply」を押すことで、ROR、DBSCANによる（自動アノテーションに適用するためには、画面最上部のInference Parametersエクスパンダーでパラメータを再指定して「Run Inference」ボタンで推論再実行が必要）
+また、Filter Paramsエクスパンダー内のパラメータを切り替えて「Apply」を押すことで、ROR、DBSCAN、L-shape Filter、Distance Filterのパラメータを変えた際の点群を再表示することができる
 
 ##### Box Fittingタブ
 
-インスタンスごと点群に[こちらの方法](https://arxiv.org/pdf/2302.01034)でyaw角度推定した3Dバウンディングボックスを、BEV視点で表示
+Box Fittingで推定してその後の処理で補正された3Dバウンディングボックスを、BEV視点で表示
 
 右ペインで以下のように表示を変えられる
 
@@ -329,7 +345,60 @@ UI表示部は以下の3つのタブで切り替えられる
 |LiDAR Groundチェックボックス|LiDAR点群の地面判定（Patchwork++）された部分を茶色で重ねて表示するかどうか|
 |Depth Instacnesチェックボックス|深度画像からプロジェクションしたインスタンスごと点群を一緒に表示するかどうか|
 |Convex-Hullチェックボックス|yaw角度推定の途中経過として使用するConvex-hull多角形を表示するかどうか|
-|Instance Colorラジオボタン|バウンディングボックスおよび点群の表示色の決め方（"Label"ならラベル、"Track ID"ならトラッキングID）|
+|Depth Instanceラジオボタン|インスタンスごとDepth点群の表示位置（"raw"なら元々のDepth点群、"LiDAR corrected"ならLiDAR点群で位置補正した後の点群。後者はMax LiDAR Points to use Depth条件で削除されたDepth点群は表示されない）|
+|Fitted Boxesラジオボタン|表示するバウンディングボックスの種類（"First Fit"ならBox Fittingでフィッティングした直後のボックス、"Local Corrected"なら高さ・底面補正とOrientation Estimationでの角度補正後、"Orientation Corrected"ならOrientation Correctionによる複数フレームクラスタリングでの角度補正後、"Box Merged"ならBox Based Inter-cam MergeとHeight/Width/Length Estimationによる複数フレームを考慮したボックスサイズ補正後、"Final Box"ならTrack Smoother適用後の最終的なボックス）|
+|Orientation Estimationチェックボックス|Orientation Estimationでのを表示するかどうか|
+|Instance Colorラジオボタン|バウンディングボックスおよび点群の表示色の決め方（"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID、"Hull Merged"ならHull Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のhull_merged_track_id、"Box Merged"ならBox Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のbox_merged_track_id、"Global Track"ならTrack Smootherによる分断トラック結合後の最終的なglobal_track_id）|
+
+また、画面中央上部の以下エクスパンダーでは、複数カメラ同一インスタンス結合でのインスタンス結合判定の結果を確認できます
+- Hull Merge Diagnosticsエクスパンダー: Hull Based Inter-cam MergeでのBEV視点凸包IoSマッチングによるトラック結合結果を表示
+    - グループ: 結合判定後のトラック（hull_merged_track_id）をリスト表示。2個以上のmembersが存在するトラックが、本処理で結合されたものとなる
+    - トラック対の判定: 凸包IoSマッチングの対象となった（凸包距離が3m以下）インスタンス点群の対をすべてリスト表示。status=acceptedの行が、マッチ判定されたトラック対（マッチ数がMin Match Frames以上のトラック対が最終的に結合される）
+    - 点数不足で当てはめなかったグループ: 結合後の点数がMin Points to fit Box以下でBox Fitting対象外となったhull_merged_track_idを表示。この時点で削除される
+- Box-Orient Merge Diagnosticsエクスパンダー: Box Based Inter-cam Mergeでの角度とボックス規定サイズの比較に基づくトラック結合結果を表示
+    - 結合したグループ: 本処理で結合されたトラック（box_merged_track_id）と結合前のhull_merged_track_idの組をリスト表示
+    - トラック対の判定: 結合の対象となった（凸包距離が3m以下）ボックスの対をすべてリスト表示。result=matchedの行が、マッチ判定されたトラック対（マッチ数がMin Match Frames以上のトラック対が最終的に結合される。これはstatus=acceptedの行に相当）
+
+##### Track Smootherタブ
+
+Track Smootherでの車両の動きを考慮したボックス位置補正結果を表示する。
+
+画面中央上側のLabelラジオボタンで、表示対象のラベルを選択できる。表示結果は以下のように解釈できる
+
+- 菱形◆で表され周囲に2本の平行な点線があるトラック: 「静止している」判定されたトラック
+    - 菱形◆の点: トラック全体のXY位置の中央値。全てのトラックのボックス中心位置がこの位置に補正される
+    - ○および△印の点: 各フレームにおける補正前のボックス中央位置、これらが◆の位置に補正される。△は初回平滑化時の外れ値を表す
+    - 2本の平行な点線: トラック全体のXY位置中央値から幅方向に±Static Radiusの位置に引いた線。静止判定は以下の3条件で実施しており、最初の条件の基準を表す
+        - トラックの進行角度中央値に垂直な方向のばらつき（90%分位点）< Static Radius
+        - トラックの最初の3分の1と最後の3分の1それぞれの中央値の差 < Static Max Displacement
+        - 平滑化した速さの中央値 < Static Max Speed
+    - 2本の平行な実線: トラックの最初の3分の1と最後の3分の1の中央値の中間点から両中央値方向にStatic Max Displacement÷2だけ伸ばした位置に引いた線。上記3条件のうち2番目の条件の基準を表す
+- ●や▲で表され実線で繋がっているトラック: 「動いている」判定されたトラック
+    - 塗り潰し●および▲印の点: 各フレームにおける補正後のボックス中央位置。▲は初回平滑化時の外れ値を、●は非外れ値を表す
+    - 白抜き○および△印の点: 各フレームにおける補正前のボックス中央位置、補正後の●や▲の位置まで矢印が引かれる。△は初回平滑化時の外れ値を、○は非外れ値を表す
+- ×で表されているトラック: 短いトラック（フレーム数がMin Frames to Smooth以下）
+- Select Sampleスライダで選択しているsampleのフレームは太く濃く表示される
+
+右ペインで以下のように表示を変えられる
+
+|名称|内容|
+|---|---|
+|Fitted Boxesラジオボタン|一緒に表示するバウンディングボックスの種類（Noneなら表示なし、"Box Merged"ならBox Based Inter-cam MergeとHeight/Width/Length Estimationによる複数フレームを考慮したボックスサイズ補正後、"Final Box"ならTrack Smoother適用後の最終的なボックス）|
+|Instance Colorラジオボタン|バウンディングボックスおよび点群の表示色の決め方（"Label"ならラベル、"Box Merged"ならBox Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のbox_merged_track_id、"Global Track"ならTrack Smootherによる分断トラック結合後の最終的なglobal_track_id）|
+|Global Trackマルチセレクト|表示対象のglobal_track_idを選択|
+
+##### Box on Camタブ
+
+フィッティングした3Dバウンディングボックスを各カメラ画像に投影して表示する。
+
+右ペインで以下のように表示を変えられる
+
+|名称|内容|
+|---|---|
+|Compare with GTチェックボックス|チェックした場合、Ground Truthのバウンディングボックスと推定されたバウンディングボックスが左右に並べて表示される。チェックしていない場合、推定されたバウンディングボックスのみが表示される|
+|Instance Colorラジオボタン|バウンディングボックスおよび点群の表示色の決め方（"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID、"Hull Merged"ならHull Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のhull_merged_track_id、"Box Merged"ならBox Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のbox_merged_track_id、"Global Track"ならTrack Smootherによる分断トラック結合後の最終的なglobal_track_id）|
+|Instance Textラジオボタン|画像上でボックスの上に表示する文字の種類（Noneなら表示なし、"Label"ならラベル、"Track ID"ならInstance TrackingのトラッキングID、"Hull Merged"ならHull Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のhull_merged_track_id、"Box Merged"ならBox Based Inter-cam Mergeによる複数カメラ同一インスタンス結合後のbox_merged_track_id、"Global Track"ならTrack Smootherによる分断トラック結合後の最終的なglobal_track_id）|
+|Labelsチェックボックス|チェックしたラベルのバウンディングボックスのみが表示される|
 
 ### Exportページ
 
@@ -337,6 +406,8 @@ UI表示部は以下の3つのタブで切り替えられる
 - 選択したシーンのみエクスポートするか、データセット全体をエクスポートするか選べる
 - エクスポート結果にはアノテーション（sample_annotation.jsonおよびinstance.json）だけでなく、他のすべてのメタデータを含む
 - 「エクスポート」ボタンを押すとjsonに書き出され、「ダウンロード」ボタンでブラウザからzip形式でダウンロードできる
+
+<img src=webapp/docs/images/5_export.png width=50%>
 
 ## システム構成
 

@@ -14,6 +14,7 @@ Detection2Dは、以下のフローで行われます
     - 各サブラベル名のアンダースコアをスペースに置き換えたのち、リストをピリオド区切りで結合したテキストをプロンプトとする
     - プロンプトを渡してGrounding DINOで推論
     - 推論で得られたサブラベルを`settings.LABEL_TO_SUBLABEL`で逆引きしてラベルに戻す
+    - キーフレーム・カメラ内の全ボックスに対して、同一ラベル間のNMS（IoU閾値は`settings.DET2D_NMS_SAME_CLASS_IOUS`とNMS Thresholdパラメータで指定）、異なるラベル間のNMS（IoU閾値は`settings.DET2D_NMS_CROSS_CLASS_IOU`とNMS Thresholdパラメータで指定）を実行
 - GroundingDINOで得られた各バウンディングボックスのラベルを、以下手順でSigLIP2により再判定
     - GroundingDINOのラベルに応じて`settings.RE_CLASSIFICATION_CANDIDATES`から再判定のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す。valueがNoneならそのボックスを削除）
     - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
@@ -229,11 +230,11 @@ Instance Trackingは、以下のフローで行われます
     - 推論対象データとして、対象キーフレームからSample Interval後のキーフレームまで、各キーフレームあたりSweeps per Sampleフレームを使用する（例: Sample Interval=4, Sweeps per Samples=2のとき、全部で9フレームを推論用データとして使用。このひとまとまりの推論用フレームをブロックと呼ぶこととする）
     - Track ID Inheritance="continuous_id"のとき: 以下フローでForward方向のトラッキング推論とtrack_idの継承を実施
         - 最初のフレームにDetection2D推論結果をプロンプトとして与え、時間順方向（Forward方向）にSAM2のpropagation推論を実施
-        - 得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチングし、マッチングしたtrack_idを次のブロックに引き継ぐ
+        - 得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチングし、マッチングしたtrack_idを次のブロックに引き継ぐ（[詳細は後述](CLAUDE.md#track_id_inheritancecontinuous_id)）
     - Track ID Inheritance="forward_backward_matching"のとき: 以下フローでForward＆Backward方向のトラッキング推論とtrack_idの継承を実施
         - 最初のフレームにDetection2D推論結果をプロンプトとして与え、時間順方向（Forward方向）にSAM2のpropagation推論を実施
         - 最後のフレームにDetection2D推論結果をプロンプトとして与え、時間逆方向（Backward方向）にSAM2のpropagation推論を実施
-        - Forward/Backward両トラッキングの各インスタンスの全フレームでの時空間IoUマッチング（Hungarian algorithm）を実施し、マッチしたインスタンス同士のtrack_idを次のブロックに引き継ぐ
+        - Forward/Backward両トラッキングの各インスタンスの全フレームでの時空間IoUマッチング（Hungarian algorithm）を実施し、マッチしたインスタンス同士のtrack_idを次のブロックに引き継ぐ（[詳細は後述](CLAUDE.md#track_id_inheritanceforward_backward_matching)）
 
 ### 推論に使用するパラメータ
 
@@ -529,7 +530,7 @@ Depth Boxfittingは、以下のフローで行われます
             - Ground Height Method=least_squaresのとき: 地面点群に最小二乗法で平面を当てはめ、この平面とボックスのXY方向中心が交わる位置の高さをボックス底面高さとする
         - `settings.BOX_BOTTOM_ESTIMATIONS="ego"`のとき: 基準ego座標系で高さ=0を底面高さとする（自車両と底面を揃える）
     - global_track点群のz座標の分位点（Top Estimationのz_percentileパラメータで指定）に基づき上面高さを決める（後で複数フレームを考慮して補正）
-- 全キーフレームのボックス当てはめ・底面推定が終わったら、hull_merged_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施し、ボックスへ反映する（モデルの読み込みを1回で済ませるため、全フレーム分をまとめて推定する。後述の「ボックス角度再推定」参照）
+- 全キーフレームのボックス当てはめ・高さ推定・底面推定が終わったら、hull_merged_track_id＆フレームごとに以下手順でAIモデルによるボックス角度の再推定を実施し、ボックスへ反映する（モデルの読み込みを1回で済ませるため、全フレーム分をまとめて推定する。後述の「ボックス角度再推定」参照）
     - 当該global_trackに複数のカメラ画像が含まれる（複数カメラ間で同一インスタンスが結合された）場合、使用している点群の点数（Max LiDAR Points to use DepthパラメータでDepth点群が削除されている場合、削除された点数もカウントする）が最大のカメラを選択する
     - ラベルごとに指定した`settings.BOX_ORIENTATION_ESTIMATIONS`辞書（keyがラベル名、valueが補正方法。webappのconfigで定義し、リクエストで渡す）に基づき、以下の角度推定を実施。（3方式とも推定は実装済み。orient_anything_combinedの推定はorient_anythingと同じで、ボックスへの反映方法だけが異なる）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="part_hoe"`のとき: PartHOEで補正。補正時の回転方法は以下のようにする
@@ -543,7 +544,7 @@ Depth Boxfittingは、以下のフローで行われます
             - 未満のとき: Orient-Anything V1 Largeで補正。補正時の回転方法は"part_hoe"のときと同様
                 - 回転後に新しいyawの軸で凸包の範囲を測り直し、それをボックスの長さ・幅と中心にする
         - `settings.BOX_ORIENTATION_ESTIMATIONS=None`のとき: 補正しない（フィッティングした元々のボックスの方向をそのまま使用）
-- 全キーフレームのボックスが揃ったら、hull_merged_track_idごとに所属する全てのフレームを考慮し、ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
+- hull_merged_track_idごとに所属する全てのフレームを考慮し、ラベルごとに指定した`settings.BOX_ORIENTATION_CORRECTIONS`辞書（keyがラベル名、valueが補正方法）に基づき、以下の角度補正を実施
     - `settings.BOX_ORIENTATION_CORRECTIONS="dbscan_interp"`のとき: 以下の流れで角度をクラスタリングし、最大クラスタ以外のフレームのボックスを補正する（`BOX_ORIENTATION_ESTIMATIONS=None`で個別角度補正を実施していないラベルのボックスは補正の対象外とする）
         - `settings.BOX_ORIENTATION_ESTIMATIONS="orient_anything_combined"`のケースで角度推定直角ずれフラグが立ったフレーム（推定角度と元々のボックスの前後方向のなす角度が`settings.ORIENT_INACCURATE_THRESHOLD`度以上）を、クラスタリング対象から除外する（この時点でクラスタリング対象のフレームが0個になったら、補正をせずに処理を終了）
         - 残りのフレームのボックス角度をグローバル座標に変換したのち、単位円上の2次元座標に変換してDBSCANクラスタリングを実施。パラメータは以下のように決める

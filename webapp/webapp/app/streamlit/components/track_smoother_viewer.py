@@ -50,9 +50,45 @@ def _circle(center, radius: float, n: int = 48) -> np.ndarray:
     return np.stack([center[0] + radius * np.cos(t), center[1] + radius * np.sin(t)], axis=1)
 
 
+def static_band(center, yaw: float, half_width: float,
+                points: np.ndarray | None = None) -> list[np.ndarray]:
+    """静止判定の幅方向の帯（中央値を通りボックスの向きに沿う 2 本の線）.
+
+    静止判定は幅方向（向きに垂直）のずれだけを見て、長さ方向は問わないので、
+    線の長さは観測点の長さ方向の広がり ± half_width とする（判定の範囲ではない）。
+    """
+    c = np.asarray(center, dtype=float)
+    u = np.array([math.cos(yaw), math.sin(yaw)])
+    v = np.array([-u[1], u[0]])
+    along = (np.asarray(points, dtype=float).reshape(-1, 2) - c) @ u if points is not None else []
+    lo = min(float(np.min(along)) if len(along) else 0.0, 0.0) - half_width
+    hi = max(float(np.max(along)) if len(along) else 0.0, 0.0) + half_width
+    return [np.stack([c + u * lo + v * side * half_width, c + u * hi + v * side * half_width])
+            for side in (-1.0, 1.0)]
+
+
+def displacement_ticks(first_xy, last_xy, max_displacement: float,
+                       half_length: float = 0.4) -> list[np.ndarray]:
+    """移動量の上限の目盛り（両中央値の中間点から ± max_displacement / 2 の位置の短い線）.
+
+    目盛りは両中央値を結ぶ方向に垂直に描く。両中央値が両方の目盛りの内側にあれば
+    移動量 < max_displacement。両中央値が重なるときは X 方向に置く。
+    """
+    a, b = np.asarray(first_xy, dtype=float), np.asarray(last_xy, dtype=float)
+    d = b - a
+    norm = float(np.linalg.norm(d))
+    u = d / norm if norm > 1e-9 else np.array([1.0, 0.0])
+    v = np.array([-u[1], u[0]])
+    mid = (a + b) / 2.0
+    return [np.stack([mid + u * side * max_displacement / 2.0 - v * half_length,
+                      mid + u * side * max_displacement / 2.0 + v * half_length])
+            for side in (-1.0, 1.0)]
+
+
 def build_track_smoother_figure(
     observations: list[dict[str, Any]],
     static_groups: list[dict[str, Any]],
+    static_displacements: list[dict[str, Any]] | None = None,
     *,
     height: int = 720,
 ) -> go.Figure:
@@ -64,7 +100,13 @@ def build_track_smoother_figure(
             "observed_xy", "final_xy", "smoothed_xy" | None, "outlier",
             "position_corrected", "yaw_corrected", "hover",
             "box" | None, "before_box" | None}``。box は ``(中心 XY, 長さ, 幅, yaw)``
-        static_groups: ``{"color", "median_xy", "radius"}``（静止トラックの中央値と判定半径）
+        static_groups: ``{"global_id", "color", "median_xy", "radius", "yaw" | None}``
+            （静止グループの中央値・Static Radius・向きの中央値）。yaw があれば
+            幅方向の帯（中央値 ± radius）を、無い古い run では半径 radius の円を描く
+        static_displacements: 静止トラック（box_merged_track）ごとの
+            ``{"color", "first_xy", "last_xy", "max_displacement"}``（外れ値を除いた観測の
+            最初と最後の 3 分の 1 の中央値と Static Max Displacement）。中央値を薄い
+            白抜きの四角で、移動量の上限を中間点から ± max_displacement / 2 の目盛りで描く
     """
     fig = go.Figure()
     by_track: dict[str, list[dict[str, Any]]] = {}
@@ -104,7 +146,7 @@ def build_track_smoother_figure(
                         showlegend=False,
                     ))
 
-        # 位置を直したフレーム: 修正前（×）→ 修正後（丸）の矢印
+        # 位置を直したフレーム: 修正前（白抜きの○ / △）→ 修正後（小さな丸）の矢印
         corrected = [o for o in obs if o["position_corrected"]]
         if corrected:
             xs, ys, sizes = [], [], []
@@ -127,14 +169,14 @@ def build_track_smoother_figure(
             ))
 
         # 観測点（修正前の位置）
+        # 形で外れ値か（三角）どうか（丸）を、白抜きで位置の補正の有無を表す。短いトラックは×
         symbols = []
         for o in obs:
             if o["kind"] == KIND_SHORT:
-                symbols.append("circle-open")
-            elif o["outlier"] or o["position_corrected"]:
                 symbols.append("x")
             else:
-                symbols.append("circle")
+                shape = "triangle-up" if o["outlier"] else "circle"
+                symbols.append(shape + ("-open" if o["position_corrected"] else ""))
         fig.add_trace(go.Scatter(
             x=[o["observed_xy"][0] for o in obs], y=[o["observed_xy"][1] for o in obs],
             mode="markers", name=str(global_id), showlegend=False,
@@ -148,11 +190,17 @@ def build_track_smoother_figure(
             ),
         ))
 
-    # 静止トラックの中央値と判定半径
+    # 静止グループの中央値と、静止判定の幅（向きに垂直な方向の ± Static Radius）
     for group in static_groups:
-        circle = _circle(group["median_xy"], group["radius"])
+        if group.get("yaw") is not None:
+            points = [o["observed_xy"] for o in by_track.get(group.get("global_id"), [])]
+            xs, ys = _joined(static_band(group["median_xy"], group["yaw"], group["radius"],
+                                         np.asarray(points) if points else None))
+        else:
+            circle = _circle(group["median_xy"], group["radius"])
+            xs, ys = circle[:, 0], circle[:, 1]
         fig.add_trace(go.Scatter(
-            x=circle[:, 0], y=circle[:, 1], mode="lines", opacity=LINE_OPACITY,
+            x=xs, y=ys, mode="lines", opacity=LINE_OPACITY,
             hoverinfo="skip", showlegend=False,
             line=dict(color=group["color"], width=1, dash="dot"),
         ))
@@ -163,6 +211,24 @@ def build_track_smoother_figure(
                         line=dict(color="black", width=1)),
         ))
 
+    # 静止判定の正味の移動量（最初と最後の 3 分の 1 の中央値と、上限の目盛り）
+    for disp in static_displacements or []:
+        xs, ys = _joined(displacement_ticks(disp["first_xy"], disp["last_xy"],
+                                            disp["max_displacement"]))
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines", opacity=LINE_OPACITY, hoverinfo="skip",
+            showlegend=False, line=dict(color=disp["color"], width=2),
+        ))
+        fig.add_trace(go.Scatter(
+            x=[disp["first_xy"][0], disp["last_xy"][0]],
+            y=[disp["first_xy"][1], disp["last_xy"][1]],
+            mode="markers", opacity=LINE_OPACITY, showlegend=False,
+            text=["最初の 1/3 の中央値", "最後の 1/3 の中央値"],
+            hovertemplate="%{text}<extra></extra>",
+            marker=dict(symbol="square-open", size=11, color=disp["color"],
+                        line=dict(width=2)),
+        ))
+
     # 自車（原点）
     fig.add_trace(go.Scatter(
         x=[0.0], y=[0.0], mode="markers", name="ego", showlegend=False, hoverinfo="name",
@@ -171,13 +237,22 @@ def build_track_smoother_figure(
 
     # 凡例（色はトラックごとなので、形と線の意味だけを灰色で示す）
     legend = [
-        ("● 非外れ値", dict(mode="markers", marker=dict(symbol="circle", color=LEGEND_COLOR))),
-        ("× 外れ値 / 修正前", dict(mode="markers", marker=dict(symbol="x", color=LEGEND_COLOR))),
-        ("○ 短いトラック", dict(mode="markers",
-                              marker=dict(symbol="circle-open", color=LEGEND_COLOR))),
-        ("◆ 静止中央値", dict(mode="markers", marker=dict(symbol="diamond", color=LEGEND_COLOR))),
-        ("─ 平滑化軌跡", dict(mode="lines", line=dict(color=LEGEND_COLOR))),
-        ("┄ 結合区間", dict(mode="lines", line=dict(color=LEGEND_COLOR, dash="dash"))),
+        ("非外れ値", dict(mode="markers", marker=dict(symbol="circle", color=LEGEND_COLOR))),
+        ("外れ値", dict(mode="markers", marker=dict(symbol="triangle-up", color=LEGEND_COLOR))),
+        ("非外れ値・位置の修正前", dict(mode="markers",
+                                marker=dict(symbol="circle-open", color=LEGEND_COLOR))),
+        ("外れ値・位置の修正前", dict(mode="markers",
+                               marker=dict(symbol="triangle-up-open", color=LEGEND_COLOR))),
+        ("短いトラック", dict(mode="markers", marker=dict(symbol="x", color=LEGEND_COLOR))),
+        ("静止中央値", dict(mode="markers", marker=dict(symbol="diamond", color=LEGEND_COLOR))),
+        ("静止判定の幅", dict(mode="lines", line=dict(color=LEGEND_COLOR, dash="dot"))),
+        ("最初 / 最後の 1/3 の中央値", dict(
+            mode="markers", marker=dict(symbol="square-open", color=LEGEND_COLOR))),
+        ("移動量の上限", dict(
+            mode="markers", marker=dict(symbol="line-ns-open", color=LEGEND_COLOR,
+                                        line=dict(width=2)))),
+        ("平滑化軌跡", dict(mode="lines", line=dict(color=LEGEND_COLOR))),
+        ("結合区間", dict(mode="lines", line=dict(color=LEGEND_COLOR, dash="dash"))),
     ]
     for name, style in legend:
         fig.add_trace(go.Scatter(x=[None], y=[None], name=name, showlegend=True, **style))
@@ -186,7 +261,8 @@ def build_track_smoother_figure(
         height=height, margin=dict(l=0, r=0, t=10, b=0),
         xaxis_title="X [m] (前方)", yaxis_title="Y [m] (左方)",
         dragmode="pan", showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0.0),
+        # 凡例は図の右側に縦に並べる（記号は凡例自身が描くので名前には入れない）
+        legend=dict(orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.01),
     )
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig

@@ -2995,6 +2995,7 @@ with smoother_tab_view:
             params = ts_diag.get("params") or {}
             outlier_thr = params.get("outlier_threshold")
             static_radius = float(params.get("static_radius", 1.0))
+            static_max_displacement = float(params.get("static_max_displacement", 2.0))
 
             observations = []
             for f in label_rows:
@@ -3055,11 +3056,43 @@ with smoother_tab_view:
             for group in ts_diag.get("static_groups") or []:
                 gid = str(group["global_track_id"])
                 if gid in shown_globals and group.get("median_xy"):
+                    # 向きの中央値はグローバル座標なので、表示する sample の座標へ回す
+                    yaw = group.get("median_yaw")
                     static_groups.append({
-                        "color": color_of[gid], "radius": static_radius,
+                        "global_id": gid, "color": color_of[gid], "radius": static_radius,
                         "median_xy": _ts_to_display(np.asarray(group["median_xy"]),
                                                     display_pose)[0],
+                        "yaw": (None if yaw is None else float(yaw)
+                                - quaternion_to_yaw(display_pose["rotation"])),
                     })
+
+            # 静止判定の正味の移動量: box_merged_track ごとに、外れ値を除いた観測の
+            # 最初と最後の 3 分の 1 の中央値（推論と同じくグローバル座標で計算してから表示へ）
+            static_displacements = []
+            for track in ts_diag.get("tracks") or []:
+                gid = str(track["global_track_id"])
+                # 静止グループに結合された短いトラックは判定していない（displacement が無い）
+                if (track.get("kind") != "static" or track.get("displacement") is None
+                        or gid not in shown_globals):
+                    continue
+                rows = sorted(
+                    (f for f in label_rows
+                     if str(f["fit_metrics"]["motion_correction"]["box_merged_track_id"])
+                     == str(track["box_merged_track_id"])
+                     and not f["fit_metrics"]["motion_correction"].get("outlier")),
+                    key=lambda f: sample_number.get(sample_of.get(f["sample_data_token"]), 0))
+                if not rows:
+                    continue
+                xy = np.array([f["fit_metrics"]["motion_correction"]["observed_xy"]
+                               for f in rows], dtype=float)
+                third = max(1, len(xy) // 3)
+                first, last = _ts_to_display(
+                    np.stack([np.median(xy[:third], axis=0), np.median(xy[-third:], axis=0)]),
+                    display_pose)
+                static_displacements.append({
+                    "color": color_of[gid], "first_xy": first, "last_xy": last,
+                    "max_displacement": static_max_displacement,
+                })
 
             kinds = Counter(
                 mc["kind"] for mc in {
@@ -3072,7 +3105,8 @@ with smoother_tab_view:
                 f"位置修正 {sum(o['position_corrected'] for o in observations)} / "
                 f"角度修正 {sum(o['yaw_corrected'] for o in observations)} フレーム"
             )
-            render_bev(build_track_smoother_figure(observations, static_groups))
+            render_bev(build_track_smoother_figure(observations, static_groups,
+                                                   static_displacements))
 
 # ------------------------------------------------------------------
 # Box on Cam タブ（3D ボックスをカメラ画像へ投影）
