@@ -50,6 +50,7 @@
         - NMS Threshold: 検出したバウンディングボックスでNMSを実施するIoUの閾値にかける倍率。sliderで選択。実際に適用する閾値は、同クラス間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの（テーブル表示）、別クラス間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたもの（テキスト表示）となる
     - Re-Classificationタブ
         - Re-Classification Crop Margin: SigLIP2での再判定に使用する切り出し画像作成時に、元来のGroundingDINO検出バウンディングボックスから拡張する領域の割合。下に再判定の対象ラベル（`settings.RE_CLASSIFICATION_CANDIDATES`のkey）を表示
+        - Re-Classification Delete Margin: 再判定で「使わない」候補（`settings.RE_CLASSIFICATION_CANDIDATES`のvalueがNone）の最大スコアが、残す候補の最大スコアをこの値より大きく上回ったときだけボックスを削除する（SigLIP2のsigmoidスコアの差）。0ならスコア最大の候補で決める。デフォルト値`settings.DEFAULT_RECLASSIFICATION_DELETE_MARGIN`
     - Duplicate Suppressionタブ
         - IoS Delete Threshold: ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士が結合され、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した方法でボックスが削除される。下に「小さい方を削除」「大きい方を削除」「複数を内包する大きい方のみ削除」のラベル一覧を表示
     - Whole-Image Fallbackタブ: カメラ・フレーム内でのボックス検出数が0個だった場合のWhole-Image再判定（検出0件フレームの救済推論）関係。下に採用候補・除外候補（`settings.WHOLE_IMAGE_CANDIDATES`のvalueがNoneでないもの・Noneのもの）を表示

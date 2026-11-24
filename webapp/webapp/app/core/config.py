@@ -134,10 +134,10 @@ class Settings(BaseSettings):
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 2
     # スコア閾値（Category Groupごとに指定。適用時はこれにUIのScore Thresholdパラメータで倍率をかける）
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
-        "vehicle": 0.3,
+        "vehicle": 0.23,
         "road_object": 0.25,
         "two_wheeler": 0.3,
-        "pedestrian": 0.3,
+        "pedestrian": 0.25,
     }
     # 同一label 内での NMS の閾値（Category Groupごとに指定。適用時はこれにUIのNMS Thresholdパラメータで倍率をかける）
     DET2D_NMS_SAME_CLASS_IOUS: dict[str, float] = {
@@ -147,7 +147,7 @@ class Settings(BaseSettings):
         "pedestrian": 0.6,
     }
     # 異なるラベル間での NMS の閾値（全体で共通。適用時はこれにUIのNMS Thresholdパラメータで倍率をかける）
-    DET2D_NMS_CROSS_CLASS_IOU: float = 0.85
+    DET2D_NMS_CROSS_CLASS_IOU: float = 0.6
 
     # ------ Re-classification (SigLIP2 によるラベル再判定) ------
     # GroundingDINO はプロンプト由来の取り違えが多いため、
@@ -193,6 +193,11 @@ class Settings(BaseSettings):
     # 文脈が写らないと zero-shot 分類が当たらないため、少し広めに取る
     DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO: float = 0.1
     RECLASSIFICATION_CROP_MARGIN_RATIO_MAX: float = 1.0
+    # 「使わない」候補（RE_CLASSIFICATION_CANDIDATES の値が None）の最大スコアが、残す候補の
+    # 最大スコアをこの値より大きく上回ったときだけ削除する（SigLIP2 の sigmoid スコアの差）。
+    # 0 ならスコア最大の候補で決める。正しい検出を消すと見逃しになるため、確信が高いときだけ消す
+    DEFAULT_RECLASSIFICATION_DELETE_MARGIN: float = 0.002
+    RECLASSIFICATION_DELETE_MARGIN_MAX: float = 0.05
 
     # ------ Duplicate Suppression (IoSによる重複検出の抑制) ------
     # 同じラベルのボックスがほぼ内包関係にあるとき、IoU の NMS では

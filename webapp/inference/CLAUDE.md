@@ -18,8 +18,9 @@ Detection2Dは、以下のフローで行われます
 - GroundingDINOで得られた各バウンディングボックスのラベルを、以下手順でSigLIP2により再判定
     - GroundingDINOのラベルに応じて`settings.RE_CLASSIFICATION_CANDIDATES`から再判定のラベル候補の辞書を取得（辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す。valueがNoneならそのボックスを削除）
     - バウンディングボックスをRe-Classification Crop Marginだけ拡張して切り出し画像を作成
-    - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、最もスコアの大きいラベルを採用
-    - 採用されたラベルに紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照し、最終的なラベルとする
+    - ラベル候補と切り出し画像をSigLIP2に入力してzero-shot classification推論を実施し、全候補のスコア（sigmoid）を得る
+    - 「使わない」候補（valueがNone）の最大スコアが、残す候補（valueがNoneでない）の最大スコアをRe-Classification Delete Marginより大きく上回った場合のみ、そのボックスを削除する（`deleted_by="reclassification"`）。0なら単純にスコア最大の候補で決める。取り違えで正しい検出を消すと見逃しになるため、確信が高いときだけ消す
+    - 削除しない場合は、残す候補のうち最もスコアの大きいものを採用し、紐づくvalueを`settings.RE_CLASSIFICATION_CANDIDATES`から参照して最終的なラベルとする
     - リクエストの`return_reclassification_scores`がTrueのときは、全候補のスコアを各ボックスの`reclassification_scores`に入れて返す（閾値探索用のキャッシュ`tools/build_det2d_cache.py`で使う。通常の推論ではFalse）
 - 再判定後の最終ラベルが等しく内包に近い関係にあるボックス同士を、以下フローで結合
     - 最終ラベルが等しいボックス同士を総当たりでIoSで閾値判定（1つのボックスに2つのボックスが内包される場合、両方のボックスに判定を適用したいため、Hungarianのように1対1で紐づけるマッチングではなく、同ラベルのボックス同士を総当たりでIoS判定することに注意）
@@ -63,6 +64,7 @@ UI（Detection2Dページの画面上部の「Inference Parameters」エクス�
 |Score Threshold|Detection2D|float|検出したバウンディングボックスのscore閾値にかける倍率。実際に適用する閾値は、カテゴリグループごとに異なる`settings.DET2D_DEFAULT_SCORE_THRESHOLDS`にここで選択した倍率を掛けたものとなる（1.0で頭打ち）|1.0|0.0〜2.0|
 |NMS Threshold|Detection2D|float|検出したバウンディングボックスでNMSを実施する際に、IoUの閾値にかける倍率。実際に適用する閾値は、同ラベル間のbox結合はカテゴリグループごとに異なる`settings.DET2D_NMS_SAME_CLASS_IOUS`にここで選択した倍率を掛けたもの、別ラベル間のbox結合は`settings.DET2D_NMS_CROSS_CLASS_IOU`にここで選択した倍率を掛けたものとなる（いずれも1.0で頭打ち）|1.0|0.0〜2.0|
 |Re-Classification Crop Margin|Re-Classification|float|SigLIP2の再判定用切り出し画像をGroudingDINOのバウンディングボックスから拡張する割合（ボックスの幅・高さに対する比）|`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`（0.1）|0.0〜`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|
+|Re-Classification Delete Margin|Re-Classification|float|再判定で「使わない」候補（`settings.RE_CLASSIFICATION_CANDIDATES`のvalueがNone）の最大スコアが、残す候補の最大スコアをこの値より大きく上回ったときだけボックスを削除する（SigLIP2のsigmoidスコアの差）。0ならスコア最大の候補で決める|`settings.DEFAULT_RECLASSIFICATION_DELETE_MARGIN`（0.002）|0.0〜`settings.RECLASSIFICATION_DELETE_MARGIN_MAX`|
 |IoS Delete Threshold|Duplicate Suppression|float|ボックス同士を総当たりでIoSで結合判定する際の、IoSの閾値。この閾値以上のボックス同士について、`settings.DET2D_IOS_DELETE_DIRECTION`でラベルごとに指定した方法でボックスを削除する。0で無効|`settings.DET2D_IOS_DELETE_THRESHOLD`（0.8）|0.0〜`settings.DET2D_IOS_DELETE_THRESHOLD_MAX`|
 |Whole-Image Score Threshold|Whole-Image Fallback|float|Whole-Image再判定時のSigLIP2スコアの閾値。この閾値未満の結果は採用しない（論理削除として残るので、表示オプションのShow deletedで確認できる）|`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`（0.04）|0.0〜`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|
 |Whole-Image Resize Ratio|Whole-Image Fallback|float|Whole-Image再判定時の画像リサイズ率|`settings.DEFAULT_WHOLE_IMAGE_RESIZE_RATIO`（0.5）|0.1〜`settings.WHOLE_IMAGE_RESIZE_RATIO_MAX`|
@@ -84,6 +86,8 @@ UI（Detection2Dページの画面上部の「Inference Parameters」エクス�
 |`settings.RE_CLASSIFICATION_CANDIDATES`|dict[str, dict[str,str]]|Detection2Dのラベルごとに、SigLIP2によるラベル再判定のラベル候補と最終ラベルを指定するdict。keyがDetection2Dが付けたラベル、valueのkeyがラベル候補、valueのvalueが最終的に割り当てるラベルとなる。最終的に割り当てるラベルがNoneの場合、そのボックスは削除する|[config.py参照](../webapp/app/core/config.py)|Detectionの間違いを、ラベル違いと過検出に分けて判断。ラベル違いは正しいラベルをkey・label共に指定し、過検出はその物体の真の種類（判定対象のラベルには含まれない）をkeyに、Noneをvalueに指定する|
 |`settings.DEFAULT_RECLASSIFICATION_CROP_MARGIN_RATIO`|float|前述のRe-Classification Crop Marginパラメータのデフォルト値|0.1|実データで調整。多少ずれてもSigLIPの分類能力が高いので割とうまくいきそうな印象|
 |`settings.RECLASSIFICATION_CROP_MARGIN_RATIO_MAX`|float|前述のRe-Classification Crop Marginパラメータの最大値|1.0|原理上の最大値|
+|`settings.DEFAULT_RECLASSIFICATION_DELETE_MARGIN`|float|前述のRe-Classification Delete Marginパラメータのデフォルト値|0.002|tools/tune_det2d_thresholds.py による探索（50シーン・10シード、β=2）。0だと「使わない」候補を持つ検出の約43%が削除され、正しい検出まで消えて見逃しが増えていた|
+|`settings.RECLASSIFICATION_DELETE_MARGIN_MAX`|float|前述のRe-Classification Delete Marginパラメータの最大値|0.05|sigmoidスコアの差の原理上の最大値|
 |`settings.WHOLE_IMAGE_CANDIDATES`|dict[str, dict[str,str]]|Whole-Image再判定の、SigLIP2推論のラベル候補と最終ラベルを指定するdict。辞書のkeyがラベル候補、valueがそのラベル候補と判定されたときに最終的に割り当てるラベルを表す|[config.py参照](../webapp/app/core/config.py)|①truckやbus等の画面いっぱいに映ってDetection2Dで見逃されやすいオブジェクト、②road,building,vegetation等のありがちな背景クラスをkeyに加える。①はvalueを正解ラベル名、②はvalueをNoneとする|
 |`settings.DEFAULT_WHOLE_IMAGE_SCORE_THRESHOLD`|float|Whole-Image Score Thresholdパラメータのデフォルト値|0.04|実データで調整。SigLIP2のスコアは確率ではないシグモイド値なので、1よりかなり小さな値が適正値になる|
 |`settings.WHOLE_IMAGE_SCORE_THRESHOLD_MAX`|float|Whole-Image Score Thresholdパラメータの最大値|1.0|原理上の最大値|

@@ -8,11 +8,11 @@
   - 同一クラス NMS の IoU（グループごと） DET2D_NMS_SAME_CLASS_IOUS
   - クラス間 NMS の IoU                  DET2D_NMS_CROSS_CLASS_IOU
   - IoS 結合の閾値                        DET2D_IOS_DELETE_THRESHOLD
-  - 再判定の削除マージン（**config に未実装の新しいパラメータ**）:
+  - 再判定の削除マージン                  DEFAULT_RECLASSIFICATION_DELETE_MARGIN
     「使わない」候補（RE_CLASSIFICATION_CANDIDATES の値が None）の最大スコアが、残す候補の
-    最大スコアよりマージン以上高いときだけ削除する。0 なら現在の挙動（スコア最大の候補で決める）
+    最大スコアをマージンより大きく上回ったときだけ削除する。0 ならスコア最大の候補で決める
 
---space thresholds ならスコア閾値だけを探し、残りは config の値（マージンは 0）に固定する。
+--space thresholds ならスコア閾値だけを探し、残りは config の値に固定する。
 
 ## 後処理の再現（推論サーバーと同じ順）
 
@@ -104,13 +104,14 @@ import numpy as np
 from app.core.config import get_settings
 from app.services.label_service import label_groups, nusc_category_to_label
 
-# 探索範囲（0.01 刻み）
+# 探索範囲（0.01 刻み）。変えたら SPACE_VERSION を上げる（範囲の違う試行を同じ study に混ぜない）
 SCORE_RANGE = (0.10, 0.50)
 NMS_SAME_RANGE = (0.40, 0.90)
-NMS_CROSS_RANGE = (0.50, 0.95)
+NMS_CROSS_RANGE = (0.30, 0.95)  # v1 は 0.50〜。最良が下限に張り付いたので広げた
 IOS_RANGE = (0.60, 1.00)
-MARGIN_RANGE = (0.00, 0.30)
+MARGIN_RANGE = (0.00, 0.80)  # v1 は 〜0.30。最良が上限に張り付いたので広げた
 STEP = 0.01
+SPACE_VERSION = 2
 
 MULTI_BIG_MIN_CHILDREN = 2  # postprocess.MULTI_BIG_MIN_CHILDREN と同じ
 
@@ -371,7 +372,7 @@ def _current_params(settings, group_names: list[str]) -> dict:
         "nms_same": {g: settings.DET2D_NMS_SAME_CLASS_IOUS[g] for g in group_names},
         "nms_cross": settings.DET2D_NMS_CROSS_CLASS_IOU,
         "ios": settings.DET2D_IOS_DELETE_THRESHOLD,
-        "margin": 0.0,
+        "margin": settings.DEFAULT_RECLASSIFICATION_DELETE_MARGIN,
     }
 
 
@@ -453,7 +454,7 @@ def _print_config(p: dict, group_names: list[str]) -> None:
     print(f"    DET2D_NMS_SAME_CLASS_IOUS = { {g: r2(p['nms_same'][g]) for g in group_names} }")
     print(f"    DET2D_NMS_CROSS_CLASS_IOU = {r2(p['nms_cross'])}")
     print(f"    DET2D_IOS_DELETE_THRESHOLD = {r2(p['ios'])}")
-    print(f"    再判定の削除マージン（未実装） = {r2(p['margin'])}", flush=True)
+    print(f"    DEFAULT_RECLASSIFICATION_DELETE_MARGIN = {r2(p['margin'])}", flush=True)
 
 
 def _seed_spec(seeds: list[int]) -> str:
@@ -465,7 +466,8 @@ def _seed_spec(seeds: list[int]) -> str:
 
 def _study_name(args: argparse.Namespace, n_scenes: int, seed_part: str) -> str:
     return (f"s{n_scenes}_h{args.holdout}_b{args.beta}_p{args.min_precision}_{args.space}"
-            f"_{seed_part}_vis{args.min_visibility}_iou{args.match_iou}_min{args.min_label_gt}")
+            f"_{seed_part}_vis{args.min_visibility}_iou{args.match_iou}_min{args.min_label_gt}"
+            f"_v{SPACE_VERSION}")
 
 
 def _run_seed(optuna, env: SimpleNamespace, seed: int) -> dict | None:

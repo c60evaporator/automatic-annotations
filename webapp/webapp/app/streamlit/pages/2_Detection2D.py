@@ -199,6 +199,14 @@ with param_col:
                 help=("SigLIP2 の再判定で切り出す範囲を、ボックスの幅・高さに対して"
                       "どれだけ広げるか。周囲が写らないと zero-shot 分類が当たらない"),
             )
+            reclassify_delete_margin = st.slider(
+                "Re-Classification Delete Margin", 0.0,
+                settings.RECLASSIFICATION_DELETE_MARGIN_MAX,
+                value=settings.DEFAULT_RECLASSIFICATION_DELETE_MARGIN, step=0.001,
+                help=("「使わない」候補（RE_CLASSIFICATION_CANDIDATES の値が None）の最大スコアが、"
+                      "残す候補の最大スコアをこの値より大きく上回ったときだけ削除する"
+                      "（SigLIP2 の sigmoid スコアの差）。0 ならスコア最大の候補で決める"),
+            )
             st.caption(
                 "対象ラベル: "
                 + ", ".join(settings.RE_CLASSIFICATION_CANDIDATES)
@@ -305,6 +313,7 @@ def _build_payload() -> dict:
             for label, mapping in settings.RE_CLASSIFICATION_CANDIDATES.items()
         },
         "reclassification_crop_margin_ratio": float(reclassify_margin),
+        "reclassification_delete_margin": float(reclassify_delete_margin),
         # 内包関係の重複検出を落とす（IoU の NMS では合体できないケース）
         # 検出 0 件のフレームを画像全体の分類で救済する
         "whole_image_candidates": dict(settings.WHOLE_IMAGE_CANDIDATES),

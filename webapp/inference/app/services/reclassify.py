@@ -1,8 +1,12 @@
 """検出ボックスのラベル再判定.
 
 GroundingDINO が付けたラベルごとに候補を切り替えて zero-shot 分類し、
-対応表に従って最終ラベルを決める。対応表の値が None のボックスは
-「使わない」＝論理削除の対象として印を付ける。
+対応表に従って最終ラベルを決める。対応表の値が None の候補（「使わない」候補）が
+選ばれたボックスは、論理削除の対象として印を付ける。
+
+削除は「使わない」候補の最大スコアが、残す候補の最大スコアより delete_margin
+以上高いときだけ行う（SigLIP2 の sigmoid スコアの差）。0 なら単純にスコア最大の
+候補で決める。取り違えで正しい検出を消すと見逃しになるため、確信が高いときだけ消す。
 
 行そのものは消さない。UI で「どれが再判定で落ちたか」を確認したいので、
 削除は is_deleted のフラグで表す。
@@ -26,6 +30,7 @@ def reclassify_boxes(
     candidates: dict[str, dict[str, str | None]],
     *,
     margin_ratio: float = 0.1,
+    delete_margin: float = 0.0,
     keep_scores: bool = False,
 ) -> int:
     """1 フレーム分のボックスを再判定し、label / is_deleted を書き換える.
@@ -33,6 +38,8 @@ def reclassify_boxes(
     Args:
         candidates: ``{検出ラベル: {分類候補: 最終ラベル or None}}``
         margin_ratio: 切り出し時にボックスを広げる比率
+        delete_margin: 「使わない」候補の最大スコアが残す候補の最大スコアを
+            この値より大きく上回ったときだけ削除する（0 ならスコア最大の候補で決める）
         keep_scores: True なら全候補のスコアを ``reclassification_scores`` に残す
             （閾値探索用のキャッシュで、判定の規則を後から変えて評価するため）
 
@@ -72,35 +79,32 @@ def reclassify_boxes(
             for box in targets
         ]
         try:
-            if keep_scores:
-                scores = classifier.score_batch(crops, candidate_labels)
-                for box, row in zip(targets, scores):
-                    box["reclassification_scores"] = dict(zip(candidate_labels, row))
-                # classify_batch と同じく、スコアが最大の候補を選ぶ
-                predictions = [
-                    candidate_labels[max(range(len(row)), key=row.__getitem__)]
-                    if row else None
-                    for row in scores
-                ]
-            else:
-                predictions = classifier.classify_batch(crops, candidate_labels)
+            scores = classifier.score_batch(crops, candidate_labels)
         except Exception as exc:  # noqa: BLE001
             # 1 ラベル分の失敗で全体を止めない。元のラベルを残す
             logger.warning("re-classification failed for %s: %s", target_label, exc)
             continue
 
-        for box, prediction in zip(targets, predictions):
-            if prediction is None:
+        keep_cands = [i for i, c in enumerate(candidate_labels) if mapping[c] is not None]
+        drop_cands = [i for i, c in enumerate(candidate_labels) if mapping[c] is None]
+        for box, row in zip(targets, scores):
+            if keep_scores:
+                box["reclassification_scores"] = dict(zip(candidate_labels, row))
+            if not row:
                 # 判定できなかったものは元のラベルのまま残す
                 continue
-            final_label = mapping.get(prediction)
-            box["reclassified_as"] = prediction
-            if final_label is None:
-                # 対応表が None = このボックスは使わない（論理削除）
+            best_keep = max(keep_cands, key=row.__getitem__, default=None)
+            best_drop = max(drop_cands, key=row.__getitem__, default=None)
+            if best_drop is not None and (
+                best_keep is None or row[best_drop] > row[best_keep] + delete_margin
+            ):
+                # 「使わない」候補の確信が十分高い = このボックスは使わない（論理削除）
+                box["reclassified_as"] = candidate_labels[best_drop]
                 box["is_deleted"] = True
                 box["deleted_by"] = "reclassification"
             else:
-                box["label"] = final_label
+                box["reclassified_as"] = candidate_labels[best_keep]
+                box["label"] = mapping[candidate_labels[best_keep]]
                 box["is_deleted"] = False
             reclassified += 1
 

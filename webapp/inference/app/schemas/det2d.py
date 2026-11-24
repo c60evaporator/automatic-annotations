@@ -68,6 +68,9 @@ class Detection2DRequest(BaseModel):
     )
     # 切り出し時にボックスを広げる比率
     reclassification_crop_margin_ratio: float = 0.1
+    # 「使わない」候補の最大スコアが、残す候補の最大スコアをこの値より大きく
+    # 上回ったときだけ削除する（SigLIP2 の sigmoid スコアの差）。0 ならスコア最大の候補で決める
+    reclassification_delete_margin: float = Field(default=0.0, ge=0.0, le=1.0)
     # True なら再判定した全候補のスコアを返す（閾値探索用のキャッシュ作成。
     # tools/build_det2d_cache.py）。通常の推論では使わない
     return_reclassification_scores: bool = False
