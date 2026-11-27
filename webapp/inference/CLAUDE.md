@@ -239,6 +239,12 @@ Instance Trackingは、以下のフローで行われます
         - 最初のフレームにDetection2D推論結果をプロンプトとして与え、時間順方向（Forward方向）にSAM2のpropagation推論を実施
         - 最後のフレームにDetection2D推論結果をプロンプトとして与え、時間逆方向（Backward方向）にSAM2のpropagation推論を実施
         - Forward/Backward両トラッキングの各インスタンスの全フレームでの時空間IoUマッチング（Hungarian algorithm）を実施し、マッチしたインスタンス同士のtrack_idを次のブロックに引き継ぐ（[詳細は後述](CLAUDE.md#track_id_inheritanceforward_backward_matching)）
+- Track ID Inheritance="forward_backward_matching"かつMiss Detection Track Mergeがオンのとき、カメラ → Sample Interval間隔のキーフレームのループで、以下手順でDetection2Dで検出が漏れたインスタンスを結合（[詳細は後述](CLAUDE.md#detection2dの検出漏れの結合miss-detection-track-merge)）
+    - 同一カメラにおいて、前のブロックからForwardで伝播されてきたインスタンスと、次のブロックからBackwardで伝播されてきたインスタンス（どちらもそのキーフレームのマスク）が以下条件を満たす場合、同じtrack_idを振り直す（インスタンスを結合する）
+        - ラベルが同じ（1フレームだけで判定するため、IoU Label Matchに関わらずラベルの完全一致を要求する）
+        - track_idが異なる
+        - Forwardで伝播されてきたインスタンスはそのキーフレーム以降に続かず（前のブロックでBackwardとマッチしなかった）、Backwardで伝播されてきたインスタンスはそのキーフレームより前に存在しない（次のブロックでForwardとマッチせず新規に採番された）
+        - Mask IoUがMask IoU Threshold以上（複数の組が条件を満たす場合はHungarian algorithmで1対1に対応付ける）
 
 ### 推論に使用するパラメータ
 
@@ -246,7 +252,7 @@ Instance Trackingでは、以下のパラメータを指定できます
 
 #### UIで指定可能なパラメータ
 
-UI（Instance Trackingページの画面上部の「Inference Parameters」エクスパンダー）からは以下パラメータを指定できます。Box Promptはタブの外（全処理に共通の入力）にあり、それ以外は「Instance Tracking」「Track ID Inheritance」の2タブに分かれています（括弧内は現在の設定値）
+UI（Instance Trackingページの画面上部の「Inference Parameters」エクスパンダー）からは以下パラメータを指定できます。Box Promptはタブの外（全処理に共通の入力）にあり、それ以外は「Instance Tracking」「Track ID Inheritance」「Miss Detection Track Merge」の3タブに分かれています（括弧内は現在の設定値）
 
 |パラメータ名|タブ|型|内容|デフォルト値|範囲|
 |---|---|---|---|---|---|
@@ -256,6 +262,8 @@ UI（Instance Trackingページの画面上部の「Inference Parameters」エ�
 |IoU Method|Track ID Inheritance|"box" or "mask"|上記IoUマッチングで使用するIoUの計算方法を、マスクの外接矩形同士のIoU（"box"）にするか、Mask IoU（"mask"）にするかを選択|`settings.DEFAULT_TRACKING_IOU_METHOD`（"box"）|-|
 |IoU Label Match|Track ID Inheritance|"label", "category_group", or "none"|上記IoUマッチング時にラベル（"label"）またはカテゴリグループ（"category_group"）の一致も要求するか、ラベルを問わないか（"none"）を指定|`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`（"category_group"）|-|
 |Track ID Inheritance|Track ID Inheritance|"continuous_id" or "forward_backward_matching"|IoUマッチングに使用する手法を指定する。両手法の詳細は後述の「推論モデルの実装」参照|`settings.DEFAULT_TRACK_ID_INHERITANCE`（"forward_backward_matching"）|-|
+|Miss Detection Track Merge|Miss Detection Track Merge|bool|Detection2Dの検出漏れで途切れたトラックを、Forward/Backwardのマスクの照合でつなぎ直すかどうか（Track ID Inheritance="forward_backward_matching"のときのみ有効）|`settings.DEFAULT_MISS_DETECTION_MERGE`（True）|-|
+|Mask IoU Threshold|Miss Detection Track Merge|float|上記の結合で、同じインスタンスとみなすMask IoUの閾値|`settings.DEFAULT_MISS_DETECTION_MERGE_IOU_THRESHOLD`（0.5）|0.0〜1.0|
 
 #### 設定ファイルから指定するパラメータ
 
@@ -270,6 +278,8 @@ UI（Instance Trackingページの画面上部の「Inference Parameters」エ�
 |`settings.DEFAULT_TRACKING_IOU_METHOD`|"box" or "mask"|IoU Methodパラメータのデフォルト値|"box"|"mask"だと計算時間がネックとなるため|
 |`settings.DEFAULT_TRACKING_IOU_LABEL_MATCH`|"label", "category_group" or None|IoU Label Matchパラメータのデフォルト値|"category_group"|"label"だとDetection2Dのラベルミスの影響を強く受け、Noneだと制約が弱く誤結合されやすいため、バランスを取って"category_group"|
 |`settings.DEFAULT_TRACK_ID_INHERITANCE`|"continuous_id" or "forward_backward_matching"|Track ID Inheritanceパラメータのデフォルト値|"forward_backward_matching"|"continuous_id"だとIntervalの途中から現れた物体が見逃されるため|
+|`settings.DEFAULT_MISS_DETECTION_MERGE`|bool|Miss Detection Track Mergeパラメータのデフォルト値|True|Detection2Dの検出漏れでトラックが分断されるのを防ぐため|
+|`settings.DEFAULT_MISS_DETECTION_MERGE_IOU_THRESHOLD`|float|Mask IoU Thresholdパラメータのデフォルト値|0.5|伝播の終端どうしなのでマスクの形は多少ずれるが、隣接する別物体は結合しない程度とした（要調整）|
 |`settings.TRACKING_MAX_RUNS_PER_SCENE`|int|1シーンあたり保持するrunの上限|10|DB容量と利便性のバランスを取った|
 |`settings.TRACKING_MODEL_NAME`|str|runの記録に残すモデル名（HuggingFaceのモデルIDを指定。推論サーバー側の`settings.SAM2_MODEL`と合わせる必要がある）|"facebook/sam2.1-hiera-large"|HuggingFaceのモデルIDを指定。推論サーバー側の実体と合わせる必要がある|
 |`settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD`|float|推論サーバーへ`mask_score_threshold`として送るが、現状のSAM2実装では使用していない（将来的にマスクにスコアを付けるトラッキングアルゴリズムを使用する場合のために準備）|0.5|-|
@@ -404,6 +414,27 @@ k : F_i または B_j が存在するフレーム
 求めた全ての$(i, j)$に対する$score(i, j)$の行列から、Hungarian algorithmでForwardとBackwardのインスタンスをマッチングしてから`IoU Threshold`で閾値判定し、紐づいた場合はForwardのtrack_idをBackwardに引き継ぐことで、次のブロックのForwardにもtrack_idが引き継がれます（Backwardのプロンプトボックスは次のブロックのForwardと等しいため）
 
 この方法では間引き後のサンプル数N' × カメラ数C回 × 2回推論が実施されます（ForwardとBackward両方向で実施するため、track_id_inheritance="continuous_id"の2倍の推論数となる）。
+
+#### Detection2Dの検出漏れの結合（Miss Detection Track Merge）
+
+キーフレームA1でDetection2Dが物体Xを検出し損ねると、forward_backward_matchingでは以下のようにXのトラックが分断されます（A0, A1, A2はプロンプトを与える連続したキーフレーム）
+
+- ブロック(A0, A1): A0のプロンプトからForward伝播したXは、A1にプロンプトが無いためBackwardとマッチせず、そこで途切れる
+- ブロック(A1, A2): A2のプロンプトからBackward伝播したXは、A1にプロンプトが無いためForwardとマッチせず、新規のtrack_idが振られる
+
+両者が同時に存在するのは共有するキーフレームA1だけなので、A1での両者のマスクを比べて結合します（実装は`webapp/inference/app/services/fb_matching.py`の`match_missed_detections`。照合は各ブロックのF×Bマッチングの後、track_idの連鎖割り当て（`assign_chain_track_ids`）の前に行い、結合したBackwardには途切れたForwardのtrack_idを割り当てる。以降のブロックにもそのtrack_idが引き継がれる）
+
+- 照合の対象は「ブロック(A0, A1)でBackwardとマッチしなかったForwardの、A1でのインスタンス」×「ブロック(A1, A2)でForwardとマッチしなかったBackwardの、A1でのインスタンス」に限る（マッチ済みのトラックを結合すると、同じフレームに同じtrack_idが2つ並ぶため）
+- Mask IoUは以下の安い順の足切りを通った組だけ計算する
+    - ラベルの完全一致
+    - 外接矩形の重なり（重ならなければMask IoUは0）
+    - 面積から求めたMask IoUの上限`min(面積F, 面積B, 外接矩形の交差面積) / max(面積F, 面積B)`がMask IoU Threshold未満なら捨てる（交差はどちらの面積も外接矩形の交差も超えず、和集合は大きい方の面積を下回らないため、Mask IoUはこの値を超えない。面積はRLEのままデコードせずに求まる）
+- 残った組のMask IoUを計算し、Hungarian algorithmで1対1に対応付けてから、Mask IoU Threshold以上の組を結合する
+- 結合後の表示・下流で使うマスクは、片方向にしか無いトラックの規則（その方向を必ず採用する）に従い、A1より前はForward、A1以降はBackwardのものになる
+- 結合したトラック数はジョブ結果の`num_miss_detection_merges`で返す
+- 2回以上連続してキーフレームで検出が漏れた場合は、その間のブロックにプロンプトが無くマスクが存在しないため結合できない。continuous_idはBackward伝播が無いため対象外
+
+計算量: 比べるのは境界の1フレームの「途切れたForward × 新規のBackward」だけで、検出漏れが無ければ候補は0件になる。候補があっても1組数ms（マスクのデコードは1インスタンス1回、交差は外接矩形の重なり部分だけで数える）で、SAM2の伝播に比べて無視できる
 
 ## Depth Boxfitting
 

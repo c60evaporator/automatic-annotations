@@ -44,6 +44,8 @@ def build_tracking_payload(
     iou_method: str,
     iou_label_match: str,
     track_id_inheritance: str,
+    miss_detection_merge: bool = False,
+    miss_detection_merge_iou_threshold: float = 0.5,
     mask_score_threshold: float = 0.5,
     stub_delay_sec: float | None = None,
 ) -> dict[str, Any]:
@@ -105,6 +107,8 @@ def build_tracking_payload(
         "iou_method": iou_method,
         "iou_label_match": iou_label_match,
         "track_id_inheritance": track_id_inheritance,
+        "miss_detection_merge": miss_detection_merge,
+        "miss_detection_merge_iou_threshold": miss_detection_merge_iou_threshold,
         # ラベル体系は webapp 側の設定なので、解決済みのものを渡す
         "label_to_category_group": dict(settings.LABEL_TO_CATEGORY_GROUP),
         "mask_score_threshold": mask_score_threshold,
@@ -127,6 +131,8 @@ def save_tracking_run(
     iou_method: str,
     iou_label_match: str,
     track_id_inheritance: str,
+    miss_detection_merge: bool = False,
+    miss_detection_merge_iou_threshold: float = 0.5,
     mask_score_threshold: float = 0.5,
     model_name: str = "",
 ) -> str:
@@ -153,6 +159,8 @@ def save_tracking_run(
             iou_method=iou_method,
             iou_label_match=iou_label_match,
             track_id_inheritance=track_id_inheritance,
+            miss_detection_merge=miss_detection_merge,
+            miss_detection_merge_iou_threshold=miss_detection_merge_iou_threshold,
             status=status,
         )
         saved = repo.save_instances(params_id, dataset_id, instances_by_frame)

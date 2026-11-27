@@ -82,6 +82,12 @@ class InstanceTrackingRequest(BaseModel):
     # ラベル体系は webapp 側の設定なので、解決済みのものを受け取る
     label_to_category_group: dict[str, str] = Field(default_factory=dict)
 
+    # Detection2D の検出漏れの結合（forward_backward_matching のみ）。
+    # 区間で途切れた forward と次の区間で新規の backward を、共有するアンカーの
+    # マスクで照合し、ラベルが同じで mask IoU が閾値以上なら同じ track_id にする
+    miss_detection_merge: bool = False
+    miss_detection_merge_iou_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
     mask_score_threshold: float = 0.5
 
     # スタブ用: 1 推論あたりの待ち時間（秒）。本実装では無視される
@@ -142,6 +148,8 @@ class InstanceTrackingResult(BaseModel):
     num_instances: int
     num_tracks: int
     inference_time: float
+    # 検出漏れの結合でつなぎ直したトラック数
+    num_miss_detection_merges: int = 0
     frames: list[TrackingFrameResult]
 
 

@@ -306,6 +306,16 @@ class InstanceTracking2DParams(Base):
     iou_label_match: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text(f"'{IOU_LABEL_MATCH_LABEL}'")
     )
+    # Detection2D の検出漏れの結合（forward_backward_matching のみ）を行ったか。
+    # 区間で途切れた forward と次の区間で新規の backward を、共有するアンカーの
+    # マスクで照合し、ラベルが同じで mask IoU が閾値以上なら同じ track_id にする
+    miss_detection_merge: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+    # 上記結合の mask IoU 閾値
+    miss_detection_merge_iou_threshold: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default=text("0.5")
+    )
     # 連続で見失った際にトラックを打ち切るフレーム数
     max_lost_frames: Mapped[int] = mapped_column(Integer, nullable=False)
     # 実行結果メタ

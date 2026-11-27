@@ -117,12 +117,15 @@
         - Track ID Inheritance: IoUマッチングに使用する手法を指定するラジオボタン。デフォルト値`settings.DEFAULT_TRACK_ID_INHERITANCE`。以下の選択肢を持つ（両手法の詳細は`webapp/inference/CLAUDE.md`参照）
             - continuous_id: 最初のフレームにボックスプロンプト（Detection2Dの結果）を与えて時間順方向（Forward方向）にトラッキングし、得られた最後のフレームのインスタンスと、次のブロックの最初のフレームにボックスプロンプトを与えて得られたインスタンスをIoUマッチング
             - forward_backward_matching: 最初のフレームにボックスプロンプトを与えたForward方向トラッキングと、最後のフレームにボックスプロンプトを与えた時間逆方向（Backward方向）トラッキングを実施し、両トラッキングの各インスタンスの全フレームでの時空間IoUマッチングを実施（推論時間は約2倍）
+    - Miss Detection Track Mergeタブ: Detection2Dの検出漏れで途切れたトラックの結合（詳細は`webapp/inference/CLAUDE.md`の「Detection2Dの検出漏れの結合（Miss Detection Track Merge）」参照）
+        - Miss Detection Track Merge: 結合を行うかどうかを指定するチェックボックス。デフォルト値`settings.DEFAULT_MISS_DETECTION_MERGE`。Track ID Inheritanceがforward_backward_matching以外のときは無効化し、その旨をキャプションで表示する（無効化してもチェック状態は書き換えず、使用時に有効条件とANDを取る）
+        - Mask IoU Threshold: 同じインスタンスとみなすMask IoUの閾値のslider。デフォルト値`settings.DEFAULT_MISS_DETECTION_MERGE_IOU_THRESHOLD`。上のチェックボックスが無効またはオフのときは無効化する
 - param_col中央上部の枠付きcontainerに、現在のパラメータの要約と「Run Inference」「Cancel」ボタン・進捗表示を設置（動作はDetection2D画面と同様）。「Run Inference」ボタンを押すと上で選択したパラメータを渡して推論を実行する`POST /instance-tracking/jobs`リクエストが推論サーバーに送信され、1秒ごとに`GET /instance-tracking/jobs/{job_id}`リクエストでポーリングして得られた進捗が表示される。区間境界のsampleにはプロンプト由来と伝播由来の結果が別々に届くため、由来（origin）ごとに部分結果を取り込む
 - ポーリングで推論終了を検知（終了を2回検知して2回保存するのを防ぐため保存済みjob_idをsession_stateに持っておく）したら、以下の要件を満たすよう結果をDBの`instance_tracking_2d_params`、`instance_tracking_2ds`テーブルに保存する
     - 推論が終了したら、即時に自動保存（失敗・キャンセルしたrunも`status`付きで残す）
     - 保存は上書きではなくレコード追加として行う。保存後、同じ(dataset_id, scene_token)のrunが`settings.TRACKING_MAX_RUNS_PER_SCENE`件を超えていれば、新しい順に上限件数を残し、それより古いrunのうち`depth_estimation_params`から参照されておらず実行中でもないものを削除する（CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される）
     - 保存は1トランザクションで一括追加（キャンセル時の後始末が楽になる）
-- `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部の「保存済みの推論結果（N 件）」エクスパンダーに、ラジオボタン付きでレコード一覧をリスト表示する。各行には表示中のrunを示す「★」、開始時刻、`status`、インスタンス数・トラック数、Sweeps per Sample、方式（fwd / fwd+bwd）、参照している`depth_estimation_params`の件数（参照されている場合のみ）、run IDを表示する。リストの下には「この run を表示」と「削除」ボタンを設置し、押すと以下のように動作する
+- `instance_tracking_2d_params`テーブルに当該Sceneのレコードがあれば、param_col中央下部の「保存済みの推論結果（N 件）」エクスパンダーに、ラジオボタン付きでレコード一覧をリスト表示する。各行には表示中のrunを示す「★」、開始時刻、`status`、インスタンス数・トラック数、Sweeps per Sample、方式（fwd / fwd+bwd。Miss Detection Track Mergeを行ったrunは+miss）、参照している`depth_estimation_params`の件数（参照されている場合のみ）、run IDを表示する。リストの下には「この run を表示」と「削除」ボタンを設置し、押すと以下のように動作する
     - 「この run を表示」ボタン: 押すと後述のview_colで表示されるインスタンスマスク等の情報をラジオボタン選択したレコードのものに切り替える
     - 「削除」ボタン: 押すと選択した`instance_tracking_2d_params`テーブルのレコードと、CASCADEで紐づく`instance_tracking_2ds`テーブルのレコードも削除される。選択中のrunがDepth Estimationから参照されている場合は、「削除すると連鎖して消えます」という警告をボタンの上に表示する（CASCADEで紐づくDepth Boxfitting関係のレコードも削除されるため）
 - view_colに表示するrunは、推論実施前は「最新の成功した`depth_estimation_params`が参照しているrun → 最新の成功したrun」の優先順で決め、推論実施後は保存した推論結果のrunとする（「この run を表示」で切り替え可能）

@@ -134,7 +134,7 @@ class Settings(BaseSettings):
     DET2D_DEFAULT_SAMPLE_INTERVAL: int = 2
     # スコア閾値（Category Groupごとに指定。適用時はこれにUIのScore Thresholdパラメータで倍率をかける）
     DET2D_DEFAULT_SCORE_THRESHOLDS: dict[str, float] = {
-        "vehicle": 0.23,
+        "vehicle": 0.25,
         "road_object": 0.25,
         "two_wheeler": 0.3,
         "pedestrian": 0.25,
@@ -291,6 +291,13 @@ class Settings(BaseSettings):
     #   forward_backward_matching … Forward と Backward を走らせ、区間内で照合。
     #                               区間途中に現れたインスタンスを拾える
     DEFAULT_TRACK_ID_INHERITANCE: str = "forward_backward_matching"
+
+    # ------ Miss Detection Track Merge ------
+    # Detection2D の検出漏れで途切れたトラックを、共有するキーフレームのマスクでつなぎ直すか
+    # （forward_backward_matching のみ）
+    DEFAULT_MISS_DETECTION_MERGE: bool = True
+    # 上記結合の mask IoU 閾値（伝播の終端どうしなので形は多少ずれるが、隣接する別物体はつながない程度）
+    DEFAULT_MISS_DETECTION_MERGE_IOU_THRESHOLD: float = 0.5
 
     # ------ 記録・管理関係 ------
     TRACKING_MAX_RUNS_PER_SCENE: int = 10

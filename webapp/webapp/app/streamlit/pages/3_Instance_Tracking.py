@@ -148,8 +148,8 @@ with param_col:
         selected_prompt = next(r for r in prompt_runs if r["id"] == selected_prompt_id)
 
         # Box Prompt はタブの外（どの処理にも共通の入力）
-        tracking_tab, inheritance_tab = st.tabs(
-            ["Instance Tracking", "Track ID Inheritance"]
+        tracking_tab, inheritance_tab, miss_merge_tab = st.tabs(
+            ["Instance Tracking", "Track ID Inheritance", "Miss Detection Track Merge"]
         )
 
         with tracking_tab:
@@ -208,6 +208,32 @@ with param_col:
                           "推論時間は約 2 倍になる"),
                 )
 
+        with miss_merge_tab:
+            is_fb = track_id_inheritance == TRACK_ID_INHERITANCE_FB
+            miss_merge_enabled = st.checkbox(
+                "Miss Detection Track Merge",
+                value=settings.DEFAULT_MISS_DETECTION_MERGE,
+                disabled=not is_fb,
+                help=("Detection2D がキーフレームで検出を漏らすと、その前後でトラックが"
+                      "途切れて別の track_id になる。前の区間で途切れた Forward と、"
+                      "次の区間で新規に現れた Backward を、そのキーフレームのマスクで照合し、"
+                      "ラベルが同じで Mask IoU が閾値以上なら同じ track_id にする"),
+            )
+            st.markdown("**Mask IoU Threshold**")
+            miss_merge_iou = st.slider(
+                "Mask IoU Threshold", 0.0, 1.0,
+                value=settings.DEFAULT_MISS_DETECTION_MERGE_IOU_THRESHOLD, step=0.05,
+                disabled=not (is_fb and miss_merge_enabled),
+                label_visibility="collapsed",
+            )
+            if not is_fb:
+                st.caption("Track ID Inheritance が forward_backward_matching のときのみ有効"
+                           "（continuous_id には Backward の伝播が無いため）")
+            else:
+                st.caption("1 フレームだけで判定するため、ラベルは完全一致を要求する")
+            # 無効化しても値は書き換えず、使用時に有効条件と AND を取る
+            miss_detection_merge = bool(is_fb and miss_merge_enabled)
+
 # ------------------------------------------------------------------
 # Run / progress
 # ------------------------------------------------------------------
@@ -245,6 +271,8 @@ def _save_completed_job(job: dict) -> None:
             iou_method=iou_method,
             iou_label_match=iou_label_match,
             track_id_inheritance=track_id_inheritance,
+            miss_detection_merge=miss_detection_merge,
+            miss_detection_merge_iou_threshold=float(miss_merge_iou),
             mask_score_threshold=settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD,
         )
     except Exception as exc:  # noqa: BLE001
@@ -263,6 +291,7 @@ with param_col:
             f"interval={selected_prompt['sample_interval']} / "
             f"sweeps={num_sweeps} / iou={iou_threshold:g} {iou_method} "
             f"{iou_label_match} / {track_id_inheritance}"
+            + (f" / miss merge iou={miss_merge_iou:g}" if miss_detection_merge else "")
         )
         run_col, cancel_col, status_col = st.columns([1, 1, 3])
 
@@ -281,6 +310,8 @@ with param_col:
                             iou_method=iou_method,
                             iou_label_match=iou_label_match,
                             track_id_inheritance=track_id_inheritance,
+                            miss_detection_merge=miss_detection_merge,
+                            miss_detection_merge_iou_threshold=float(miss_merge_iou),
                             mask_score_threshold=(
                                 settings.DEFAULT_TRACKING_MASK_SCORE_THRESHOLD
                             ),
@@ -364,6 +395,8 @@ with param_col:
                 method = ("fwd+bwd"
                           if run["track_id_inheritance"] == TRACK_ID_INHERITANCE_FB
                           else "fwd")
+                if run.get("miss_detection_merge"):
+                    method += "+miss"
                 return (f"{mark}{started}  [{run['status']}]  "
                         f"{run['nbr_instances']} inst / {run['num_tracks']} tracks  "
                         f"sweeps={run['num_sweeps']} {method}{refs}"

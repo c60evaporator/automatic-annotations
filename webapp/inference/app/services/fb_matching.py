@@ -21,6 +21,16 @@ track_id がシーン全体へ伝播する。マッチしなかった backward �
   ただし必ず最大マッチングを作るので、**割り当て後に閾値未満を落とす**。
 - **box IoU が既定**: mask IoU の総当たりは n=30 で 11 秒かかり実用外。
   mask を選んだ場合は box IoU で候補を絞ってから計算する。
+
+## Detection2D の検出漏れの結合（Miss Detection Track Merge）
+
+アンカー a1 で Detection2D が物体を見逃すと、区間 (a0, a1) の forward は
+backward と照合できずに途切れ、区間 (a1, a2) の backward は新規として
+別の track_id になる。両者が同時に存在するのはアンカー a1 の 1 フレームだけ
+なので、そこでのマスク同士を比べて同じ track_id へつなぎ直す
+（``match_missed_detections``）。比べるのは「途切れた forward」×
+「新規の backward」だけで、ラベルの完全一致・外接矩形の重なり・面積から
+求めた mask IoU の上限で足切りしてから mask IoU を計算する。
 """
 from __future__ import annotations
 
@@ -29,7 +39,7 @@ from typing import Any, Callable, Iterable, Sequence
 import numpy as np
 
 from app.core.logging import get_logger
-from common.mask_rle import decode_rle
+from common.mask_rle import decode_rle, rle_area
 
 logger = get_logger(__name__)
 
@@ -277,6 +287,7 @@ def assign_chain_track_ids(
     segment_matches: dict[tuple[int, int], dict[int, int]],
     *,
     start_track_id: int = 0,
+    bridges: dict[tuple[int, int], tuple[int, int]] | None = None,
 ) -> tuple[dict[tuple[int, int], int], int]:
     """アンカーのプロンプトを連鎖させて track_id を割り当てる.
 
@@ -284,6 +295,9 @@ def assign_chain_track_ids(
         anchors: プロンプトを与えたフレーム index（昇順）
         prompt_counts: ``{anchor: プロンプト数}``
         segment_matches: ``{(a0, a1): {forward index: backward index}}``
+        bridges: 検出漏れの結合。``{(a2, backward index): (a0, forward index)}``。
+            区間 (a1, a2) で新規になる backward に、区間 (a0, a1) で途切れた
+            forward の track_id を引き継がせる（``match_missed_detections``）
 
     Returns:
         ``({(anchor, prompt index): track_id}, 次に使う track_id)``
@@ -313,12 +327,86 @@ def assign_chain_track_ids(
             assigned[(a1, backward_index)] = source
 
         for index in range(prompt_counts.get(a1, 0)):
-            if (a1, index) not in assigned:
-                # どの forward ともマッチしなかった = 区間途中で出現
-                assigned[(a1, index)] = next_id
-                next_id += 1
+            if (a1, index) in assigned:
+                continue
+            source = (bridges or {}).get((a1, index))
+            if source is not None and source in assigned:
+                # 1 つ手前のアンカーで検出漏れしていた物体。途切れた forward の id を引き継ぐ
+                assigned[(a1, index)] = assigned[source]
+                continue
+            # どの forward ともマッチしなかった = 区間途中で出現
+            assigned[(a1, index)] = next_id
+            next_id += 1
 
     return assigned, next_id
+
+
+def match_missed_detections(
+    dead_ends: Sequence[dict[str, Any]],
+    newborns: Sequence[dict[str, Any]],
+    *,
+    iou_threshold: float,
+) -> dict[int, int]:
+    """検出漏れのアンカーで、途切れた forward と新規の backward を対応付ける.
+
+    Args:
+        dead_ends: 区間 (a0, a1) で backward とマッチしなかった forward の、
+            アンカー a1 でのインスタンス
+        newborns: 区間 (a1, a2) で forward とマッチしなかった backward の、
+            アンカー a1 でのインスタンス
+        iou_threshold: mask IoU の閾値
+
+    Returns:
+        ``{dead_ends の index: newborns の index}``
+
+    比べるのは 1 フレームだけなので、ラベルは完全一致を要求し、
+    位置が近くても形の違う別物体をつながないよう mask IoU で判定する。
+    mask IoU は次の安い順の足切りを通った組だけ計算する:
+
+    1. ラベルの完全一致
+    2. 外接矩形の重なり（重ならなければ mask IoU は 0）
+    3. 面積から求めた上限
+       ``min(面積F, 面積B, 外接矩形の交差面積) / max(面積F, 面積B)``
+       が閾値未満（交差はどちらの面積も矩形の交差も超えず、和集合は
+       大きい方の面積を下回らないため、mask IoU はこれを超えない）
+    """
+    if not dead_ends or not newborns:
+        return {}
+
+    areas_f = [_area(i) for i in dead_ends]
+    areas_b = [_area(j) for j in newborns]
+    candidates: list[tuple[int, int]] = []
+    for i, inst_f in enumerate(dead_ends):
+        for j, inst_b in enumerate(newborns):
+            if inst_f.get("label") != inst_b.get("label"):
+                continue
+            box_inter = (
+                max(0, min(inst_f["xmax"], inst_b["xmax"]) - max(inst_f["xmin"], inst_b["xmin"]))
+                * max(0, min(inst_f["ymax"], inst_b["ymax"]) - max(inst_f["ymin"], inst_b["ymin"]))
+            )
+            larger = max(areas_f[i], areas_b[j])
+            if box_inter <= 0 or larger <= 0:
+                continue
+            if min(areas_f[i], areas_b[j], box_inter) / larger < iou_threshold:
+                continue
+            candidates.append((i, j))
+    if not candidates:
+        return {}
+
+    pair_scores = _mask_iou_pairs(dead_ends, newborns, candidates)
+    score = np.zeros((len(dead_ends), len(newborns)))
+    for (i, j), value in pair_scores.items():
+        score[i, j] = value
+    # 閾値 0 でも IoU 0 の組（候補外）をつながないよう、正の IoU に限る
+    return {
+        i: j for i, j in match_forward_backward(score, iou_threshold).items()
+        if score[i, j] > 0
+    }
+
+
+def _area(instance: dict[str, Any]) -> int:
+    area = instance.get("mask_area")
+    return int(area) if area is not None else rle_area(instance["mask_rle"])
 
 
 def select_direction(

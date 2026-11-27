@@ -147,6 +147,8 @@ def _run_tracking(req: InstanceTrackingRequest, job: Job) -> dict:
         "num_instances": num_instances,
         "num_tracks": len(track_ids_all),
         "inference_time": round(total_time, 3),
+        # 検出漏れの結合でつなぎ直したトラック数（forward_backward_matching のみ）
+        "num_miss_detection_merges": state.get("num_miss_detection_merges", 0),
         "frames": [f.model_dump() for f in all_frames],
     }
 
@@ -396,6 +398,7 @@ def _run_forward_backward(
     from app.services.fb_matching import (
         assign_chain_track_ids,
         match_forward_backward,
+        match_missed_detections,
         select_direction,
         temporal_iou_matrix,
     )
@@ -487,10 +490,44 @@ def _run_forward_backward(
                 "error": error,
             })
 
+        # 検出漏れの結合: 区間 s で途切れた forward と、区間 s+1 で新規の backward を
+        # 共有するアンカー（区間 s の末尾 = 区間 s+1 の先頭）のマスクで照合する
+        bridges: dict[tuple[int, int], tuple[int, int]] = {}
+        if req.miss_detection_merge:
+            for prev, cur in zip(segment_data, segment_data[1:]):
+                if (cur["seg_index"] != prev["seg_index"] + 1
+                        or prev["error"] or cur["error"]):
+                    continue
+                matched_prev = segment_matches.get(
+                    (prev["seg_index"], prev["seg_index"] + 1), {}
+                )
+                matched_cur = segment_matches.get(
+                    (cur["seg_index"], cur["seg_index"] + 1), {}
+                )
+                matched_b = set(matched_cur.values())
+                dead_ends = [i for i in prev["forward"][-1]
+                             if i["local_id"] not in matched_prev]
+                newborns = [i for i in cur["backward"][0]
+                            if i["local_id"] not in matched_b]
+                pairs = match_missed_detections(
+                    dead_ends, newborns,
+                    iou_threshold=req.miss_detection_merge_iou_threshold,
+                )
+                for i, j in pairs.items():
+                    bridges[(cur["seg_index"] + 1, newborns[j]["local_id"])] = (
+                        prev["seg_index"], dead_ends[i]["local_id"]
+                    )
+            if bridges:
+                logger.info("miss detection merge (%s): %d tracks", channel, len(bridges))
+            state["num_miss_detection_merges"] = (
+                state.get("num_miss_detection_merges", 0) + len(bridges)
+            )
+
         # 連鎖割り当て。カメラごとに採番を続ける
         assigned, state["next_track_id"] = assign_chain_track_ids(
             anchors, prompt_counts, segment_matches,
             start_track_id=state["next_track_id"],
+            bridges=bridges,
         )
 
         # 結果へ変換する
